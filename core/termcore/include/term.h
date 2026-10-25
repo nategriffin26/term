@@ -261,9 +261,9 @@ void term_session_resume(TermSession *s);
 // old client and server stay as they were (RECONNECT reason "suspended"), so a
 // checkpoint saved during the reconnect still names a live server. With
 // end_old_server, after a successful takeover, the server this session last
-// started is ended (its child, e.g. a tmux client, goes with it; a tmux session
-// survives). One reconnect at a time per session: a call while one runs is
-// ignored. The outcome arrives as TERM_EVENT_RECONNECT.
+// started is ended (its child, e.g. a herdr attach client, goes with it; the
+// herdr pane survives). One reconnect at a time per session: a call while one
+// runs is ignored. The outcome arrives as TERM_EVENT_RECONNECT.
 void term_session_reconnect(TermSession *s, const TermConnect *c, bool end_old_server);
 
 // Runs a command on the host over SSH; done runs exactly once, on the core's thread:

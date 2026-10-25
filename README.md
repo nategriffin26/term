@@ -1,6 +1,6 @@
 # Term
 
-Term is a terminal for iPhone. It speaks mosh and SSH, keeps your tmux sessions one swipe away, and lets you work on the remote machine's files without leaving the app.
+Term is a terminal for iPhone. It speaks mosh and SSH, keeps your herdr sessions and the coding agents in them one swipe away, and lets you work on the remote machine's files without leaving the app.
 
 <p align="center">
   <img src="docs/screens-terminal.png" alt="Term on iPhone: vim and cargo test in a tmux session, the Sessions overview, and the Files tab in a Rust project">
@@ -12,8 +12,8 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 
 - **mosh that survives iOS.** Local echo prediction, roaming between Wi-Fi and cellular, and sessions that come back after iOS kills the app in the background.
 - **SSH** with Ed25519 keys made or imported in the app. Host keys are pinned on first use.
-- **tmux, native.** A session picker, a scrollable history viewer, a Mission Control style overview (three fingers up), and a swipe between sessions that names where you're going.
-- **Reconnect in place.** When a tmux session's mosh-server dies, Term starts a new one and swaps it in under the same screen. Nothing to tap.
+- **herdr, native.** A picker of the host's herdr workspaces and panes that puts agents waiting on you first (blocked, done, working, idle), a scrollable history viewer, a Mission Control style overview (three fingers up), and a swipe between sessions that names where you're going and what its agent is doing.
+- **Reconnect in place.** When a herdr pane's mosh-server dies, Term starts a new one on the same pane and swaps it in under the same screen. Nothing to tap.
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
 - **A floating menu** for Sessions, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
 - **Smart Keys** for Esc, Ctrl, Alt, symbols and arrows, with configurable key repeat.
@@ -35,7 +35,7 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/architecture-dark.svg">
-    <img src="docs/architecture-light.svg" width="640" alt="The Swift app talks to the Rust core through term.h. The core holds termcore, vt (libghostty-vt), mosh and ssh. mosh reaches mosh-server over UDP, ssh reaches sshd over TCP 22, and mosh-server runs tmux on the host.">
+    <img src="docs/architecture-light.svg" width="640" alt="The Swift app talks to the Rust core through term.h. The core holds termcore, vt (libghostty-vt), mosh and ssh. mosh reaches mosh-server over UDP, ssh reaches sshd over TCP 22, and mosh-server runs herdr on the host.">
   </picture>
 </p>
 
@@ -43,9 +43,11 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 
 `mosh` is a sans-IO client for the mosh 1.4 protocol: time and datagrams go in, datagrams come out. That shape is why the same code can run in unit tests, against a real mosh-server, and under a model checker.
 
-`ssh` is [russh](https://github.com/Eugeny/russh). It starts mosh-server, runs the commands behind the tmux picker and history, and carries SFTP for Files.
+`ssh` is [russh](https://github.com/Eugeny/russh). It starts mosh-server, runs the commands behind the herdr picker and history, and carries SFTP for Files.
 
-tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads history with `tmux capture-pane`, and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
+herdr on the host is the session store. Term doesn't replace it. The phone reads workspaces, panes and agent states with `herdr api snapshot`, reads history with `herdr pane read`, and gives each tab one pane: mosh-server runs `herdr terminal attach <id> --takeover`. So the same panes open on the phone and on the computer, and picking a pane another tab already shows brings that tab forward.
+
+While the phone is attached, the pane takes the phone's size. herdr on the computer keeps showing it, drawn at that size in the corner of its pane, and typing there still reaches it. Two minutes after the phone goes quiet its mosh-server exits and the pane is the computer's size again; opening Term reattaches it in place.
 
 ### Connecting
 
@@ -58,7 +60,7 @@ tmux on the host is the session store. Term doesn't replace it. The phone lists 
 
 SSH only starts the server. From then on it's encrypted UDP, and the server follows the phone to whatever address its packets come from next.
 
-mosh-server exits on its own after a day without hearing from the phone when the session lives in tmux, and after a week for a plain shell. Inside tmux nothing is lost when it goes, and Term reconnects in place the next time you look.
+mosh-server exits on its own two minutes after it last heard from the phone when it shows a herdr pane, and after a week for a plain shell. herdr keeps the pane, and Term reconnects in place the next time you look.
 
 ### Surviving iOS
 
@@ -73,7 +75,7 @@ iOS suspends background apps and kills them when it needs the memory. So when Te
 
 The order matters, and it's where the bugs hide: a reused encryption nonce, or a checkpoint that names a server a reconnect already ended. So that part is formally checked, below.
 
-The other path handles a server that's gone. Once a session has been silent for about 6 seconds, Term probes the host over SSH. If the host answers, it starts a new mosh-server and ends the old one, and you're back in the same tmux session. In the simulator, after `kill -9` on the server, the session came back on its own, without a tap.
+The other path handles a server that's gone. Once a session has been silent for about 6 seconds, Term probes the host over SSH. If the host answers, it starts a new mosh-server and ends the old one, and you're back in the same herdr pane. In the simulator, after `kill -9` on the server, the session came back on its own, without a tap.
 
 ## Build
 
@@ -112,7 +114,7 @@ xcrun devicectl device install app --device <udid> ../local/DerivedDataDevice/Bu
 xcrun devicectl device process launch --device <udid> com.yourname.term
 ```
 
-The computer you connect to needs `mosh-server` (mosh 1.4) on its PATH or in Homebrew's usual place. tmux is optional, but it's what makes sessions shared and reconnects seamless.
+The computer you connect to needs `mosh-server` (mosh 1.4) on its PATH or in Homebrew's usual place, and a running herdr server with `herdr` in `~/.local/bin` (where its installer puts it) or on the PATH. Without herdr, mosh and SSH still open a plain shell.
 
 ## Tests and formal checks
 
@@ -144,7 +146,7 @@ Term is installed and tested end to end on an iPhone 11. A few things are not pr
 ```
 app/                    Swift app (UIKit + Metal), XcodeGen project in project.yml
   Sources/Terminal      renderer, input, gestures, Smart Keys
-  Sources/Shell         tabs, hosts, keys, tmux picker and history, reconnect
+  Sources/Shell         tabs, hosts, keys, herdr picker and history, reconnect
   Sources/Menu          floating menu, Sessions overview, swipe HUD
   Sources/Files         SFTP browser, viewers, editor
 core/                   Rust workspace
