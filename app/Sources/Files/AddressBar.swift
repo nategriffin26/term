@@ -5,6 +5,9 @@ import UIKit
 /// folders above, the places, pins and recents) · search · new/upload · view.
 struct AddressBar: View {
   let path: String
+  /// The page's place in the history: its ‹ › and their menus are the
+  /// page's own, so it looks the same while it slides in or out.
+  let index: Int
   let browser: FilesBrowser
   let context: FilesContext
   var onHosts: (() -> Void)?
@@ -12,26 +15,27 @@ struct AddressBar: View {
 
   var body: some View {
     let state = browser.state
-    let live = browser.current == path
+    let canBack = state.canBack(at: index)
+    let canForward = state.canForward(at: index)
     HStack(spacing: 0) {
       Menu {
         history(backward: true)
       } label: {
-        glyph("chevron.left").opacity(state.canBack && live ? 1 : 0.3)
+        glyph("chevron.left").opacity(canBack ? 1 : 0.3)
       } primaryAction: {
         browser.back()
       }
-      .disabled(!state.canBack || !live)
+      .disabled(!canBack)
       .accessibilityLabel("Back")
 
       Menu {
         history(backward: false)
       } label: {
-        glyph("chevron.right").opacity(state.canForward && live ? 1 : 0.3)
+        glyph("chevron.right").opacity(canForward ? 1 : 0.3)
       } primaryAction: {
         browser.forward()
       }
-      .disabled(!state.canForward || !live)
+      .disabled(!canForward)
       .accessibilityLabel("Forward")
 
       Menu {
@@ -143,7 +147,9 @@ struct AddressBar: View {
   @ViewBuilder
   private func history(backward: Bool) -> some View {
     let state = browser.state
-    let indices = backward ? Array((0..<state.index).reversed()) : Array((state.index + 1)..<state.history.count)
+    let indices = backward
+      ? Array((0..<min(index, state.history.count)).reversed())
+      : Array((index + 1)..<max(index + 1, state.history.count))
     ForEach(indices, id: \.self) { i in
       Button(title(state.history[i])) { browser.jump(i) }
     }

@@ -131,6 +131,27 @@ final class BrowserLogicTests: XCTestCase {
     XCTAssertEqual(u.history, ["/a"], "the first folder has none before it")
   }
 
+  /// Each page's ‹ › are its own, not the current page's: the page beneath a
+  /// swipe back, or one sliding away, would otherwise show them dimmed and
+  /// light them as it lands.
+  func testPageBackForwardAreItsOwn() {
+    var s = BrowserState()
+    for p in ["/a", "/b", "/c"] { s.go(p) }
+    XCTAssertFalse(s.canForward)
+    XCTAssertTrue(s.canForward(at: 1), "the page beneath the last one has Forward")
+    XCTAssertTrue(s.canBack(at: 1))
+    XCTAssertFalse(s.canBack(at: 0), "the first folder has none before it")
+    XCTAssertTrue(s.canForward(at: 0))
+    s.jump(0)
+    XCTAssertTrue(s.canBack(at: 2), "the page that slid away keeps its Back")
+    XCTAssertFalse(s.canForward(at: 2))
+    XCTAssertFalse(s.canBack(at: 3), "past the end")
+    XCTAssertFalse(s.canForward(at: 3))
+    XCTAssertFalse(s.canForward(at: -1))
+    XCTAssertFalse(BrowserState().canBack(at: 0))
+    XCTAssertFalse(BrowserState().canForward(at: 0))
+  }
+
   // MARK: - Errors
 
   /// OpenSSH's sftp-server repeats the status as its text; the toast says it

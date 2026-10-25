@@ -81,8 +81,14 @@ struct BrowserState: Codable, Equatable, Sendable {
   var open: String?
 
   var current: String? { history.indices.contains(index) ? history[index] : nil }
-  var canBack: Bool { index > 0 && index < history.count }
-  var canForward: Bool { index + 1 < history.count }
+  var canBack: Bool { canBack(at: index) }
+  var canForward: Bool { canForward(at: index) }
+
+  /// Back and Forward for the page at `i` in the history as they are while it
+  /// is the current one, so a page sliding away or showing beneath a swipe
+  /// looks as it will when it lands.
+  func canBack(at i: Int) -> Bool { i > 0 && i < history.count }
+  func canForward(at i: Int) -> Bool { i >= 0 && i + 1 < history.count }
 
   /// Opens `path` after the current folder, dropping the forward entries as
   /// a browser does. Leaving a folder closes its file.

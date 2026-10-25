@@ -85,7 +85,7 @@ private struct HostChooser: View {
   }
 }
 
-/// The browser: a NavigationStack of folders (the edge swipe pops one), the
+/// The browser: a NavigationStack of folders (a back swipe pops one), the
 /// file viewer pushed over its folder, and the bars and sheets around them.
 struct BrowserView: View {
   @Bindable var browser: FilesBrowser
@@ -108,11 +108,11 @@ struct BrowserView: View {
         .padding(.top, 72)
       } else if let root = browser.root {
         NavigationStack(path: $browser.stack) {
-          FolderPage(path: root, browser: browser, context: context, onHosts: onHosts)
+          FolderPage(path: root, index: 0, browser: browser, context: context, onHosts: onHosts)
             .navigationDestination(for: FilesBrowser.Route.self) { route in
               switch route {
-              case .folder(let path):
-                FolderPage(path: path, browser: browser, context: context, onHosts: onHosts)
+              case .folder(let path, let index):
+                FolderPage(path: path, index: index, browser: browser, context: context, onHosts: onHosts)
               case .file(let entry, let line):
                 FileViewer(entry: entry, fs: browser.fs, context: context, line: line)
               }

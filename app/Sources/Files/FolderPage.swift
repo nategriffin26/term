@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 /// NavigationStack, so the folder beneath is the one Back shows.
 struct FolderPage: View {
   let path: String
+  /// Its place in the history.
+  let index: Int
   let browser: FilesBrowser
   let context: FilesContext
   var onHosts: (() -> Void)?
@@ -32,7 +34,7 @@ struct FolderPage: View {
     }
     .safeAreaInset(edge: .top, spacing: 0) {
       if !searching {
-        AddressBar(path: path, browser: browser, context: context, onHosts: onHosts) {
+        AddressBar(path: path, index: index, browser: browser, context: context, onHosts: onHosts) {
           withAnimation(Helm.ease(0.2)) { searching = true }
         }
       }
@@ -122,7 +124,7 @@ private struct FolderList: View {
           Text("Empty folder").font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg2)
             .frame(maxHeight: .infinity, alignment: .top).padding(.top, 72).allowsHitTesting(false)
         } else {
-          ProgressView().tint(Helm.muted).frame(maxHeight: .infinity, alignment: .top).padding(.top, 80)
+          Pending().frame(maxHeight: .infinity, alignment: .top).padding(.top, 80)
         }
       }
     }
@@ -151,6 +153,21 @@ private struct FolderList: View {
         }
         .onDrag { browser.dragProvider(entry) }
     }
+  }
+}
+
+/// The spinner, after a moment: a folder that answers quickly (most do)
+/// slides in without one blinking in its first frames.
+private struct Pending: View {
+  @State private var shown = false
+
+  var body: some View {
+    ProgressView().tint(Helm.muted)
+      .opacity(shown ? 1 : 0)
+      .task {
+        try? await Task.sleep(for: .milliseconds(300))
+        shown = true
+      }
   }
 }
 

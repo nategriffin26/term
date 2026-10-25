@@ -15,7 +15,8 @@ final class FilesBrowser {
   }
 
   enum Route: Hashable {
-    case folder(String)
+    /// A folder and its place in the history (one folder can be in it twice).
+    case folder(String, index: Int)
     case file(RemoteEntry, line: Int?)
   }
 
@@ -167,11 +168,12 @@ final class FilesBrowser {
   // MARK: - Navigation
 
   /// The NavigationStack's path: every folder after the first up to where
-  /// the user is, then an open file. A pop (the edge swipe) keeps the forward
+  /// the user is, then an open file. A pop (the back swipe) keeps the forward
   /// history, as Back does.
   var stack: [Route] {
     get {
-      let folders = state.index >= 1 && state.index < state.history.count ? state.history[1...state.index].map { Route.folder($0) } : []
+      let folders = state.index >= 1 && state.index < state.history.count
+        ? (1...state.index).map { Route.folder(state.history[$0], index: $0) } : []
       return folders + (viewer.map { [$0] } ?? [])
     }
     set {

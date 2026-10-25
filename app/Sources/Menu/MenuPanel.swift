@@ -38,7 +38,12 @@ final class MenuPanel: UIViewController {
   var isOpen: Bool { model.isOpen }
 
   override func loadView() {
-    view = UIView()
+    let root = PanelView()
+    root.restingCard = { [weak self] in
+      guard let self, isOpen, cardAnimator == nil else { return nil }
+      return card.frame
+    }
+    view = root
     view.isHidden = true
   }
 
@@ -331,4 +336,27 @@ final class MenuPanel: UIViewController {
   }
 
   @objc private func scrimTapped() { close() }
+}
+
+/// A back swipe from the screen's edge starts in the margin left of the
+/// card, over the scrim: touches there go to the card's edge instead.
+private final class PanelView: UIView {
+  var restingCard: (() -> CGRect?)?
+  /// UIKit hit-tests a touch twice, and SwiftUI answers a point outside the
+  /// touch with its container the second time: both get the first answer.
+  private struct Hit {
+    let time: TimeInterval
+    weak var view: UIView?
+  }
+  private var gutterHit: Hit?
+
+  override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+    guard let card = restingCard?(), point.x < card.minX, point.y > card.minY, point.y < card.maxY else {
+      return super.hitTest(point, with: event)
+    }
+    if let event, let hit = gutterHit, hit.time == event.timestamp { return hit.view }
+    let view = super.hitTest(CGPoint(x: card.minX + 1, y: point.y), with: event)
+    gutterHit = event.map { Hit(time: $0.timestamp, view: view) }
+    return view
+  }
 }

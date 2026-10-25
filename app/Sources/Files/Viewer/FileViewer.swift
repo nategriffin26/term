@@ -50,8 +50,9 @@ struct FileViewer: View {
       if model.kind == .image, chrome { header.transition(.opacity) }
     }
     .overlay(alignment: .bottom) { toastView }
+    .background(SwipeBack())
     .toolbar(.hidden, for: .navigationBar)
-    // Unsaved edits: the edge swipe is off so only Back (which asks) leaves.
+    // Unsaved edits: the back swipe is off so only Back (which asks) leaves.
     .navigationBarBackButtonHidden(dirty)
     .environment(\.colorScheme, .dark)
     .task { await model.loadOnce() }
