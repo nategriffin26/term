@@ -4,8 +4,8 @@ import SwiftUI
 @MainActor struct FilesContext {
   /// Host of the terminal the menu opened over; nil = local prompt tab.
   var spec: ConnectSpec?
-  /// That terminal's tmux session name, if it runs in tmux.
-  var tmuxSession: String?
+  /// That terminal's herdr pane id, if it is attached to one.
+  var herdrPane: String?
   /// Types text at the terminal's cursor.
   var insertIntoTerminal: (String) -> Void
   /// New tab on this host (the browsed one: a local prompt tab picks it

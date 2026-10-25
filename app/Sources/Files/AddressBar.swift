@@ -104,9 +104,9 @@ struct AddressBar: View {
       }
     }
     Section {
-      if let session = context.tmuxSession {
+      if let pane = context.herdrPane {
         Button("Terminal's Folder", systemImage: "apple.terminal") {
-          Task { await browser.goToTerminalFolder(session) }
+          Task { await browser.goToTerminalFolder(pane) }
         }
       }
       ForEach(browser.places.filter { $0.path != path }) { place in

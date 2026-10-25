@@ -6,7 +6,7 @@ protocol TabHost: AnyObject {
   func tabDidChange(_ tab: Tab)
   func tabWantsClose(_ tab: Tab)
   func tabWantsSettings(_ tab: Tab)
-  func tabWantsTmuxPicker(_ tab: Tab, host: Host)
+  func tabWantsHerdrPicker(_ tab: Tab, host: Host)
 }
 
 /// One shell (Blink's space): a local prompt session, and while connected a
@@ -26,8 +26,9 @@ final class Tab {
   private(set) var connecting: Session?
   /// What `remote`/`connecting` was opened with; reconnect and history reuse it.
   private(set) var target: Host?
-  /// tmux session the remote is attached to, when known.
-  private(set) var tmuxSession: String?
+  /// The herdr pane the remote is attached to, with its agent's last known
+  /// state, when known.
+  private(set) var herdr: Herdr.Pane?
 
   private(set) var title = "term"
   /// The remote reported UNREACHABLE and has not been heard from since.
@@ -47,14 +48,20 @@ final class Tab {
   /// Shown in session lists: the remote title, else the host, else "term".
   var displayTitle: String {
     if remote != nil, title != "term", !title.isEmpty { return title }
-    return tmuxSession ?? target?.alias ?? title
+    return herdr?.sessionName ?? target?.alias ?? title
   }
 
-  /// Name in the session HUD and overview: the tmux session the remote runs
-  /// in, else "shell".
+  /// Name in the session HUD and overview: the herdr agent or workspace the
+  /// remote is attached to, else "shell".
   var sessionName: String {
     guard remote != nil || connecting != nil else { return "shell" }
-    return tmuxSession ?? "shell"
+    if let herdr { return herdr.sessionName }
+    return target.map { Herdr.runs($0.startupCommand) } == true ? "herdr" : "shell"
+  }
+
+  /// The attached herdr agent's state, nil when there is none.
+  var agentState: Herdr.State? {
+    remote != nil || connecting != nil ? herdr?.state : nil
   }
 
   /// Where the session runs: the host's alias, or nil at the local prompt.
@@ -88,7 +95,7 @@ final class Tab {
     self.init(id: saved.id)
     guard let session = Session(restore: state) else { return nil }
     target = saved.target
-    tmuxSession = saved.tmuxSession
+    herdr = saved.herdr
     title = saved.title
     wireRemote(session)
     remote = session
@@ -109,7 +116,7 @@ final class Tab {
   // MARK: - Connecting
 
   /// Opens `target` (its startup command, or `command` instead), replacing any remote.
-  func connect(_ target: Host, tmuxSession: String? = nil) {
+  func connect(_ target: Host, herdr pane: Herdr.Pane? = nil) {
     connecting = nil
     let spec = Self.spec(for: target)
     guard let session = Session(connect: spec, cols: local.cols, rows: local.rows) else {
@@ -118,7 +125,7 @@ final class Tab {
       return
     }
     self.target = target
-    self.tmuxSession = tmuxSession ?? Tmux.sessionName(inCommand: target.startupCommand)
+    herdr = pane
     wireRemote(session)
     connecting = session
     if remote == nil {
@@ -128,14 +135,47 @@ final class Tab {
     host?.tabDidChange(self)
   }
 
-  /// Replaces the remote's server in place, same screen. A tmux session ends
-  /// the old mosh-server first (it is silent, and tmux keeps the session);
-  /// the banner's button and the automatic reconnect both come here.
+  /// Replaces the remote's server in place, same screen. For a herdr pane the
+  /// new server attaches the same pane, taking it from the old one, which is
+  /// ended too; the banner's button and the automatic reconnect both come here.
   func reconnect() {
-    guard let remote, let target, !reconnecting else { return }
-    let spec = Self.spec(for: target)
+    guard let remote, target != nil, !reconnecting else { return }
     reconnecting = true
-    remote.reconnect(spec: spec, endOldServer: spec.runsInTmux)
+    host?.tabDidChange(self)
+    Task {
+      await followHerdrPane()
+      // Closed or replaced meanwhile: whoever did that reset the state.
+      guard self.remote === remote, let target else { return }
+      let spec = Self.spec(for: target)
+      remote.reconnect(spec: spec, endOldServer: spec.runsInHerdr)
+    }
+  }
+
+  /// A herdr server restart keeps the pane but gives it a new terminal: the
+  /// startup command attaches that one from now on.
+  private func followHerdrPane() async {
+    guard let pane = herdr, let target else { return }
+    guard case .success(let snapshot) = await Herdr.run(Herdr.snapshotCommand, on: target, Herdr.parseSnapshot),
+          let now = snapshot.current(pane) else { return }
+    herdr = now
+    if case .terminal(let id) = Herdr.target(inCommand: target.startupCommand), id != now.terminal {
+      self.target?.startupCommand = Herdr.attachCommand(now.terminal)
+    }
+  }
+
+  /// Takes the attached pane's latest name and agent state from `snapshot`
+  /// of this tab's host.
+  func update(from snapshot: Herdr.Snapshot) {
+    let found: Herdr.Pane?
+    if let herdr {
+      found = snapshot.current(herdr)
+    } else if let command = target?.startupCommand, let attached = Herdr.target(inCommand: command) {
+      found = snapshot.pane(for: attached)
+    } else {
+      found = nil
+    }
+    guard let found, found != herdr else { return }
+    herdr = found
     host?.tabDidChange(self)
   }
 
@@ -163,11 +203,11 @@ final class Tab {
       prediction: host.prediction, label: host.alias)
   }
 
-  /// Only a mosh session inside tmux reconnects by itself: a new server loses nothing there.
+  /// Only a mosh session attached to herdr reconnects by itself: a new server loses nothing there.
   private func wireAutoReconnect() {
     autoReconnect.isEligible = { [weak self] in
       guard let self, remote != nil, !reconnecting, let target, target.transport == .mosh else { return false }
-      return Self.spec(for: target).runsInTmux
+      return Self.spec(for: target).runsInHerdr
     }
     autoReconnect.probe = { [weak self] in
       guard let target = self?.target else { return false }
@@ -301,7 +341,7 @@ final class Tab {
   /// State that lets a mosh remote outlive the app; nil for local or SSH tabs.
   func saveState() -> (SavedTab, Data)? {
     guard let remote, let target, target.transport == .mosh, let blob = remote.save() else { return nil }
-    return (SavedTab(id: id, target: target, tmuxSession: tmuxSession, title: title), blob)
+    return (SavedTab(id: id, target: target, herdr: herdr, title: title), blob)
   }
 
   func suspend() {
@@ -358,7 +398,7 @@ extension Tab: Identifiable {}
 struct SavedTab: Codable, Equatable {
   var id: UUID
   var target: Host
-  var tmuxSession: String?
+  var herdr: Herdr.Pane?
   var title: String
 }
 

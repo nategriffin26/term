@@ -278,10 +278,10 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   }
 
   /// Opens `host` in the focused tab when it sits at the prompt, else in a new tab.
-  func open(_ host: Host, tmuxSession: String? = nil) {
+  func open(_ host: Host, herdr pane: Herdr.Pane? = nil) {
     closeMenu()
     var target = host
-    if let tmuxSession { target.startupCommand = Tmux.attachCommand(tmuxSession) }
+    if let pane { target.startupCommand = Herdr.attachCommand(pane.terminal) }
     let tab: Tab
     if let focused = focusedTab, !focused.isConnected, focused.connecting == nil {
       tab = focused
@@ -290,8 +290,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       guard let created = focusedTab else { return }
       tab = created
     }
-    tab.echo(tmuxSession.map { "tmux \(host.alias) \($0)\r\n" } ?? "\(host.transport.rawValue) \(host.alias)\r\n")
-    tab.connect(target, tmuxSession: tmuxSession)
+    tab.echo(pane.map { "herdr \(host.alias) \($0.sessionName)\r\n" } ?? "\(host.transport.rawValue) \(host.alias)\r\n")
+    tab.connect(target, herdr: pane)
   }
 
   /// A new local shell from the menu's + page.
@@ -302,9 +302,9 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   }
 
   /// What a Files pane (`pane`, a MenuModel.filesPanes id) may do to this window's terminals.
-  func filesContext(pane: String, spec: ConnectSpec?, tmuxSession: String?) -> FilesContext {
+  func filesContext(pane: String, spec: ConnectSpec?, herdrPane: String?) -> FilesContext {
     FilesContext(
-      spec: spec, tmuxSession: tmuxSession,
+      spec: spec, herdrPane: herdrPane,
       insertIntoTerminal: { [weak self] text in self?.focusedTab?.current.write(Data(text.utf8)) },
       openTerminal: { [weak self] spec, directory in self?.openTerminal(spec, in: directory) },
       dismiss: { [weak self] in self?.closeMenu() },
@@ -351,7 +351,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   func tabWantsSettings(_ tab: Tab) { openMenu(.settings) }
 
-  func tabWantsTmuxPicker(_ tab: Tab, host: Host) { presentTmuxPicker(for: host) }
+  func tabWantsHerdrPicker(_ tab: Tab, host: Host) { presentHerdrPicker(for: host) }
 
   func terminalView(_ view: TerminalView, didChangeFontSize size: CGFloat) {
     AppSettings.shared.fontSize = Double(size)
@@ -543,13 +543,15 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       position += CGFloat(j - i) * min(abs(offset), 1)
     }
     view.bringSubviewToFront(hud)
-    hud.track(names: tabs.map(\.sessionName), position: position, center: hudCenter(for: d.pane))
+    hud.track(names: tabs.map(\.sessionName), states: tabs.map(\.agentState), position: position, center: hudCenter(for: d.pane))
   }
 
   private func settleHUD(on tab: Tab, in pane: Pane) {
     guard tabs.count > 1, let i = tabs.firstIndex(where: { $0 === tab }) else { return }
     view.bringSubviewToFront(hud)
-    hud.settle(names: tabs.map(\.sessionName), index: i, center: hudCenter(for: pane))
+    hud.settle(names: tabs.map(\.sessionName), states: tabs.map(\.agentState), index: i, center: hudCenter(for: pane))
+    // Fresh agent states for the next swipe.
+    Task { await Herdr.refresh(tabs) }
   }
 
   // MARK: - Actions (also reachable up the responder chain, e.g. from Smart Keys)
@@ -584,15 +586,15 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     guard tab.isConnected, let target = tab.target else { return }
     menuRestoresFocus = false
     closeMenu()
-    let history = HistoryViewController(host: target, tmuxSession: tab.tmuxSession)
+    let history = HistoryViewController(host: target, pane: tab.herdr)
     let nav = UINavigationController(rootViewController: history)
     nav.modalPresentationStyle = .fullScreen
     present(nav, animated: true)
   }
 
-  /// `tmux host` at the prompt: the host's tmux sessions in the menu.
-  func presentTmuxPicker(for host: Host) {
-    openMenu(.sessions, page: .tmux(host))
+  /// `herdr host` at the prompt: the host's herdr panes in the menu.
+  func presentHerdrPicker(for host: Host) {
+    openMenu(.sessions, page: .herdr(host))
   }
 
   override var keyCommands: [UIKeyCommand]? {

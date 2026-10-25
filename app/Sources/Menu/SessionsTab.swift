@@ -15,10 +15,10 @@ struct SessionsTab: View {
       case .new:
         NewSessionPage(model: model)
           .transition(.move(edge: .trailing).combined(with: .opacity))
-      case .tmux(let host):
+      case .herdr(let host):
         PageScaffold(title: host.alias, back: { model.sessionsPage = .new }) {
-          TmuxPickerView(host: host) { name in
-            model.space?.open(host, tmuxSession: name)
+          HerdrPickerView(host: host) { pane in
+            model.space?.open(host, herdr: pane)
           }
         }
         .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -87,6 +87,13 @@ struct SessionsOverview: View {
       .scrollIndicators(.hidden)
       .scrollBounceBehavior(.basedOnSize)
     }
+    // herdr agent states stay live while the overview shows.
+    .task {
+      while !Task.isCancelled {
+        await Herdr.refresh(model.groups.flatMap(\.tabs))
+        try? await Task.sleep(for: .seconds(3))
+      }
+    }
   }
 
   /// One font for all thumbnails: the widest session fits its tile, down to
@@ -138,7 +145,10 @@ private struct SessionTile: View {
       }
       HStack(alignment: .center, spacing: 6) {
         VStack(alignment: .leading, spacing: 2) {
-          Text(tab.sessionName)
+          HStack(spacing: 6) {
+            if let agent = tab.agentState { StateDot(state: agent) }
+            Text(tab.sessionName)
+          }
             .font(Helm.mono(12.5, .medium))
             .foregroundStyle(isCurrent ? Helm.fg : Helm.fg2)
           HStack(spacing: 5) {
@@ -152,7 +162,7 @@ private struct SessionTile: View {
         }
         .lineLimit(1)
         Spacer(minLength: 0)
-        if tab.isConnected {
+        if tab.isConnected, tab.herdr != nil {
           Button {
             space.showHistory(for: tab)
           } label: {
@@ -172,10 +182,10 @@ private struct SessionTile: View {
     .contentShape(Rectangle())
     .onTapGesture { space.zoom(into: tab) }
     .accessibilityElement(children: .contain)
-    .accessibilityLabel("\(tab.sessionName), \(tab.hostName ?? "local")")
+    .accessibilityLabel([tab.sessionName, tab.agentState?.rawValue, tab.hostName ?? "local"].compactMap(\.self).joined(separator: ", "))
     .accessibilityAddTraits(.isButton)
     .contextMenu {
-      if tab.isConnected {
+      if tab.isConnected, tab.herdr != nil {
         Button("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") { space.showHistory(for: tab) }
       }
       Button("Close", systemImage: "xmark", role: .destructive) { space.close(tab) }
@@ -232,7 +242,7 @@ private struct ThumbnailView: UIViewRepresentable {
 
 // MARK: - New session
 
-/// What the + tile opens: a local shell, a saved host, a tmux session on a
+/// What the + tile opens: a local shell, a saved host, a herdr pane on a
 /// host, and on the inner display a second window or two panes.
 private struct NewSessionPage: View {
   let model: MenuModel
@@ -250,12 +260,12 @@ private struct NewSessionPage: View {
           ForEach(hosts) { host in
             HStack(spacing: 0) {
               Row(title: host.alias, detail: "\(host.user)@\(host.hostname)", mono: true, hairline: false) {
-                model.space?.open(host, tmuxSession: nil)
+                model.space?.open(host)
               }
               Button {
-                model.sessionsPage = .tmux(host)
+                model.sessionsPage = .herdr(host)
               } label: {
-                Text("tmux")
+                Text("herdr")
                   .font(Helm.mono(12, .medium))
                   .foregroundStyle(Helm.fg2)
                   .padding(.horizontal, 10)

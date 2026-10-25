@@ -1,18 +1,18 @@
 import UIKit
 
-/// A tmux pane's history as a native, scrollable, selectable terminal:
-/// `capture-pane` output fed into a local session the TerminalView renders.
+/// A herdr pane's history as a native, scrollable, selectable terminal:
+/// `herdr pane read` output fed into a local session the TerminalView renders.
 @MainActor
 final class HistoryViewController: UIViewController {
   private let host: Host
-  private let tmuxSession: String?
+  private let pane: Herdr.Pane?
   private var session: Session?
   private let spinner = UIActivityIndicatorView(style: .medium)
   private let message = UILabel()
 
-  init(host: Host, tmuxSession: String?) {
+  init(host: Host, pane: Herdr.Pane?) {
     self.host = host
-    self.tmuxSession = tmuxSession
+    self.pane = pane
     super.init(nibName: nil, bundle: nil)
   }
 
@@ -21,7 +21,7 @@ final class HistoryViewController: UIViewController {
   override func viewDidLoad() {
     super.viewDidLoad()
     let settings = AppSettings.shared
-    title = tmuxSession ?? host.alias
+    title = pane?.sessionName ?? host.alias
     view.backgroundColor = settings.theme.backgroundColor
     navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in
       self?.dismiss(animated: true)
@@ -48,15 +48,16 @@ final class HistoryViewController: UIViewController {
   }
 
   private func load() async {
-    let result = await RemoteExec.run(Tab.spec(for: host), Tmux.historyCommand(tmuxSession))
+    guard let pane else {
+      spinner.stopAnimating()
+      show("This session is not a herdr pane, so there is no history to read.")
+      return
+    }
+    let result = await Herdr.run(Herdr.historyCommand(pane.id), on: host, Herdr.parseHistory)
     spinner.stopAnimating()
     switch result {
-    case .failure(let failure):
-      show(failure.message)
-    case .success(let output) where output.status != 0:
-      show("tmux exited with status \(output.status).")
-    case .success(let output):
-      showHistory(output.stdout)
+    case .failure(let failure): show(failure.message(host: host.alias))
+    case .success(let text): showHistory(text)
     }
   }
 
@@ -90,13 +91,15 @@ final class HistoryViewController: UIViewController {
     self.session = session
   }
 
-  /// capture-pane ends lines with LF only; the terminal needs CR LF. The
+  /// Lines need CR LF; herdr already sends it, a bare LF gets its CR. The
   /// cursor is hidden: this is a page to read, not a prompt.
   static func terminalBytes(_ captured: Data) -> Data {
     var out = Data(capacity: captured.count + captured.count / 40 + 8)
+    var previous: UInt8 = 0
     for byte in captured {
-      if byte == 0x0A { out.append(0x0D) }
+      if byte == 0x0A, previous != 0x0D { out.append(0x0D) }
       out.append(byte)
+      previous = byte
     }
     out.append(contentsOf: Array("\u{1b}[?25l".utf8))
     return out

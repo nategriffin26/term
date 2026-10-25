@@ -60,7 +60,7 @@ struct ReconnectPolicy: Equatable {
 
 /// Runs `ReconnectPolicy` for one tab: tracks how long the session has been
 /// UNREACHABLE, probes the host over SSH, and starts the in-place reconnect
-/// when the host answers. Only mosh sessions that live in tmux qualify; their
+/// when the host answers. Only mosh sessions attached to herdr qualify; their
 /// state survives a new server, and without this the server's idle timeout
 /// would show as a dead session.
 @MainActor

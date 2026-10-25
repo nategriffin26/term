@@ -20,7 +20,7 @@ struct Host: Codable, Identifiable, Hashable, Sendable {
   var transport = Transport.mosh
   /// Empty = "mosh-server" on the remote PATH.
   var moshServer = ""
-  /// Runs instead of the login shell, e.g. `tmux new -A -s main`.
+  /// Runs instead of the login shell, e.g. `herdr`.
   var startupCommand = ""
   var prediction = Prediction.adaptive
 
@@ -92,16 +92,15 @@ struct ConnectSpec: Sendable, Equatable {
     }
   }
 
-  /// Whether the remote command runs tmux, so the session outlives its connection.
-  var runsInTmux: Bool {
-    guard let command, case .success(let words) = Command.tokenize(command), let first = words.first else { return false }
-    return (first as NSString).lastPathComponent == "tmux"
-  }
+  /// Whether the remote command runs herdr, so the session outlives its connection.
+  var runsInHerdr: Bool { command.map(Herdr.runs) ?? false }
 
   /// Seconds mosh-server waits without hearing from this phone before exiting.
-  /// Inside tmux nothing is lost when it goes (the session stays and Term
-  /// reattaches), so a day; a plain shell's work dies with its server, so a week.
-  var idleTimeout: UInt32 { runsInTmux ? 86_400 : 604_800 }
+  /// A herdr pane stays sized to the phone while the phone is attached, even
+  /// with the Mac showing it, so the server goes two minutes after the phone
+  /// does and the pane is the Mac's again; Term reattaches in place when the
+  /// phone is back. A plain shell's work dies with its server, so a week.
+  var idleTimeout: UInt32 { runsInHerdr ? 120 : 604_800 }
 }
 
 extension Host.Prediction {

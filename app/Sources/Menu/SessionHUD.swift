@@ -2,9 +2,9 @@ import UIKit
 
 /// The session switcher's position readout: a capsule in the middle of the
 /// pane with one dot per session (the current one in the accent) and the
-/// sessions' names in a row under it, the current one centred and its
-/// neighbours fading out to the sides. Dots and names follow a swipe as it
-/// moves; the capsule fades out after it settles.
+/// sessions' names in a row under it, each after its herdr agent's state,
+/// the current one centred and its neighbours fading out to the sides. Dots
+/// and names follow a swipe as it moves; the capsule fades out after it settles.
 @MainActor
 final class SessionHUD: UIView {
   private let dotsView = UIView()
@@ -14,6 +14,7 @@ final class SessionHUD: UIView {
   private let fade = CAGradientLayer()
   private var labels: [UILabel] = []
   private var names: [String] = []
+  private var states: [Herdr.State?] = []
   private var hideTimer: Timer?
   private var firstShown = -1
 
@@ -60,10 +61,10 @@ final class SessionHUD: UIView {
 
   /// Shows the strip at `position` (a session index, fractional mid-swipe),
   /// centered on `center`.
-  func track(names: [String], position: CGFloat, center: CGPoint) {
+  func track(names: [String], states: [Herdr.State?], position: CGFloat, center: CGPoint) {
     hideTimer?.invalidate()
     hideTimer = nil
-    setNames(names)
+    setNames(names, states: states)
     layoutStrip(position: position, center: center, animateWindow: true)
     if alpha < 1 {
       layer.removeAllAnimations()
@@ -73,8 +74,8 @@ final class SessionHUD: UIView {
 
   /// The swipe ended on `index`: dots and names spring there, then the
   /// capsule fades out.
-  func settle(names: [String], index: Int, center: CGPoint) {
-    setNames(names)
+  func settle(names: [String], states: [Herdr.State?], index: Int, center: CGPoint) {
+    setNames(names, states: states)
     let animator = UIViewPropertyAnimator(duration: 0.4, timingParameters: Helm.springTiming)
     animator.addAnimations { self.layoutStrip(position: CGFloat(index), center: center, animateWindow: false) }
     animator.startAnimation()
@@ -99,16 +100,22 @@ final class SessionHUD: UIView {
     UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) { self.alpha = 0 }
   }
 
-  private func setNames(_ names: [String]) {
-    guard names != self.names else { return }
+  private func setNames(_ names: [String], states: [Herdr.State?]) {
+    guard names != self.names || states != self.states else { return }
     self.names = names
+    self.states = states
     firstShown = -1
     for label in labels { label.removeFromSuperview() }
-    labels = names.map { name in
+    labels = zip(names, states).map { name, state in
       let label = UILabel()
-      label.text = name
-      label.font = Helm.uiMono(12.5, .medium)
-      label.textColor = Helm.UI.fg
+      let font = Helm.uiMono(12.5, .medium)
+      let text = NSMutableAttributedString(string: name, attributes: [.font: font, .foregroundColor: Helm.UI.fg])
+      if let state {
+        text.insert(NSAttributedString(string: "● ", attributes: [
+          .font: Helm.uiMono(9, .medium), .foregroundColor: UIColor(state.color), .baselineOffset: 1.5,
+        ]), at: 0)
+      }
+      label.attributedText = text
       label.textAlignment = .center
       label.lineBreakMode = .byTruncatingMiddle
       label.bounds = CGRect(x: 0, y: 0, width: Self.namePitch - 10, height: namesView.bounds.height)

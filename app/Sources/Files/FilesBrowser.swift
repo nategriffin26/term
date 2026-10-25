@@ -234,13 +234,14 @@ final class FilesBrowser {
   func togglePin(_ path: String) { update { $0.togglePin(path) } }
   func isPinned(_ path: String) -> Bool { state.pins.contains(path) }
 
-  func goToTerminalFolder(_ session: String) async {
-    let command = "tmux display -p -t \(Command.shellQuote(session)) '#{pane_current_path}'"
+  /// Where the herdr pane's foreground process is.
+  func goToTerminalFolder(_ pane: String) async {
     do {
-      let out = try await fs.exec(command)
-      let path = String(decoding: out.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-      guard out.status == 0, path.hasPrefix("/") else { throw RemoteFSError.failed("tmux has no session \(session)") }
-      go(path)
+      let out = try await fs.exec(Herdr.paneCommand(pane))
+      switch Herdr.parseFolder(status: out.status, output: out.stdout) {
+      case .success(let path): go(path)
+      case .failure(let failure): throw RemoteFSError.failed(failure.message(host: fs.spec.label))
+      }
     } catch {
       show(error, doing: "find the terminal's folder")
     }
