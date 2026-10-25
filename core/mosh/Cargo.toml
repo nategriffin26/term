@@ -1,0 +1,25 @@
+[package]
+name = "mosh"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[dependencies]
+aes = "0.9"
+ocb3 = { version = "0.2", default-features = false }
+base64 = "0.22"
+flate2 = "1"
+prost = "0.14"
+serde = { version = "1", features = ["derive", "rc"] }
+postcard = { version = "1", features = ["alloc"] }
+thiserror = "2"
+getrandom = "0.4"
+unicode-width = "0.2"
+vte = "0.15"
+
+[dev-dependencies]
+vt = { path = "../vt" }
+hex-literal = "1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }

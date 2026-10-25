@@ -1,0 +1,126 @@
+name: Term
+options:
+  deploymentTarget:
+    iOS: "27.0"
+  createIntermediateGroups: true
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+settings:
+  base:
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "6.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    IPHONEOS_DEPLOYMENT_TARGET: "27.0"
+    SUPPORTS_MACCATALYST: NO
+    SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+    HEADER_SEARCH_PATHS: $(SRCROOT)/../core/termcore/include
+    SWIFT_OBJC_BRIDGING_HEADER: Sources/App/Term-Bridging-Header.h
+packages:
+  Runestone:
+    url: https://github.com/simonbs/Runestone
+    exactVersion: 0.5.2
+  TreeSitterLanguages:
+    url: https://github.com/simonbs/TreeSitterLanguages
+    exactVersion: 0.1.10
+  cmark-gfm:
+    url: https://github.com/swiftlang/swift-cmark
+    exactVersion: 0.9.0
+targets:
+  Term:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Term
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        CADisableMinimumFrameDurationOnPhone: true
+        UILaunchScreen: {}
+        UIUserInterfaceStyle: Dark
+        UIViewControllerBasedStatusBarAppearance: true
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Terminal
+                UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
+        NSUserActivityTypes:
+          - $(PRODUCT_BUNDLE_IDENTIFIER).window
+        NSLocalNetworkUsageDescription: Term connects to computers on your network over SSH and mosh.
+        NSCameraUsageDescription: Term uploads photos you take to your computer.
+        NSPhotoLibraryUsageDescription: Term uploads photos and videos you pick to your computer.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(TERM_BUNDLE_ID)
+        PRODUCT_NAME: Term
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        OTHER_LDFLAGS: [-lc++]
+    dependencies:
+      - framework: ../build/TermCore.xcframework
+        embed: false
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreText.framework
+      - sdk: GameController.framework
+      - package: Runestone
+      - package: TreeSitterLanguages
+        products:
+          - TreeSitterBashRunestone
+          - TreeSitterCRunestone
+          - TreeSitterCPPRunestone
+          - TreeSitterCSSRunestone
+          - TreeSitterGoRunestone
+          - TreeSitterHTMLRunestone
+          - TreeSitterJavaRunestone
+          - TreeSitterJavaScriptRunestone
+          - TreeSitterJSONRunestone
+          - TreeSitterLuaRunestone
+          - TreeSitterMarkdownRunestone
+          - TreeSitterMarkdownInlineRunestone
+          - TreeSitterPythonRunestone
+          - TreeSitterRubyRunestone
+          - TreeSitterRustRunestone
+          - TreeSitterSCSSRunestone
+          - TreeSitterSQLRunestone
+          - TreeSitterSwiftRunestone
+          - TreeSitterTOMLRunestone
+          - TreeSitterTSXRunestone
+          - TreeSitterTypeScriptRunestone
+          - TreeSitterYAMLRunestone
+      - package: cmark-gfm
+        products:
+          - cmark-gfm
+          - cmark-gfm-extensions
+  TermTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Term
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: $(TERM_BUNDLE_ID).tests
+schemes:
+  Term:
+    build:
+      targets:
+        Term: all
+        TermTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TermTests

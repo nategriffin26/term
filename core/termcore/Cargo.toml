@@ -1,0 +1,19 @@
+[package]
+name = "termcore"
+edition.workspace = true
+version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+vt = { path = "../vt" }
+ssh = { path = "../ssh" }
+mosh = { path = "../mosh" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "fs", "io-util"] }
+russh-sftp = "=3.0.1"
+futures-util = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

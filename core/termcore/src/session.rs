@@ -1,0 +1,383 @@
+//! A session: one terminal, its remote end, and the gate that keeps event
+//! callbacks outside the session lock and away from freed sessions.
+//!
+//! Every state change runs under `state` and collects its events; the lock is
+//! released before they fire, so a callback may call back into the session
+//! (feed from inside OUTPUT). `gate` counts callbacks in flight so
+//! `term_session_free` can wait for them: no callback starts after `closed` is
+//! set, and free returns only once every other thread's callbacks returned.
+
+use std::cell::RefCell;
+use std::ptr;
+use std::sync::{Condvar, Mutex, MutexGuard};
+
+use crate::abi::{TermCallbacks, TermFrame, TermStatus, event, status};
+use crate::remote::{Mosh, Ssh};
+
+/// History rows kept for sessions whose scrollback lives in this terminal.
+pub(crate) const SCROLLBACK: usize = 10_000;
+
+pub(crate) struct Event {
+    kind: u32,
+    data: Vec<u8>,
+}
+
+impl Event {
+    pub(crate) fn new(kind: u32, data: Vec<u8>) -> Event {
+        Event { kind, data }
+    }
+}
+
+pub(crate) enum Remote {
+    /// The app is the host: input goes out as OUTPUT, output comes in by feed.
+    Local,
+    Ssh(Ssh),
+    Mosh(Mosh),
+}
+
+/// Unconfirmed mosh local echo, as frame cells.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub(crate) struct Prediction {
+    pub(crate) cells: Vec<PredictedCell>,
+    pub(crate) cursor: Option<(u16, u16)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PredictedCell {
+    pub(crate) col: u16,
+    pub(crate) row: u16,
+    pub(crate) ch: u32,
+    pub(crate) fg: u32,
+    pub(crate) bg: u32,
+    /// TermCell flags, TERM_CELL_PREDICTED included.
+    pub(crate) flags: u16,
+}
+
+pub(crate) struct State {
+    pub(crate) term: vt::Terminal,
+    pub(crate) remote: Remote,
+    pub(crate) network_epoch: u64,
+    pub(crate) reconnecting: bool,
+    pub(crate) stopped: bool,
+    /// A FRAME event fired and term_session_frame has not run since.
+    frame_pending: bool,
+    bells: u32,
+    title: String,
+    status: u32,
+    /// What the remote predicts on top of the terminal.
+    prediction: Prediction,
+    /// The export: our generation, and what it was built from.
+    generation: u64,
+    built_from: (u64, Prediction),
+    composite: Vec<vt::Cell>,
+}
+
+impl State {
+    pub(crate) fn new(term: vt::Terminal, remote: Remote, status: u32) -> State {
+        let bells = term.bell_count();
+        State {
+            term,
+            remote,
+            network_epoch: 0,
+            reconnecting: false,
+            stopped: false,
+            frame_pending: false,
+            bells,
+            title: String::new(),
+            status,
+            prediction: Prediction::default(),
+            generation: 0,
+            built_from: (0, Prediction::default()),
+            composite: Vec::new(),
+        }
+    }
+
+    /// Something visible may have changed: one FRAME until the app reads it.
+    pub(crate) fn frame_changed(&mut self, ev: &mut Vec<Event>) {
+        if !self.frame_pending {
+            self.frame_pending = true;
+            ev.push(Event::new(event::FRAME, Vec::new()));
+        }
+    }
+
+    /// Title, bell and clipboard effects of host output, then FRAME.
+    pub(crate) fn effects(&mut self, ev: &mut Vec<Event>) {
+        if self.term.take_title_changed() {
+            let title = self.term.title();
+            if title != self.title {
+                ev.push(Event::new(event::TITLE, title.as_bytes().to_vec()));
+                self.title = title;
+            }
+        }
+        let bells = self.term.bell_count();
+        if bells != self.bells {
+            self.bells = bells;
+            ev.push(Event::new(event::BELL, Vec::new()));
+        }
+        if let Some(text) = self.term.take_clipboard() {
+            ev.push(Event::new(event::CLIPBOARD, text.into_bytes()));
+        }
+        self.frame_changed(ev);
+    }
+
+    pub(crate) fn status_kind(&self) -> u32 {
+        self.status
+    }
+
+    /// Moves to `kind` (CLOSED is final) and reports it; `reason` travels
+    /// with CLOSED only.
+    pub(crate) fn set_status(&mut self, kind: u32, reason: &str, ev: &mut Vec<Event>) {
+        if self.status == kind || self.status == status::CLOSED {
+            return;
+        }
+        self.status = kind;
+        let data = if kind == status::CLOSED { reason.as_bytes().to_vec() } else { Vec::new() };
+        ev.push(Event::new(event::STATUS, data));
+    }
+
+    /// A successful replacement may reopen a remotely closed session.
+    pub(crate) fn reconnect_status(&mut self, kind: u32, ev: &mut Vec<Event>) {
+        self.status = kind;
+        self.prediction = Prediction::default();
+        ev.push(Event::new(event::STATUS, Vec::new()));
+        self.frame_changed(ev);
+    }
+
+    pub(crate) fn status(&self) -> TermStatus {
+        let (last_heard_ms, rtt_ms) = match &self.remote {
+            Remote::Mosh(m) => m.timing(),
+            _ => (0, 0),
+        };
+        TermStatus { kind: self.status, last_heard_ms, rtt_ms }
+    }
+
+    /// Host output for a local session; the terminal's replies go back out.
+    pub(crate) fn feed(&mut self, bytes: &[u8], ev: &mut Vec<Event>) {
+        if !matches!(self.remote, Remote::Local) || bytes.is_empty() {
+            return;
+        }
+        self.term.write(bytes);
+        self.effects(ev);
+        let replies = self.term.take_responses();
+        if !replies.is_empty() {
+            ev.push(Event::new(event::OUTPUT, replies));
+        }
+    }
+
+    /// Host output from an SSH shell; the terminal's replies go back to it.
+    pub(crate) fn ssh_output(&mut self, bytes: &[u8], ev: &mut Vec<Event>) {
+        self.term.write(bytes);
+        self.effects(ev);
+        let replies = self.term.take_responses();
+        if let Remote::Ssh(r) = &self.remote
+            && !replies.is_empty()
+        {
+            r.send(replies);
+        }
+    }
+
+    /// User input bytes for the remote end. Input snaps the viewport to live.
+    pub(crate) fn send(&mut self, bytes: Vec<u8>, ev: &mut Vec<Event>) {
+        if bytes.is_empty() {
+            return;
+        }
+        if self.term.viewport_offset() != 0 {
+            self.term.scroll_to_live();
+            self.frame_changed(ev);
+        }
+        match &mut self.remote {
+            Remote::Local => ev.push(Event::new(event::OUTPUT, bytes)),
+            Remote::Ssh(r) => r.send(bytes),
+            Remote::Mosh(m) => {
+                m.input(&mut self.term, &bytes);
+                self.refresh_prediction(ev);
+            }
+        }
+    }
+
+    pub(crate) fn resize(&mut self, cols: u16, rows: u16, cell_w: u16, cell_h: u16, ev: &mut Vec<Event>) {
+        let grid = self.term.size() != (cols, rows);
+        if cols == 0 || rows == 0 || !grid && cell_w == 0 && cell_h == 0 {
+            return;
+        }
+        if self.term.resize(cols, rows, cell_w as u32, cell_h as u32).is_err() {
+            return;
+        }
+        self.frame_changed(ev);
+        if !grid {
+            return;
+        }
+        match &mut self.remote {
+            Remote::Local => {}
+            Remote::Ssh(r) => r.resize(cols, rows),
+            Remote::Mosh(m) => {
+                m.resize(&mut self.term, cols, rows);
+                self.refresh_prediction(ev);
+            }
+        }
+    }
+
+    pub(crate) fn scroll(&mut self, delta: i32, ev: &mut Vec<Event>) {
+        let before = self.term.viewport_offset();
+        self.term.scroll(delta);
+        if self.term.viewport_offset() != before {
+            self.frame_changed(ev);
+        }
+    }
+
+    /// Re-reads the remote's prediction overlay; FRAME when it changed.
+    pub(crate) fn refresh_prediction(&mut self, ev: &mut Vec<Event>) {
+        let Remote::Mosh(m) = &mut self.remote else { return };
+        if m.prediction(&mut self.term, &mut self.prediction) {
+            self.frame_changed(ev);
+        }
+    }
+
+    /// term_session_frame: refreshes the export and points `out` into it.
+    pub(crate) fn frame(&mut self, have: u64, out: &mut TermFrame) -> bool {
+        self.frame_pending = false;
+        if self.term.update_frame().is_err() {
+            return false;
+        }
+        let Some(f) = self.term.frame() else { return false };
+        if f.generation != self.built_from.0 || self.prediction != self.built_from.1 {
+            self.generation += 1;
+            self.built_from = (f.generation, self.prediction.clone());
+            if !self.prediction.cells.is_empty() {
+                compose(f, &self.prediction, &mut self.composite);
+            }
+        }
+        if self.generation == have {
+            return false;
+        }
+        let predicted = &self.built_from.1;
+        let (cursor_col, cursor_row) = match predicted.cursor {
+            Some((c, r)) if f.cols > 0 && f.rows > 0 => (c.min(f.cols - 1), r.min(f.rows - 1)),
+            _ => (f.cursor_col, f.cursor_row),
+        };
+        *out = TermFrame {
+            generation: self.generation,
+            cols: f.cols,
+            rows: f.rows,
+            cursor_col,
+            cursor_row,
+            cursor_visible: f.cursor_visible as u8,
+            cursor_style: f.cursor_style,
+            cursor_blink: f.cursor_blink as u8,
+            _pad: 0,
+            fg: f.fg,
+            bg: f.bg,
+            cursor_color: f.cursor_color,
+            modes: f.modes,
+            history_rows: f.history_rows,
+            viewport_offset: f.viewport_offset,
+            bell_count: f.bell_count,
+            cells: if predicted.cells.is_empty() { f.cells.as_ptr() } else { self.composite.as_ptr() },
+            grapheme_count: f.graphemes.len() as u32,
+            graphemes: if f.graphemes.is_empty() { ptr::null() } else { f.graphemes.as_ptr() },
+            codepoints: if f.codepoints.is_empty() { ptr::null() } else { f.codepoints.as_ptr() },
+        };
+        true
+    }
+}
+
+/// The frame's cells with predicted echo drawn over them.
+fn compose(f: &vt::Frame, p: &Prediction, out: &mut Vec<vt::Cell>) {
+    use vt::cell_flags::{PREDICTED, SPACER, UNDERLINE_MASK, WIDE};
+    out.clear();
+    out.extend_from_slice(&f.cells);
+    for c in &p.cells {
+        if c.col >= f.cols || c.row >= f.rows {
+            continue;
+        }
+        let cell = &mut out[c.row as usize * f.cols as usize + c.col as usize];
+        if cell.ch == c.ch && cell.flags & SPACER == 0 {
+            // The screen already shows this character: only mark it.
+            cell.flags |= PREDICTED;
+            if c.flags & UNDERLINE_MASK != 0 {
+                cell.flags = cell.flags & !UNDERLINE_MASK | c.flags & UNDERLINE_MASK;
+            }
+        } else {
+            *cell = vt::Cell { ch: c.ch, fg: c.fg, bg: c.bg, ul: 0, flags: c.flags & !(WIDE | SPACER), grapheme: 0 };
+        }
+    }
+}
+
+struct Gate {
+    closed: bool,
+    inflight: usize,
+}
+
+pub struct Session {
+    state: Mutex<State>,
+    cb: TermCallbacks,
+    gate: Mutex<Gate>,
+    idle: Condvar,
+}
+
+thread_local! {
+    /// Sessions whose callback is running on this thread (innermost last), so
+    /// a free from inside a callback does not wait for itself.
+    static FIRING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+impl Session {
+    pub(crate) fn new(state: State, cb: TermCallbacks) -> Session {
+        Session {
+            state: Mutex::new(state),
+            cb,
+            gate: Mutex::new(Gate { closed: false, inflight: 0 }),
+            idle: Condvar::new(),
+        }
+    }
+
+    pub(crate) fn lock(&self) -> MutexGuard<'_, State> {
+        lock(&self.state)
+    }
+
+    /// Runs `f` under the session lock, then fires what it collected. The
+    /// caller holds an `Arc` to the session for the duration, so a callback
+    /// that frees the session cannot free it under us.
+    pub(crate) fn update<R>(&self, f: impl FnOnce(&mut State, &mut Vec<Event>) -> R) -> R {
+        let mut events = Vec::new();
+        let r = f(&mut self.lock(), &mut events);
+        self.fire(events);
+        r
+    }
+
+    pub(crate) fn fire(&self, events: Vec<Event>) {
+        let Some(callback) = self.cb.event else { return };
+        let me = self as *const Session as usize;
+        for e in events {
+            {
+                let mut g = lock(&self.gate);
+                if g.closed {
+                    return;
+                }
+                g.inflight += 1;
+            }
+            FIRING.with(|f| f.borrow_mut().push(me));
+            let data = if e.data.is_empty() { ptr::null() } else { e.data.as_ptr() };
+            unsafe { callback(self.cb.ctx, e.kind, data, e.data.len()) };
+            FIRING.with(|f| f.borrow_mut().pop());
+            lock(&self.gate).inflight -= 1;
+            self.idle.notify_all();
+        }
+    }
+
+    /// Stops all callbacks: none starts after this, and it returns once every
+    /// callback on other threads has returned.
+    pub(crate) fn close_gate(&self) {
+        let me = self as *const Session as usize;
+        let own = FIRING.with(|f| f.borrow().iter().filter(|&&p| p == me).count());
+        let mut g = lock(&self.gate);
+        g.closed = true;
+        while g.inflight > own {
+            g = self.idle.wait(g).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}

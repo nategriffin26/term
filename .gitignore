@@ -1,0 +1,10 @@
+local/
+target/
+build/
+DerivedData/
+*.xcframework
+.DS_Store
+xcuserdata/
+app/Term.xcodeproj/
+app/Info.plist
+app/Config/Local.xcconfig

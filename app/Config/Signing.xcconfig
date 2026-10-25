@@ -1,0 +1,11 @@
+// Signing for device builds. Put your own values in Local.xcconfig next to
+// this file (git-ignored):
+//
+//   TERM_BUNDLE_ID = com.yourname.term
+//   DEVELOPMENT_TEAM = ABCDE12345
+//
+// Simulator builds work with the defaults below.
+TERM_BUNDLE_ID = com.example.term
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"
