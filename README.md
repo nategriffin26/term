@@ -3,7 +3,7 @@
 Term is a terminal for iPhone. It speaks mosh and SSH, keeps your herdr sessions and the coding agents in them one swipe away, and lets you work on the remote machine's files without leaving the app.
 
 <p align="center">
-  <img src="docs/screens-terminal.png" alt="Term on iPhone: vim and cargo test in a tmux session, the Sessions overview, and the Files tab in a Rust project">
+  <img src="docs/screens-terminal.png" alt="Term on iPhone: a coding agent at work in a herdr pane, the Sessions overview with each agent's state, and the Files tab in a Rust project">
 </p>
 
 Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghostty](https://ghostty.org)'s terminal engine, with a mosh client written from scratch in Rust.
@@ -21,11 +21,11 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **iPhone Duo layouts** for both displays, two windows side by side, and a menu dock in the inner display's status band.
 
 <p align="center">
-  <img src="docs/screens-files.png" alt="Swiping between tmux sessions, a Rust file in the code viewer, and a README rendered from the host">
+  <img src="docs/screens-files.png" alt="Swiping between two herdr agents, the HUD naming each with its state, a Rust file in the code viewer, and a README rendered from the host">
 </p>
 
 <p align="center">
-  <img src="docs/screens-duo.png" alt="Term on the iPhone Duo's inner display: two tmux sessions side by side under the menu dock in the status band, and the Sessions panel opened from the dock">
+  <img src="docs/screens-duo.png" alt="Term on the iPhone Duo's inner display: two agents side by side under the menu dock in the status band, one working and one waiting for approval, and the Sessions panel with a working, a blocked and an idle agent">
 </p>
 
 ## How it works
