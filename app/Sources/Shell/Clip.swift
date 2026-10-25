@@ -23,35 +23,48 @@ struct Clip {
   @MainActor
   static func read(_ board: UIPasteboard = .general) -> Clip {
     var clip = Clip()
+    // A file copied in Files also offers its contents as text or image data;
+    // it is pasted as the file, by its name.
+    let providers = board.itemProviders
+    if providers.contains(where: isFile) {
+      clip.files = providers
+      return clip
+    }
     if board.hasStrings, let text = board.string, !text.isEmpty { clip.text = text }
     if board.hasImages {
       clip.images = board.items.compactMap(image(in:))
     }
     if clip.text == nil, clip.images.isEmpty, board.numberOfItems > 0 {
-      clip.files = board.itemProviders
+      clip.files = providers
     }
     return clip
   }
 
-  /// The paste control's and drops' providers: images by their data, text
-  /// unless it comes as a file, files as they are.
+  /// The paste control's and drops' providers: files as they are, images by
+  /// their data, text.
   @MainActor
   static func load(_ providers: [NSItemProvider]) async -> Clip {
     var clip = Clip()
     for provider in providers {
       let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
-      let isFile = provider.suggestedName != nil || types.contains { $0.conforms(to: .fileURL) }
-      if let type = imageTypes.first(where: { t in types.contains { $0.conforms(to: t) } })
+      if isFile(provider) {
+        clip.files.append(provider)
+      } else if let type = imageTypes.first(where: { t in types.contains { $0.conforms(to: t) } })
         ?? types.first(where: { $0.conforms(to: .image) }),
         let data = await loadData(provider, type) {
         clip.images.append(Image(data: data, type: type))
-      } else if !isFile, provider.canLoadObject(ofClass: String.self), let text = await loadText(provider) {
+      } else if provider.canLoadObject(ofClass: String.self), let text = await loadText(provider) {
         clip.text = (clip.text.map { $0 + "\n" } ?? "") + text
       } else {
         clip.files.append(provider)
       }
     }
     return clip
+  }
+
+  /// A copied or dragged file (it has a name), as opposed to bare text or image data.
+  private static func isFile(_ provider: NSItemProvider) -> Bool {
+    provider.suggestedName != nil || provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
   }
 
   private static func image(in item: [String: Any]) -> Image? {

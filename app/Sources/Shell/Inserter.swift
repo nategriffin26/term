@@ -94,7 +94,7 @@ final class Inserter {
       if let url = await FilesBrowser.copyOut(provider) { urls.append(url) }
     }
     if urls.isEmpty {
-      tab.showNotice("Couldn't read what was pasted", for: 4)
+      tab.showNotice("Couldn't read what was pasted", failed: true, for: 6)
       return
     }
     await send(urls, to: tab)
@@ -116,7 +116,7 @@ final class Inserter {
     defer { Self.discard(made) }
     guard !hostMissing(tab), let target = tab.target else { return }
     let fs = RemoteFS(spec: Tab.spec(for: target))
-    tab.showNotice(files.count == 1 ? "Uploading…" : "Uploading \(files.count) files…")
+    tab.showNotice(files.count == 1 ? "Uploading" : "Uploading \(files.count) files", progress: 0)
     do {
       let date = Date()
       let prepared = try await Task.detached(priority: .userInitiated) {
@@ -130,7 +130,7 @@ final class Inserter {
         let remote = FilePath.join(dir, item.name)
         let what = prepared.count == 1 ? "Uploading" : "Uploading \(i + 1) of \(prepared.count)"
         try await fs.upload(item.file, to: remote, ifMtime: nil) { [weak tab] fraction in
-          tab?.showNotice("\(what) · \(Int(fraction * 100))%")
+          tab?.showNotice(what, progress: (Double(i) + fraction) / Double(prepared.count))
         }
         paths.append(remote)
       }
@@ -142,7 +142,7 @@ final class Inserter {
       tab.current.paste(Attachments.typed(paths))
     } catch {
       let message = (error as? RemoteFSError)?.message ?? error.localizedDescription
-      tab.showNotice("Couldn't upload: \(message)", for: 5)
+      tab.showNotice("Couldn't upload: \(message)", failed: true, for: 8)
     }
   }
 

@@ -35,7 +35,7 @@ final class Tab {
   /// An in-place reconnect is running.
   private(set) var reconnecting = false
   /// A short line for the pane's banner: an upload's progress, or why it failed.
-  private(set) var notice: String?
+  private(set) var notice: Notice?
   private var noticeTimer: Task<Void, Never>?
   private let autoReconnect = AutoReconnect()
 
@@ -326,12 +326,14 @@ final class Tab {
     local.feed(Data(editor.begin().utf8))
   }
 
-  /// Shows `text` in the banner (nil clears it), for `seconds` when given.
-  func showNotice(_ text: String?, for seconds: Double? = nil) {
+  /// Shows `text` in the banner (nil clears it), with an upload's
+  /// `progress` (0...1) or as a failure, for `seconds` when given.
+  func showNotice(_ text: String?, progress: Double? = nil, failed: Bool = false, for seconds: Double? = nil) {
     noticeTimer?.cancel()
     noticeTimer = nil
-    if text != notice {
-      notice = text
+    let next = text.map { Notice(text: $0, progress: progress, failed: failed) }
+    if next != notice {
+      notice = next
       host?.tabDidChange(self)
     }
     guard let seconds, text != nil else { return }
@@ -341,6 +343,13 @@ final class Tab {
       self?.showNotice(nil)
     }
   }
+}
+
+/// What a pane's banner says for its tab besides connection trouble.
+struct Notice: Equatable {
+  var text: String
+  var progress: Double?
+  var failed = false
 }
 
 extension Tab: Identifiable {}

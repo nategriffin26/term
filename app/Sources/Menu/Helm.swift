@@ -36,6 +36,7 @@ enum Helm {
     static let line2 = UIColor(red: 150 / 255, green: 175 / 255, blue: 1, alpha: 0.14)
     static let sel = UIColor(red: 150 / 255, green: 175 / 255, blue: 1, alpha: 0.08)
     static let accent = UIColor(rgb: 0x6F8CFF)
+    static let bad = UIColor(rgb: 0xFF5B69)
     static let overlay = UIColor(red: 2 / 255, green: 4 / 255, blue: 10 / 255, alpha: 0.62)
   }
 
