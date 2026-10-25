@@ -278,20 +278,49 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   }
 
   /// Opens `host` in the focused tab when it sits at the prompt, else in a new tab.
-  func open(_ host: Host, tmuxSession: String? = nil) {
+  func open(_ host: Host) {
     closeMenu()
-    var target = host
-    if let tmuxSession { target.startupCommand = Tmux.attachCommand(tmuxSession) }
-    let tab: Tab
+    let tab = promptTab(focus: true)
+    tab?.echo("\(host.transport.rawValue) \(host.alias)\r\n")
+    tab?.connect(host)
+  }
+
+  /// The focused tab when it sits at the prompt, else a new tab after it.
+  private func promptTab(focus: Bool) -> Tab? {
     if let focused = focusedTab, !focused.isConnected, focused.connecting == nil {
-      tab = focused
-    } else {
-      newTab()
-      guard let created = focusedTab else { return }
-      tab = created
+      if focus { focused.view.becomeFirstResponder() }
+      return focused
     }
-    tab.echo(tmuxSession.map { "tmux \(host.alias) \($0)\r\n" } ?? "\(host.transport.rawValue) \(host.alias)\r\n")
-    tab.connect(target, tmuxSession: tmuxSession)
+    guard let pane = focusedPane else { return nil }
+    let index = (tabs.firstIndex { $0 === pane.tab } ?? tabs.count - 1) + 1
+    guard let tab = makeTab(at: index) else { return nil }
+    show(tab, in: pane)
+    if focus { tab.view.becomeFirstResponder() }
+    return tab
+  }
+
+  /// Goes into tmux session `name` on `host`: the tab already attached to it
+  /// comes forward (from any window); otherwise a tab attaches to it, growing
+  /// out of `tile` (its snapshot in the overview, window coordinates).
+  func attach(_ host: Host, session name: String, tile: CGRect? = nil) {
+    if let open = Self.live.flatMap(\.tabs).first(where: { $0.target?.serverKey == host.serverKey && $0.tmuxSession == name }) {
+      zoom(into: open)
+      return
+    }
+    let focus = menuRestoresFocus
+    menuRestoresFocus = false
+    guard let tab = promptTab(focus: focus) else { return closeMenu() }
+    var target = host
+    target.startupCommand = Tmux.attachCommand(name)
+    tab.echo("tmux \(host.alias) \(name)\r\n")
+    tab.connect(target, tmuxSession: name)
+    guard let pane = panes.first(where: { $0.tab === tab }), let tile, panel.isOpen,
+          !UIAccessibility.isReduceMotionEnabled else {
+      closeMenu()
+      return
+    }
+    panel.fadeOut(duration: 0.24) {}
+    zoom(pane, tile: view.convert(tile, from: nil), towardTile: false) {}
   }
 
   /// A new local shell from the menu's + page.
@@ -351,7 +380,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   func tabWantsSettings(_ tab: Tab) { openMenu(.settings) }
 
-  func tabWantsTmuxPicker(_ tab: Tab, host: Host) { presentTmuxPicker(for: host) }
+  func tabWantsTmuxSessions(_ tab: Tab, host: Host) { showSessions(of: host) }
 
   func terminalView(_ view: TerminalView, didChangeFontSize size: CGFloat) {
     AppSettings.shared.fontSize = Double(size)
@@ -582,17 +611,39 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   func showHistory(for tab: Tab) {
     guard tab.isConnected, let target = tab.target else { return }
+    showHistory(host: target, session: tab.tmuxSession)
+  }
+
+  func showHistory(host: Host, session: String?) {
     menuRestoresFocus = false
     closeMenu()
-    let history = HistoryViewController(host: target, tmuxSession: tab.tmuxSession)
+    let history = HistoryViewController(host: host, tmuxSession: session)
     let nav = UINavigationController(rootViewController: history)
     nav.modalPresentationStyle = .fullScreen
     present(nav, animated: true)
   }
 
-  /// `tmux host` at the prompt: the host's tmux sessions in the menu.
-  func presentTmuxPicker(for host: Host) {
-    openMenu(.sessions, page: .tmux(host))
+  /// `tmux host` at the prompt: the overview, opened at that host's sessions.
+  func showSessions(of host: Host) {
+    TmuxStore.shared.setExpanded(host.serverKey, true)
+    menu.scrollTarget = host.serverKey
+    openMenu(.sessions)
+  }
+
+  /// tmux renamed a session: the tabs attached to it follow the new name.
+  static func tmuxSessionRenamed(on host: Host, from old: String, to name: String) {
+    for tab in live.flatMap(\.tabs) where tab.target?.serverKey == host.serverKey && tab.tmuxSession == old {
+      tab.tmuxSessionRenamed(to: name)
+    }
+  }
+
+  /// A killed session's tabs have nothing left to show: they close.
+  static func tmuxSessionKilled(on host: Host, name: String) {
+    for space in live {
+      for tab in space.tabs where tab.target?.serverKey == host.serverKey && tab.tmuxSession == name {
+        space.close(tab)
+      }
+    }
   }
 
   override var keyCommands: [UIKeyCommand]? {

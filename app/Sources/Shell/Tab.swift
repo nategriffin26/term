@@ -6,7 +6,7 @@ protocol TabHost: AnyObject {
   func tabDidChange(_ tab: Tab)
   func tabWantsClose(_ tab: Tab)
   func tabWantsSettings(_ tab: Tab)
-  func tabWantsTmuxPicker(_ tab: Tab, host: Host)
+  func tabWantsTmuxSessions(_ tab: Tab, host: Host)
 }
 
 /// One shell (Blink's space): a local prompt session, and while connected a
@@ -142,6 +142,16 @@ final class Tab {
   /// Abandons a connection attempt; the screen stays as it is.
   func cancelConnecting() {
     connecting = nil
+    host?.tabDidChange(self)
+  }
+
+  /// The tmux session this tab is attached to was renamed: its name, a
+  /// reconnect and history follow the new name.
+  func tmuxSessionRenamed(to name: String) {
+    if let old = tmuxSession, target?.startupCommand == Tmux.attachCommand(old) {
+      target?.startupCommand = Tmux.attachCommand(name)
+    }
+    tmuxSession = name
     host?.tabDidChange(self)
   }
 

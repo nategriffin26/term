@@ -2,117 +2,194 @@ import XCTest
 @testable import Term
 
 final class TmuxTests: XCTestCase {
-  private func parse(_ status: Int32, _ text: String) -> Result<[Tmux.Session], Tmux.ListError> {
-    Tmux.parseList(status: status, output: Data(text.utf8))
+  private func parse(_ status: Int32, _ text: String) -> Result<Tmux.Overview, Tmux.ListError> {
+    Tmux.parseOverview(status: status, output: Data(text.utf8))
   }
 
-  private func sessions(_ text: String, file: StaticString = #filePath, line: UInt = #line) -> [Tmux.Session] {
-    guard case .success(let s) = parse(0, text) else {
+  private func overview(_ text: String, file: StaticString = #filePath, line: UInt = #line) -> Tmux.Overview {
+    guard case .success(let o) = parse(0, text) else {
       XCTFail("expected sessions from \(text.debugDescription)", file: file, line: line)
-      return []
+      return Tmux.Overview(sessions: [], screens: [:])
     }
-    return s
+    return o
   }
 
   private func at(_ t: TimeInterval) -> Date { Date(timeIntervalSince1970: t) }
 
-  // MARK: - list-sessions output
-
-  /// Captured from tmux 3.x on the Mac: `tmux -L termtest list-sessions` with
-  /// four sessions, one of them with two windows. tmux itself rewrites ":" and
-  /// "." in names to "_".
-  func testRealTmuxOutput() {
-    let out = "a_b\t1\t0\t1792908077\nmy work\t2\t0\t1792908077\nx_y\t1\t0\t1792908077\n日本\t1\t0\t1792908077\n"
-    let s = sessions(out)
-    XCTAssertEqual(Set(s.map(\.name)), ["a_b", "my work", "x_y", "日本"])
-    XCTAssertEqual(s.first { $0.name == "my work" }?.windows, 2)
-    XCTAssertEqual(s.first { $0.name == "x_y" }?.windows, 1)
-    XCTAssertEqual(s.first { $0.name == "日本" }?.attached, 0)
-    XCTAssertEqual(s.first?.lastActivity, at(1_792_908_077))
+  /// A list line in `Tmux.fields` order.
+  private func line(_ id: String, _ name: String, activity: Int = 100, windows: Int = 1, attached: Int = 0,
+                    command: String = "zsh", path: String = "/home/u") -> String {
+    "\(id)\t\(activity)\t\(windows)\t\(attached)\t50\t80\t24\t3\t5\t\(command)\t\(path)\t\(name)"
   }
 
-  func testFieldsAreWindowsAttachedAndActivityInThatOrder() {
-    let s = sessions("main\t3\t2\t1700000000\n")
-    XCTAssertEqual(s, [Tmux.Session(name: "main", windows: 3, attached: 2, lastActivity: at(1_700_000_000))])
+  // MARK: - Overview output
+
+  /// Captured from tmux 3.6a through the test sshd's zsh running
+  /// `overviewCommand(skip: ["$0": …])` (home paths made neutral): two
+  /// sessions captured, the skipped one listed without a screen, and tmux's
+  /// own escaping of a tab in a name.
+  func testRealOverviewOutput() {
+    let out = "$8\t1792969779\t1\t0\t1792969779\t50\t10\t11\t0\tzsh\t/home/u/term\tit's\\ttab\n"
+      + "$7\t1792969779\t1\t2\t1792969779\t60\t12\t11\t2\tzsh\t/private/tmp\tmy work\n"
+      + "$0\t1792950408\t1\t0\t1792945985\t51\t25\t8\t22\tzsh\t/home/u\tt1\n"
+      + "\u{1e}$7\n\u{1b}[32me2e\u{1b}[39m /tmp % printf red\n\u{1b}[31mred\u{1b}[0m plain\n\n"
+      + "\u{1e}$8\n\u{1b}[32me2e\u{1b}[39m term % \n\n\n"
+    let o = overview(out)
+    XCTAssertEqual(o.sessions.map(\.name), ["it's\\ttab", "my work", "t1"])
+    let work = o.sessions[1]
+    XCTAssertEqual(work, Tmux.Session(id: "$7", name: "my work", windows: 1, attached: 2, created: at(1_792_969_779),
+                                      lastActivity: at(1_792_969_779), command: "zsh", path: "/private/tmp",
+                                      width: 60, height: 12, cursorX: 11, cursorY: 2))
+    XCTAssertEqual(Set(o.screens.keys), ["$7", "$8"])
+    XCTAssertEqual(o.screens["$7"], "\u{1b}[32me2e\u{1b}[39m /tmp % printf red\n\u{1b}[31mred\u{1b}[0m plain\n")
+    XCTAssertEqual(o.screens["$8"], "\u{1b}[32me2e\u{1b}[39m term % \n\n")
   }
 
-  func testNamesWithSpacesAndColonsSurvive() {
-    let s = sessions("my work\t1\t0\t10\nhost:8080 api\t2\t1\t20\n")
-    XCTAssertEqual(s.map(\.name), ["host:8080 api", "my work"])
+  func testFieldsAreReadInTheCommandsOrder() {
+    let o = overview("$3\t300\t4\t2\t200\t120\t40\t7\t9\tnvim\t/srv/app\tmain\n")
+    XCTAssertEqual(o.sessions, [Tmux.Session(id: "$3", name: "main", windows: 4, attached: 2, created: at(200),
+                                            lastActivity: at(300), command: "nvim", path: "/srv/app",
+                                            width: 120, height: 40, cursorX: 7, cursorY: 9)])
+  }
+
+  /// The name is the last field, so tabs, spaces and colons in it can't shift the others.
+  func testNamesWithTabsSpacesColonsAndDotsSurvive() {
+    let o = overview([line("$1", "my work"), line("$2", "a\tb", activity: 90), line("$3", "x:8080 api.v2", activity: 80)]
+      .joined(separator: "\n"))
+    XCTAssertEqual(o.sessions.map(\.name), ["my work", "a\tb", "x:8080 api.v2"])
+    XCTAssertEqual(o.sessions[1].path, "/home/u")
   }
 
   func testMostRecentlyActiveFirst() {
-    let s = sessions("old\t1\t0\t100\nnew\t1\t0\t300\nmid\t1\t0\t200\n")
-    XCTAssertEqual(s.map(\.name), ["new", "mid", "old"])
+    let o = overview([line("$1", "old", activity: 100), line("$2", "new", activity: 300), line("$3", "mid", activity: 200)]
+      .joined(separator: "\n"))
+    XCTAssertEqual(o.sessions.map(\.name), ["new", "mid", "old"])
   }
 
   func testEmptyOutputIsNoSessions() {
-    XCTAssertEqual(sessions(""), [])
-    XCTAssertEqual(sessions("\n\n"), [])
+    XCTAssertEqual(overview(""), Tmux.Overview(sessions: [], screens: [:]))
+    XCTAssertEqual(overview("\n\n"), Tmux.Overview(sessions: [], screens: [:]))
   }
 
   func testMalformedLinesAreSkippedAndGoodOnesKept() {
     let text = [
-      "good\t1\t0\t100",
-      "three\t1\t0",
-      "five\t1\t0\t100\textra",
-      "nan\tx\t0\t100",
-      "badattached\t1\t-\t100",
-      "baddate\t1\t0\tyesterday",
+      line("$1", "good"),
+      "$2\t100\t1\t0\t50\t80\t24\t3\t5\tzsh",
+      line("noid", "bad id"),
+      line("$4", "x").replacingOccurrences(of: "\t80\t", with: "\twide\t"),
       "",
-      "also good\t2\t1\t50",
+      line("$5", "also good", activity: 50),
     ].joined(separator: "\n")
-    XCTAssertEqual(sessions(text).map(\.name), ["good", "also good"])
+    XCTAssertEqual(overview(text).sessions.map(\.name), ["good", "also good"])
   }
 
   func testWindowsLineEndingsAndMissingFinalNewline() {
-    XCTAssertEqual(sessions("a\t1\t0\t5\r\nb\t1\t0\t6").map(\.name), ["b", "a"])
+    XCTAssertEqual(overview(line("$1", "a", activity: 5) + "\r\n" + line("$2", "b", activity: 6)).sessions.map(\.name), ["b", "a"])
   }
 
-  func testEmptySessionNameFieldStillCountsAsAField() {
-    // `\t1\t0\t5` has four fields with an empty name; it is not dropped as malformed
-    // because tmux never prints it, but it must not shift the other fields.
-    XCTAssertEqual(sessions("\t1\t0\t5\n").first?.windows, 1)
+  /// A screen keeps its blank rows; only the newline tmux ends it with goes.
+  func testScreensKeepBlankRowsAndBelongToTheirId() {
+    let o = overview(line("$1", "a") + "\n\u{1e}$1\ntop\n\n\nbottom\n\u{1e}$2\n\n")
+    XCTAssertEqual(o.screens["$1"], "top\n\n\nbottom")
+    XCTAssertEqual(o.screens["$2"], "")
+  }
+
+  func testSessionsNotCapturedHaveNoScreen() {
+    XCTAssertEqual(overview(line("$1", "a") + "\n").screens, [:])
   }
 
   // MARK: - Failures
 
-  func testNoServerRunningMeansNoSessions() {
-    let text = "no server running on /private/tmp/tmux-502/termtest\n"
-    XCTAssertEqual(try parse(1, text).get(), [])
-  }
-
-  func testCannotConnectMeansNoSessions() {
-    let text = "error connecting to /tmp/tmux-501/default (No such file or directory)\n"
-    XCTAssertEqual(try parse(1, text).get(), [])
-  }
-
-  func testFailureWithNoOutputMeansNoSessions() {
-    XCTAssertEqual(try parse(1, "").get(), [])
+  func testNoServerRunningIsItsOwnState() {
+    XCTAssertEqual(parse(1, "no server running on /private/tmp/tmux-502/default\n"), .failure(.notRunning))
+    XCTAssertEqual(parse(1, "error connecting to /tmp/tmux-501/default (No such file or directory)\n"), .failure(.notRunning))
   }
 
   func testStatus127IsTmuxNotInstalled() {
-    XCTAssertEqual(parse(127, "sh: tmux: command not found\n"), .failure(.notInstalled))
+    XCTAssertEqual(parse(127, "zsh:1: command not found: tmux\n"), .failure(.notInstalled))
     XCTAssertEqual(parse(127, ""), .failure(.notInstalled))
   }
 
   func testOtherFailuresCarryStatusAndOutput() {
-    XCTAssertEqual(parse(1, "protocol version mismatch\n"), .failure(.failed(status: 1, output: "protocol version mismatch\n")))
-    XCTAssertEqual(parse(255, "Permission denied\n"), .failure(.failed(status: 255, output: "Permission denied\n")))
+    XCTAssertEqual(parse(1, "protocol version mismatch\n"), .failure(.failed(status: 1, output: "protocol version mismatch")))
+    XCTAssertEqual(parse(255, "Permission denied\n"), .failure(.failed(status: 255, output: "Permission denied")))
   }
 
-  func testSessionsOnStderrNoiseWithNonZeroStatusAreNotTrusted() {
-    XCTAssertEqual(parse(2, "a\t1\t0\t5\n"), .failure(.failed(status: 2, output: "a\t1\t0\t5\n")))
+  func testSessionsWithNonZeroStatusAreNotTrusted() {
+    XCTAssertEqual(parse(2, line("$1", "a")), .failure(.failed(status: 2, output: line("$1", "a"))))
   }
 
   // MARK: - Commands
 
-  func testListCommandAsksForFourTabSeparatedFieldsMatchingTheParser() {
-    XCTAssertEqual(
-      Tmux.listCommand,
-      "tmux list-sessions -F '#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_activity}'")
-    let format = Tmux.listCommand.split(separator: "'")[1]
-    XCTAssertEqual(format.split(separator: "\t", omittingEmptySubsequences: false).count, 4)
+  /// The capture loop reads id then activity; the parser reads every field
+  /// with the name last. Both depend on this order.
+  func testOverviewCommandListsTheParsersFieldsInOrder() {
+    let command = Tmux.overviewCommand()
+    let format = command.components(separatedBy: "list-sessions -F '")[1].components(separatedBy: "'")[0]
+    XCTAssertEqual(format.components(separatedBy: "\t"), Tmux.fields.map { "#{\($0)}" })
+    XCTAssertEqual(Tmux.fields.first, "session_id")
+    XCTAssertEqual(Tmux.fields[1], "session_activity")
+    XCTAssertEqual(Tmux.fields.last, "session_name")
+    XCTAssertTrue(command.hasPrefix(Tmux.path + "; "))
+    XCTAssertTrue(command.contains(#"tmux capture-pane -p -e -J -t "$i""#))
+    XCTAssertTrue(command.contains(#"printf '\036%s\n' "$i""#))
+  }
+
+  /// Unchanged sessions are skipped by id and activity in whole seconds,
+  /// inside single quotes so "$3" is not a shell variable.
+  func testOverviewCommandSkipsKnownSessions() {
+    let command = Tmux.overviewCommand(skip: ["$3": at(1_700_000_000.9), "$10": at(5)])
+    XCTAssertTrue(command.contains("case ' $10:5 $3:1700000000 ' in"), command)
+    XCTAssertTrue(Tmux.overviewCommand().contains("case '  ' in"))
+  }
+
+  /// Seen working through the test sshd's zsh: created, duplicate refused,
+  /// missing folder refused, unnamed session named by tmux.
+  func testNewCommand() {
+    XCTAssertEqual(Tmux.newCommand(name: "web app", folder: "~/Projects"),
+                   "cd ~/Projects 2>/dev/null || { echo 'No such folder'; exit 2; }; \(Tmux.path); "
+                   + #"tmux new -d -P -F '#{session_name}' -s 'web app' -c "$PWD" 2>&1"#)
+    XCTAssertTrue(Tmux.newCommand(name: "", folder: "").hasPrefix("cd ~ 2>/dev/null"))
+    XCTAssertFalse(Tmux.newCommand(name: "", folder: "/tmp").contains(" -s "))
+    XCTAssertTrue(Tmux.newCommand(name: "x", folder: "~/my dir").hasPrefix("cd ~/'my dir' 2>"))
+    XCTAssertTrue(Tmux.newCommand(name: "x", folder: " /srv/it's ").hasPrefix(#"cd '/srv/it'\''s' 2>"#))
+    XCTAssertTrue(Tmux.newCommand(name: "a;b", folder: "~").contains("-s 'a;b' -c"))
+  }
+
+  /// "$3" unquoted is an empty shell variable, and tmux then targets the
+  /// most recent session instead.
+  func testActionsTargetTheSessionIdQuoted() {
+    XCTAssertEqual(Tmux.renameCommand(id: "$3", to: "new name"), "\(Tmux.path); tmux rename-session -t '$3' 'new name' 2>&1")
+    XCTAssertEqual(Tmux.killCommand(id: "$3"), "\(Tmux.path); tmux kill-session -t '$3' 2>&1")
+    XCTAssertEqual(Tmux.detachOthersCommand(id: "$3", keep: []), "\(Tmux.path); tmux detach-client -s '$3' 2>&1")
+  }
+
+  /// Term's own clients (by size) stay attached; seen on the test sshd with
+  /// clients of 70x20 and 44x30, keeping 44x30.
+  func testDetachOthersKeepsTermsSizes() {
+    XCTAssertEqual(Tmux.detachOthersCommand(id: "$7", keep: ["80x24", "44x30"]),
+                   "\(Tmux.path); tmux list-clients -t '$7' -F '#{client_width}x#{client_height} #{client_tty}' | "
+                   + #"while read -r z t; do case ' 44x30 80x24 ' in *" $z "*) ;; *) tmux detach-client -t "$t";; esac; done"#)
+  }
+
+  func testCleanNameDoesWhatTmuxDoes() {
+    XCTAssertEqual(Tmux.cleanName("  a.b:c d "), "a_b_c d")
+    XCTAssertEqual(Tmux.cleanName("   "), "")
+  }
+
+  func testShellPathKeepsTildeExpandable() {
+    XCTAssertEqual(Tmux.shellPath("~"), "~")
+    XCTAssertEqual(Tmux.shellPath("~/a b"), "~/'a b'")
+    XCTAssertEqual(Tmux.shellPath("~user"), "'~user'")
+    XCTAssertEqual(Tmux.shellPath("/tmp"), "/tmp")
+    XCTAssertEqual(Tmux.shellPath("/tmp/$HOME"), "'/tmp/$HOME'")
+  }
+
+  /// A snapshot is drawn from a cleared screen, row by row with attributes
+  /// reset at each row's end, the cursor where tmux had it (1-based).
+  func testScreenBytes() {
+    let bytes = String(decoding: Tmux.screenBytes("\u{1b}[44mtop\nnext", cursorX: 0, cursorY: 1), as: UTF8.self)
+    XCTAssertEqual(bytes, "\u{1b}[0m\u{1b}[H\u{1b}[2J\u{1b}[44mtop\u{1b}[0m\r\nnext\u{1b}[0m\u{1b}[2;1H")
   }
 
   func testAttachCommandCreatesOrAttachesByName() {

@@ -98,11 +98,13 @@ private final class ThumbnailTick: NSObject {
   @MainActor @objc func tick() { owner?.tick() }
 }
 
-/// A live miniature of one tab's screen. A session taller or wider than the
+/// A live miniature of a terminal screen. A session taller or wider than the
 /// thumbnail shows the rows and columns around its cursor (where the prompt is).
 @MainActor
 final class SessionThumbnailView: UIView {
-  let tab: Tab
+  /// The screen to draw: a tab's session, or a tmux session's snapshot
+  /// (nil until its first capture).
+  let source: @MainActor () -> Session?
   /// Margin around the miniature, so the tile's rounded corners clip no text.
   static let inset: CGFloat = 5
   /// Set by the overview; all thumbnails share one size.
@@ -119,8 +121,8 @@ final class SessionThumbnailView: UIView {
   override class var layerClass: AnyClass { CAMetalLayer.self }
   private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
-  init(tab: Tab) {
-    self.tab = tab
+  init(source: @escaping @MainActor () -> Session?) {
+    self.source = source
     super.init(frame: .zero)
     isOpaque = true
     isUserInteractionEnabled = false
@@ -169,7 +171,7 @@ final class SessionThumbnailView: UIView {
   }
 
   fileprivate func refresh(with owner: ThumbnailRenderer) {
-    let current = tab.current
+    guard let current = source() else { return }
     if current !== session {
       session = current
       generation = .max

@@ -79,7 +79,7 @@ extension Tab {
         target.startupCommand = Tmux.attachCommand(session)
         connect(target, tmuxSession: session)
       } else {
-        host?.tabWantsTmuxPicker(self, host: saved)
+        host?.tabWantsTmuxSessions(self, host: saved)
         prompt()
       }
     }
