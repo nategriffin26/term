@@ -18,79 +18,90 @@ struct HerdrPickerView: View {
   @State private var folder = ""
   @State private var creating = false
   @State private var createError: String?
+  private static let createErrorID = "createError"
 
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 0) {
-        switch load {
-        case .loading:
-          ProgressView()
-            .tint(Helm.muted)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 28)
-        case .failed(let message):
-          VStack(alignment: .leading, spacing: 10) {
-            Text(message)
-              .font(Helm.sans(13.5))
-              .foregroundStyle(Helm.fg2)
-            Button("Try Again") { Task { await refresh() } }
-              .font(Helm.sans(12.5, .medium))
-              .foregroundStyle(Helm.fg)
-          }
-          .padding(16)
-        case .loaded(let snapshot):
-          if snapshot.workspaces.isEmpty {
-            Text("No herdr workspaces on \(host.alias).")
-              .font(Helm.sans(13.5))
-              .foregroundStyle(Helm.fg2)
-              .padding(16)
-          }
-          ForEach(snapshot.workspaces) { workspace in
-            GroupHead(workspace.label)
-            ForEach(workspace.panes) { pane in
-              PaneRow(pane: pane, user: host.user) { open(pane) }
-            }
-          }
+    ScrollViewReader { scroller in
+      ScrollView { content }
+        .scrollIndicators(.hidden)
+        // The field sits at the bottom, often right above the keyboard: the
+        // error under it would be out of sight.
+        .onChange(of: createError) { _, error in
+          if error != nil { withAnimation { scroller.scrollTo(Self.createErrorID, anchor: .bottom) } }
         }
-
-        GroupHead("New Workspace")
-        HStack(spacing: 10) {
-          TextField("", text: $folder, prompt: Text("~/Projects/app").foregroundStyle(Helm.muted))
-            .font(Helm.mono(16))
-            .foregroundStyle(Helm.fg)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .submitLabel(.go)
-            .onSubmit { Task { await create() } }
-            .padding(.horizontal, 10)
-            .frame(height: 38)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Helm.bg.opacity(0.55)))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Helm.line2, lineWidth: 1))
-          Button("Open") { Task { await create() } }
-            .font(Helm.sans(12.5, .medium))
-            .foregroundStyle(Helm.onAccent)
-            .padding(.horizontal, 14)
-            .frame(height: 32)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Helm.accent))
-            .opacity(creating ? 0.4 : 1)
-            .disabled(creating)
-        }
-        .padding(.horizontal, 16)
-        if let createError {
-          Text(createError)
-            .font(Helm.sans(12.5))
-            .foregroundStyle(Helm.bad)
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-        }
-      }
     }
-    .scrollIndicators(.hidden)
     .refreshable { await refresh() }
     .task {
       while !Task.isCancelled {
         await refresh()
         try? await Task.sleep(for: .seconds(3))
+      }
+    }
+  }
+
+  private var content: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      switch load {
+      case .loading:
+        ProgressView()
+          .tint(Helm.muted)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 28)
+      case .failed(let message):
+        VStack(alignment: .leading, spacing: 10) {
+          Text(message)
+            .font(Helm.sans(13.5))
+            .foregroundStyle(Helm.fg2)
+          Button("Try Again") { Task { await refresh() } }
+            .font(Helm.sans(12.5, .medium))
+            .foregroundStyle(Helm.fg)
+        }
+        .padding(16)
+      case .loaded(let snapshot):
+        if snapshot.workspaces.isEmpty {
+          Text("No herdr workspaces on \(host.alias).")
+            .font(Helm.sans(13.5))
+            .foregroundStyle(Helm.fg2)
+            .padding(16)
+        }
+        ForEach(snapshot.workspaces) { workspace in
+          GroupHead(workspace.label)
+          ForEach(workspace.panes) { pane in
+            PaneRow(pane: pane, user: host.user) { open(pane) }
+          }
+        }
+      }
+
+      GroupHead("New Workspace")
+      HStack(spacing: 10) {
+        TextField("", text: $folder, prompt: Text("~/Projects/app").foregroundStyle(Helm.muted))
+          .font(Helm.mono(16))
+          .foregroundStyle(Helm.fg)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .submitLabel(.go)
+          .onSubmit { Task { await create() } }
+          .padding(.horizontal, 10)
+          .frame(height: 38)
+          .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Helm.bg.opacity(0.55)))
+          .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Helm.line2, lineWidth: 1))
+        Button("Open") { Task { await create() } }
+          .font(Helm.sans(12.5, .medium))
+          .foregroundStyle(Helm.onAccent)
+          .padding(.horizontal, 14)
+          .frame(height: 32)
+          .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Helm.accent))
+          .opacity(creating ? 0.4 : 1)
+          .disabled(creating)
+      }
+      .padding(.horizontal, 16)
+      if let createError {
+        Text(createError)
+          .font(Helm.sans(12.5))
+          .foregroundStyle(Helm.bad)
+          .padding(.horizontal, 16)
+          .padding(.top, 8)
+          .id(Self.createErrorID)
       }
     }
   }

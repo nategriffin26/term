@@ -121,7 +121,10 @@ enum Herdr {
   /// herdr opens a missing folder as home without a word, so the shell goes
   /// there first and says when it cannot.
   static func createCommand(cwd: String) -> String {
-    "cd \(shellPath(cwd)) 2>&1 && \(cli) workspace create --cwd \"$PWD\" --no-focus 2>&1"
+    let folder = cwd.trimmingCharacters(in: .whitespaces)
+    let missing = Command.shellQuote("No folder \(folder.isEmpty ? "~" : folder).")
+    return "if cd \(shellPath(folder)) 2>/dev/null; then \(cli) workspace create --cwd \"$PWD\" --no-focus 2>&1; "
+      + "else echo \(missing); exit 1; fi"
   }
 
   /// A directory for the remote shell: `~` and `~/…` expand there, anything

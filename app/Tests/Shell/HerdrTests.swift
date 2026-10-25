@@ -170,8 +170,12 @@ final class HerdrTests: XCTestCase {
 
   func testCreateCommandChecksTheFolderBeforeHerdrFallsBackToHome() {
     let cli = #"PATH="$PATH:$HOME/.local/bin:/opt/homebrew/bin" herdr"#
-    XCTAssertEqual(Herdr.createCommand(cwd: "~/Projects/my app"),
-                   #"cd ~/'Projects/my app' 2>&1 && \#(cli) workspace create --cwd "$PWD" --no-focus 2>&1"#)
+    XCTAssertEqual(Herdr.createCommand(cwd: " ~/Projects/my app "),
+                   #"if cd ~/'Projects/my app' 2>/dev/null; then \#(cli) workspace create --cwd "$PWD" --no-focus 2>&1; "#
+                     + #"else echo 'No folder ~/Projects/my app.'; exit 1; fi"#)
+    XCTAssertEqual(Herdr.createCommand(cwd: ""),
+                   #"if cd ~ 2>/dev/null; then \#(cli) workspace create --cwd "$PWD" --no-focus 2>&1; "#
+                     + #"else echo 'No folder ~.'; exit 1; fi"#)
   }
 
   func testShellPathExpandsHomeAndQuotesTheRest() {
@@ -200,8 +204,8 @@ final class HerdrTests: XCTestCase {
   }
 
   func testCreateInAMissingFolderShowsWhy() {
-    let result = Herdr.parseCreated(status: 1, output: Data("cd: no such file or directory: /nope\n".utf8))
-    XCTAssertEqual(result, .failure(.failed("cd: no such file or directory: /nope")))
+    let result = Herdr.parseCreated(status: 1, output: Data("No folder /nope.\n".utf8))
+    XCTAssertEqual(result, .failure(.failed("No folder /nope.")))
   }
 
   func testFolderIsTheForegroundProcessesThenThePanes() {

@@ -116,6 +116,9 @@ private struct SessionTile: View {
   let fonts: FontSet?
 
   var body: some View {
+    // A Tab is not observable, and the same Tab compares equal: the model's
+    // revision is what says its name, agent state or connection changed.
+    let _ = model.revision
     VStack(alignment: .leading, spacing: 8) {
       ZStack(alignment: .topTrailing) {
         ThumbnailView(tab: tab, renderer: model.thumbnails, fonts: fonts)
