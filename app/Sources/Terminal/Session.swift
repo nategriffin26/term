@@ -178,9 +178,9 @@ final class Session {
     func resume() { term_session_resume(core) }
 
     /// Replaces a mosh session's server (an SSH session's shell) in place, same
-    /// screen. With `endOldServer` the old mosh-server is ended once the new one
-    /// has taken over; the herdr pane it showed survives. A call while one runs
-    /// is ignored. The outcome arrives on `onReconnect`.
+    /// screen. With `endOldServer` the old mosh-server is ended first; its tmux
+    /// session survives. A call while one runs is ignored. The outcome arrives
+    /// on `onReconnect`.
     func reconnect(spec: ConnectSpec, endOldServer: Bool) {
         spec.withTermConnect(cols: cols, rows: rows) { term_session_reconnect(core, $0, endOldServer) }
     }

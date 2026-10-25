@@ -113,7 +113,7 @@ struct FilesTab: View {
       if let space = model.space {
         ForEach(model.filesPanes) { pane in
           let isShown = pane.id == shown
-          FilesPane(context: space.filesContext(pane: pane.id, spec: pane.spec, herdrPane: isShown ? focused?.herdr?.id : nil))
+          FilesPane(context: space.filesContext(pane: pane.id, spec: pane.spec, tmuxSession: isShown ? focused?.tmuxSession : nil))
             .opacity(isShown ? 1 : 0)
             .allowsHitTesting(isShown)
             .accessibilityHidden(!isShown)

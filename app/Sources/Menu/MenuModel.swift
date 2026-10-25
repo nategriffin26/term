@@ -29,7 +29,7 @@ enum MenuTab: String, CaseIterable, Identifiable {
 enum SessionsPage: Equatable {
   case grid
   case new
-  case herdr(Host)
+  case tmux(Host)
 }
 
 /// A window's sessions as the overview shows them.

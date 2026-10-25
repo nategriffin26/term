@@ -140,13 +140,12 @@ final class CommandsTests: XCTestCase {
     XCTAssertEqual(failure("scp a b"), .unknown("scp"))
   }
 
-  func testHerdrCommand() {
-    XCTAssertEqual(Command.parse("herdr mac"), .success(.herdr(host: "mac", target: nil)))
-    XCTAssertEqual(Command.parse("herdr mac api-worker"), .success(.herdr(host: "mac", target: "api-worker")))
-    XCTAssertEqual(Command.parse(#"herdr mac "my work""#), .success(.herdr(host: "mac", target: "my work")))
-    XCTAssertEqual(failure("herdr"), .usage(Command.herdrUsage))
-    XCTAssertEqual(failure("herdr a b c"), .usage(Command.herdrUsage))
-    XCTAssertEqual(failure("tmux mac"), .unknown("tmux"))
+  func testTmuxCommand() {
+    XCTAssertEqual(Command.parse("tmux mac"), .success(.tmux(host: "mac", session: nil)))
+    XCTAssertEqual(Command.parse("tmux mac main"), .success(.tmux(host: "mac", session: "main")))
+    XCTAssertEqual(Command.parse(#"tmux mac "my work""#), .success(.tmux(host: "mac", session: "my work")))
+    XCTAssertEqual(failure("tmux"), .usage(Command.tmuxUsage))
+    XCTAssertEqual(failure("tmux a b c"), .usage(Command.tmuxUsage))
   }
 
   func testUnterminatedQuoteIsReportedNotRun() {
@@ -231,9 +230,9 @@ final class CommandsTests: XCTestCase {
   func testCompletionOfCommandNames() {
     var c = Command.complete("", aliases: ["mac"])
     XCTAssertEqual(c.start, 0)
-    XCTAssertEqual(c.candidates, ["clear", "config", "exit", "help", "herdr", "hosts", "mosh", "ssh"])
+    XCTAssertEqual(c.candidates, ["clear", "config", "exit", "help", "hosts", "mosh", "ssh", "tmux"])
     c = Command.complete("h", aliases: [])
-    XCTAssertEqual(c.candidates, ["help", "herdr", "hosts"])
+    XCTAssertEqual(c.candidates, ["help", "hosts"])
     c = Command.complete("mo", aliases: [])
     XCTAssertEqual(c.candidates, ["mosh"])
     XCTAssertEqual(c.start, 0)
@@ -246,7 +245,7 @@ final class CommandsTests: XCTestCase {
     c = Command.complete("ssh m", aliases: ["mini", "mac", "web"])
     XCTAssertEqual(c.start, 4)
     XCTAssertEqual(c.candidates, ["mac", "mini"])
-    c = Command.complete("herdr w", aliases: ["web"])
+    c = Command.complete("tmux w", aliases: ["web"])
     XCTAssertEqual(c.candidates, ["web"])
     XCTAssertEqual(Command.complete("mosh mac m", aliases: ["mac"]).candidates, [])
     XCTAssertEqual(Command.complete("help m", aliases: ["mac"]).candidates, [])

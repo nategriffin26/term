@@ -10,11 +10,10 @@ enum Command: Equatable {
   case exit
   case testpage
   case connect(ConnectRequest)
-  /// `herdr <host> [target]`: pick a herdr pane on the host, or attach one
-  /// (an agent's name, a pane id or a workspace).
-  case herdr(host: String, target: String?)
+  /// `tmux <host> [session]`: pick a tmux session on the host, or attach one.
+  case tmux(host: String, session: String?)
 
-  static let names = ["help", "clear", "hosts", "config", "exit", "mosh", "ssh", "herdr"]
+  static let names = ["help", "clear", "hosts", "config", "exit", "mosh", "ssh", "tmux"]
 
   enum ParseError: Error, Equatable {
     case unknown(String)
@@ -24,7 +23,7 @@ enum Command: Equatable {
 
   static let moshUsage = "usage: mosh [-P port] [-i key] [-a|-n] [--server=path] [user@]host [--] [command]"
   static let sshUsage = "usage: ssh [-p port] [-i key] [-l user] [user@]host [command]"
-  static let herdrUsage = "usage: herdr host [agent|workspace]"
+  static let tmuxUsage = "usage: tmux host [session]"
 
   static func parse(_ line: String) -> Result<Command, ParseError> {
     let words: [String]
@@ -43,9 +42,9 @@ enum Command: Equatable {
     case "testpage": return .success(.testpage)
     case "mosh": return parseConnect(args, transport: .mosh).map(Command.connect)
     case "ssh": return parseConnect(args, transport: .ssh).map(Command.connect)
-    case "herdr":
-      guard (1...2).contains(args.count) else { return .failure(.usage(herdrUsage)) }
-      return .success(.herdr(host: args[0], target: args.count == 2 ? args[1] : nil))
+    case "tmux":
+      guard (1...2).contains(args.count) else { return .failure(.usage(tmuxUsage)) }
+      return .success(.tmux(host: args[0], session: args.count == 2 ? args[1] : nil))
     default: return .failure(.unknown(name))
     }
   }
@@ -163,7 +162,7 @@ enum Command: Equatable {
     let pool: [String]
     if previous.isEmpty {
       pool = names
-    } else if ["mosh", "ssh", "herdr"].contains(String(previous[0])), previous.count == 1 {
+    } else if ["mosh", "ssh", "tmux"].contains(String(previous[0])), previous.count == 1 {
       pool = aliases
     } else {
       return (start, [])

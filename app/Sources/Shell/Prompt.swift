@@ -68,35 +68,19 @@ extension Tab {
         echo("No saved host \(name). Use user@\(name), or add it with config.\r\n")
         prompt()
       }
-    case .herdr(let name, let wanted):
+    case .tmux(let name, let session):
       guard let saved = ConfigStore.shared.host(alias: name) else {
         echo("No saved host \(name). Add it with config.\r\n")
         prompt()
         return
       }
-      guard let wanted else {
-        host?.tabWantsHerdrPicker(self, host: saved)
+      if let session {
+        var target = saved
+        target.startupCommand = Tmux.attachCommand(session)
+        connect(target, tmuxSession: session)
+      } else {
+        host?.tabWantsTmuxPicker(self, host: saved)
         prompt()
-        return
-      }
-      Task {
-        switch await Herdr.run(Herdr.snapshotCommand, on: saved, Herdr.parseSnapshot) {
-        case .success(let snapshot):
-          if let pane = snapshot.resolve(wanted) {
-            if host?.showTab(attachedTo: pane, on: saved) == true {
-              echo("\(pane.sessionName) is open in another tab.\r\n")
-              prompt()
-            } else {
-              connect(saved, herdr: pane)
-            }
-          } else {
-            echo("No agent, pane or workspace \(wanted) in herdr on \(name).\r\n")
-            prompt()
-          }
-        case .failure(let failure):
-          echo("\u{1b}[31m\(failure.message(host: name))\u{1b}[0m\r\n")
-          prompt()
-        }
       }
     }
   }
@@ -106,7 +90,7 @@ extension Tab {
     \u{1b}[1mCommands\u{1b}[0m\r
       mosh [user@]host [-- cmd]  connect with mosh\r
       ssh [user@]host [cmd]      connect with ssh\r
-      herdr host [name]          pick or attach a pane\r
+      tmux host [session]        pick a tmux session\r
       hosts                      list saved hosts\r
       config                     settings, hosts, keys\r
       clear                      clear the screen\r

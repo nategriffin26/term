@@ -94,7 +94,7 @@ struct HostEditor: View {
           Text("Mosh").tag(Host.Transport.mosh)
           Text("SSH").tag(Host.Transport.ssh)
         }
-        field("Command", $host.startupCommand, prompt: "herdr")
+        field("Command", $host.startupCommand, prompt: "tmux new -A -s main")
       }
 
       if host.transport == .mosh {
