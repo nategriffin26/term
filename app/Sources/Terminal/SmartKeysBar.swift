@@ -4,13 +4,16 @@ import UIKit
 /// (KBLayout.iPhone, KBSizes): borderless keys on the keyboard's own
 /// background. Esc/Ctrl/Alt on the left; a scrolling middle of Tab, symbol
 /// pairs and F-keys (pull a pair down for its upper symbol); the arrow
-/// joystick, hide-keyboard and Cmd on the right.
+/// joystick, hide-keyboard and Cmd on the right. Cmd swaps the middle for
+/// its own row: the system paste control, then photo, camera and file keys
+/// that upload to the host and type the path.
 @MainActor
 final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     enum Action {
         case key(TermKey)
         case text(String)
         case hideKeyboard
+        case insert(InsertSource)
     }
 
     enum Key {
@@ -41,7 +44,8 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
 
     private(set) var ctrl = Modifier.off { didSet { refresh() } }
     private(set) var alt = Modifier.off { didSet { refresh() } }
-    /// Cmd swaps the arrow joystick for Home / PgDn / PgUp / End.
+    /// Cmd swaps the arrow joystick for Home / PgDn / PgUp / End, and the
+    /// middle for the Cmd row; v and c on the keyboard paste and copy.
     private(set) var command = false { didSet { refresh() } }
 
     var activeMods: UInt32 {
@@ -54,6 +58,11 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         if alt == .armed { alt = .off }
     }
 
+    /// After a Cmd shortcut, as a one-shot modifier would.
+    func releaseCommand() {
+        if command { command = false }
+    }
+
     private weak var terminal: TerminalView?
     var enableInputClicksWhenVisible: Bool { terminal?.keyClicksEnabled ?? true }
     private let layout: Layout
@@ -63,6 +72,9 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     private let scroller = HorizontalScroller()
     private let leftEdge = UIView()
     private let rightEdge = UIView()
+    private let commandRow = UIView()
+    private let pasteControl: UIPasteControl
+    private var insertKeys: [KeyCap] = []
     private var lastCommandTap: CFTimeInterval = 0
 
     /// Blink's iPhone bar height; 38 pt where the phone is on its side.
@@ -72,6 +84,15 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     init(terminal: TerminalView, layout: Layout = .standard) {
         self.terminal = terminal
         self.layout = layout
+        // The system's own paste button: reads the clipboard without the
+        // "Allow Paste" prompt and hands it to the terminal's paste(itemProviders:).
+        let paste = UIPasteControl.Configuration()
+        paste.displayMode = .iconOnly
+        paste.cornerStyle = .fixed
+        paste.cornerRadius = 4
+        paste.baseForegroundColor = .white
+        paste.baseBackgroundColor = UIColor(white: 0.36, alpha: 1)
+        pasteControl = UIPasteControl(configuration: paste)
         super.init(frame: CGRect(x: 0, y: 0, width: 320, height: SmartKeysBar.height), inputViewStyle: .keyboard)
         allowsSelfSizing = true
         scroller.showsHorizontalScrollIndicator = false
@@ -91,6 +112,26 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         leftKeys.forEach(addSubview)
         rightKeys.forEach(addSubview)
         middleKeys.forEach(scroller.addSubview)
+        pasteControl.target = terminal
+        commandRow.addSubview(pasteControl)
+        insertKeys = [("photo", "Insert Photo", InsertSource.photos), ("camera", "Insert from Camera", .camera),
+                      ("folder", "Insert File", .files)]
+            .filter { $0.2 != .camera || Inserter.hasCamera }
+            .map { symbol, label, source in
+                let cap = KeyCap()
+                cap.configure(symbol: symbol)
+                cap.accessibilityLabel = label
+                cap.onTap = { [weak self] in
+                    self?.command = false
+                    self?.emit(.insert(source))
+                }
+                return cap
+            }
+        insertKeys.forEach(commandRow.addSubview)
+        commandRow.clipsToBounds = true
+        commandRow.isHidden = true
+        commandRow.alpha = 0
+        addSubview(commandRow)
         registerForTraitChanges([UITraitVerticalSizeClass.self]) { (bar: SmartKeysBar, _: UITraitCollection) in
             bar.invalidateIntrinsicContentSize()
         }
@@ -135,6 +176,13 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
             mx += view.frame.width
         }
         scroller.contentSize = CGSize(width: mx, height: h)
+        commandRow.frame = scroller.frame
+        let slots = CGFloat(1 + insertKeys.count)
+        let slot = min(bounds.width >= 600 ? 56 : 44, commandRow.bounds.width / slots).rounded(.down)
+        pasteControl.frame = CGRect(x: 0, y: 0, width: slot, height: h).inset(by: KeyCap.plateInsets)
+        for (i, cap) in insertKeys.enumerated() {
+            cap.frame = CGRect(x: slot * CGFloat(i + 1), y: 0, width: slot, height: h)
+        }
         leftEdge.frame = CGRect(x: middleStart - 0.5, y: 9, width: 1 / max(traitCollection.displayScale, 1), height: h - 18)
         rightEdge.frame = CGRect(x: right - 0.5, y: 9, width: leftEdge.frame.width, height: h - 18)
         updateEdges()
@@ -143,8 +191,8 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     /// A hairline marks each side of the middle that has keys scrolled out of view.
     fileprivate func updateEdges() {
         let offset = scroller.contentOffset.x
-        leftEdge.isHidden = offset <= 0
-        rightEdge.isHidden = scroller.contentSize.width - offset <= scroller.bounds.width + 0.5
+        leftEdge.isHidden = command || offset <= 0
+        rightEdge.isHidden = command || scroller.contentSize.width - offset <= scroller.bounds.width + 0.5
     }
 
     // ------------------------------------------------------------ keys
@@ -187,9 +235,11 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
             }
         case .hideKeyboard:
             cap.configure(symbol: "keyboard.chevron.compact.down")
+            cap.accessibilityLabel = "Hide Keyboard"
             cap.onTap = { [weak self] in self?.emit(.hideKeyboard) }
         case .command:
             cap.configure(symbol: "command")
+            cap.accessibilityLabel = "Command"
             cap.onTap = { [weak self] in self?.commandTapped() }
         }
         return cap
@@ -225,6 +275,17 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
             case .arrows: view.alternateArrows = command
             default: break
             }
+        }
+        let row = command
+        guard commandRow.isHidden == row else { return }
+        scroller.isUserInteractionEnabled = !row
+        commandRow.isHidden = false
+        updateEdges()
+        UIView.animate(withDuration: 0.12) {
+            self.scroller.alpha = row ? 0 : 1
+            self.commandRow.alpha = row ? 1 : 0
+        } completion: { _ in
+            self.commandRow.isHidden = !self.command
         }
     }
 
@@ -286,11 +347,13 @@ private final class KeyCap: UIView {
     private let repeater = KeyRepeater()
 
     /// Blink's small-key insets: the plate sits 3 pt below the bar top, 1 pt from the rest.
-    private static let plateInsets = UIEdgeInsets(top: 3, left: 1, bottom: 1, right: 1)
+    static let plateInsets = UIEdgeInsets(top: 3, left: 1, bottom: 1, right: 1)
 
     init() {
         super.init(frame: .zero)
         isExclusiveTouch = true
+        isAccessibilityElement = true
+        accessibilityTraits = .keyboardKey
         plate.layer.cornerRadius = 4
         plate.layer.cornerCurve = .continuous
         plate.isUserInteractionEnabled = false
@@ -315,6 +378,7 @@ private final class KeyCap: UIView {
 
     func configure(title text: String, alternate: String? = nil) {
         title.text = text
+        accessibilityLabel = text
         upper.text = alternate
         upper.isHidden = alternate == nil
         setNeedsLayout()

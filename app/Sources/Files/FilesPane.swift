@@ -13,6 +13,8 @@ import SwiftUI
   var openTerminal: (_ spec: ConnectSpec, _ directory: String) -> Void
   /// Closes the menu panel.
   var dismiss: () -> Void
+  /// The pane made its browser (⌘V while it shows pastes into its folder).
+  var browserReady: (FilesBrowser) -> Void
 }
 
 /// The menu's Files tab: the host of the terminal in focus, opened where
@@ -34,7 +36,11 @@ struct FilesPane: View {
         if let browser, browser.fs.spec.knownHostsKey == spec.knownHostsKey, browser.fs.spec.user == spec.user {
           BrowserView(browser: browser, context: context, onHosts: context.spec == nil ? { chosen = nil } : nil)
         } else {
-          Helm.raised.onAppear { browser = FilesBrowser(spec: spec) }
+          Helm.raised.onAppear {
+            let made = FilesBrowser(spec: spec)
+            browser = made
+            context.browserReady(made)
+          }
         }
       } else {
         HostChooser { chosen = Tab.spec(for: $0) }

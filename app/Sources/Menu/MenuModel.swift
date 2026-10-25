@@ -111,6 +111,17 @@ final class MenuModel {
   @ObservationIgnored private(set) var filesPanes: [FilesPaneEntry] = []
   /// The pane the Files tab showed last.
   @ObservationIgnored private(set) var shownFilesPane: String?
+  /// Each pane's browser once it has one, by pane id.
+  @ObservationIgnored private var browsers: [String: FilesBrowser] = [:]
+
+  func register(_ browser: FilesBrowser, forPane id: String) {
+    browsers[id] = browser
+  }
+
+  /// The browser on screen when the Files tab is: ⌘V pastes into its folder.
+  var shownBrowser: FilesBrowser? {
+    shownFilesPane.flatMap { browsers[$0] }
+  }
 
   /// The Files pane for the focused tab's host, registered on first use.
   func filesPane() -> FilesPaneEntry {

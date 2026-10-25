@@ -3,6 +3,7 @@ import UIKit
 /// The quiet line at the top of a pane when a remote stops answering, with
 /// Reconnect (mosh's "Last contact" bar, made actionable). The core reports
 /// UNREACHABLE after 5 s of silence, so the banner shows as soon as it does.
+/// Otherwise it carries the tab's notice (an upload's progress or failure).
 final class StatusBanner: UIView {
   private let label = UILabel()
   private let button = UIButton(configuration: .plain())
@@ -50,10 +51,10 @@ final class StatusBanner: UIView {
     } else if tab.unreachable {
       text = "No contact for \(Self.duration(TimeInterval(tab.current.status.last_heard_ms) / 1000))"
     } else {
-      text = nil
+      text = tab.notice
     }
     label.text = text
-    button.isHidden = tab.reconnecting
+    button.isHidden = tab.reconnecting || !tab.unreachable
     isHidden = text == nil
     return !isHidden
   }

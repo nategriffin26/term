@@ -618,16 +618,41 @@ final class FilesBrowser {
     if !urls.isEmpty { sheet = .share(urls) }
   }
 
-  /// The clipboard as a file: an image or text is named first (pasteDraft),
-  /// copied files keep their names.
+  /// The menu's Paste. Reading the clipboard from a menu item makes iOS ask
+  /// "Allow Paste" (⌘V reads it without asking and comes to paste(_:into:)).
   func paste(into dir: String) async {
-    let board = UIPasteboard.general
-    if board.hasImages, let image = board.image, let data = image.pngData() {
-      pasteDraft = PasteDraft(dir: dir, name: UniqueName.make("Pasted Image.png", taken: names(in: dir)), data: data)
-    } else if board.hasStrings, let text = board.string, !text.isEmpty {
+    await paste(Clip.read(), into: dir)
+  }
+
+  /// The clipboard as files: one image (as PNG or JPEG) or text is named
+  /// first (pasteDraft), several images upload as "Pasted Image N",
+  /// copied files keep their names.
+  func paste(_ clip: Clip, into dir: String) async {
+    let images = clip.images.map {
+      Attachments.normalize($0.data, type: $0.type, maxEdge: nil) ?? ($0.data, $0.type.preferredFilenameExtension ?? "img")
+    }
+    if images.count == 1, let image = images.first {
+      pasteDraft = PasteDraft(dir: dir, name: UniqueName.make("Pasted Image.\(image.ext)", taken: names(in: dir)), data: image.data)
+    } else if !images.isEmpty {
+      var taken = names(in: dir)
+      var files: [URL] = []
+      for image in images {
+        let name = UniqueName.make("Pasted Image.\(image.ext)", taken: taken)
+        taken.insert(name)
+        let file = Self.scratchFolder().appending(path: name)
+        do {
+          try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+          try image.data.write(to: file)
+          files.append(file)
+        } catch {
+          show(error, doing: "paste")
+        }
+      }
+      await upload(files, to: dir, consume: true)
+    } else if let text = clip.text {
       pasteDraft = PasteDraft(dir: dir, name: UniqueName.make("Pasted Text.txt", taken: names(in: dir)), data: Data(text.utf8))
-    } else if !board.itemProviders.isEmpty {
-      await drop(board.itemProviders, into: dir, unreadable: "Couldn't read the clipboard")
+    } else if !clip.files.isEmpty {
+      await drop(clip.files, into: dir, unreadable: "Couldn't read the clipboard")
     } else {
       flash("Nothing to paste", isError: true)
     }

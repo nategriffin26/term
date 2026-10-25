@@ -29,6 +29,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private var dockItems: [MenuTab: UIBarButtonItem] = [:]
   /// The terminal had the keyboard when the menu opened; it gets it back on close.
   private var menuRestoresFocus = false
+  private lazy var inserter = Inserter(presenter: self)
 
   private struct WeakSpace { weak var space: SpaceController? }
   private static var liveSpaces: [WeakSpace] = []
@@ -300,13 +301,14 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     newTab()
   }
 
-  /// What a Files pane may do to this window's terminals.
-  func filesContext(spec: ConnectSpec?, tmuxSession: String?) -> FilesContext {
+  /// What a Files pane (`pane`, a MenuModel.filesPanes id) may do to this window's terminals.
+  func filesContext(pane: String, spec: ConnectSpec?, tmuxSession: String?) -> FilesContext {
     FilesContext(
       spec: spec, tmuxSession: tmuxSession,
       insertIntoTerminal: { [weak self] text in self?.focusedTab?.current.write(Data(text.utf8)) },
       openTerminal: { [weak self] spec, directory in self?.openTerminal(spec, in: directory) },
-      dismiss: { [weak self] in self?.closeMenu() })
+      dismiss: { [weak self] in self?.closeMenu() },
+      browserReady: { [weak self] browser in self?.menu.register(browser, forPane: pane) })
   }
 
   /// Files' "Open Terminal Here": a login shell on the browsed host in `directory`.
@@ -353,6 +355,24 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   func terminalView(_ view: TerminalView, didChangeFontSize size: CGFloat) {
     AppSettings.shared.fontSize = Double(size)
+  }
+
+  /// Files takes a paste while it is in front (into its folder); otherwise
+  /// images and files upload to the terminal's host and their paths are
+  /// typed, and text is left to the terminal.
+  func terminalView(_ view: TerminalView, paste clip: Clip) -> Bool {
+    if panel.isOpen, menu.tab == .files, let browser = menu.shownBrowser {
+      if let dir = browser.current { Task { await browser.paste(clip, into: dir) } }
+      return true
+    }
+    guard clip.text == nil, !clip.isEmpty, let tab = tabs.first(where: { $0.view === view }) else { return false }
+    Task { await inserter.send(clip, to: tab) }
+    return true
+  }
+
+  func terminalView(_ view: TerminalView, insertFrom source: InsertSource) {
+    guard let tab = tabs.first(where: { $0.view === view }) else { return }
+    inserter.pick(source, for: tab)
   }
 
   private func updateBannerTimer() {

@@ -1,10 +1,17 @@
 import GameController
 import UIKit
+import UniformTypeIdentifiers
 
 @MainActor
 protocol TerminalViewDelegate: AnyObject {
     /// The user changed the font size (pinch or Cmd +/−/0); persist it.
     func terminalView(_ view: TerminalView, didChangeFontSize pointSize: CGFloat)
+    /// A paste here (⌘V, the edit menu, Smart Keys): true when the delegate
+    /// took it (Files in front, or images and files to upload); false
+    /// leaves the text for the shell.
+    func terminalView(_ view: TerminalView, paste clip: Clip) -> Bool
+    /// Smart Keys' photo, camera and file keys.
+    func terminalView(_ view: TerminalView, insertFrom source: InsertSource)
 }
 
 /// A terminal surface: renders a Session with Metal, sizes its grid to
@@ -153,6 +160,8 @@ final class TerminalView: UIView {
         addSubview(scrollIndicator)
 
         addInteraction(editMenu)
+        // What Smart Keys' paste control (and a drop) hands paste(itemProviders:).
+        pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [UTType.item.identifier])
         installGestures()
         addSubview(startHandle)
         addSubview(endHandle)

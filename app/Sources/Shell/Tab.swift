@@ -34,6 +34,9 @@ final class Tab {
   private(set) var unreachable = false
   /// An in-place reconnect is running.
   private(set) var reconnecting = false
+  /// A short line for the pane's banner: an upload's progress, or why it failed.
+  private(set) var notice: String?
+  private var noticeTimer: Task<Void, Never>?
   private let autoReconnect = AutoReconnect()
 
   var editor: LineEditor
@@ -321,6 +324,22 @@ final class Tab {
 
   func prompt() {
     local.feed(Data(editor.begin().utf8))
+  }
+
+  /// Shows `text` in the banner (nil clears it), for `seconds` when given.
+  func showNotice(_ text: String?, for seconds: Double? = nil) {
+    noticeTimer?.cancel()
+    noticeTimer = nil
+    if text != notice {
+      notice = text
+      host?.tabDidChange(self)
+    }
+    guard let seconds, text != nil else { return }
+    noticeTimer = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(seconds))
+      guard !Task.isCancelled else { return }
+      self?.showNotice(nil)
+    }
   }
 }
 

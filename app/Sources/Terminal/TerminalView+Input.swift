@@ -7,6 +7,7 @@ extension TerminalView {
 
     func insertText(_ text: String) {
         deletePacer.reset()
+        if smartKeys.command, commandShortcut(text) { return }
         switch text {
         case "\n", "\r": send(TERM_KEY_ENTER)
         case "\t": send(TERM_KEY_TAB)
@@ -123,6 +124,20 @@ extension TerminalView {
 
     // ------------------------------------------------------------ clipboard
 
+    /// Smart Keys' ⌘ then a letter on the software keyboard: v pastes, c
+    /// copies the selection. A typed ⌘V reads the clipboard as an app, so
+    /// iOS asks "Allow Paste" unless Settings › Term › Paste from Other
+    /// Apps is Allow; the paste key in the ⌘ row never asks.
+    private func commandShortcut(_ text: String) -> Bool {
+        switch text.lowercased() {
+        case "v": paste(nil)
+        case "c": copy(nil)
+        default: return false
+        }
+        smartKeys.releaseCommand()
+        return true
+    }
+
     override func copy(_ sender: Any?) {
         let text = selectedText
         guard !text.isEmpty else { return }
@@ -130,8 +145,25 @@ extension TerminalView {
         clearSelection()
     }
 
+    /// ⌘V and the edit menu's Paste: a system paste, so reading the
+    /// clipboard here does not prompt.
     override func paste(_ sender: Any?) {
-        guard let text = UIPasteboard.general.string, !text.isEmpty else { return }
+        guard !isReadOnly else { return }
+        take(Clip.read())
+    }
+
+    /// Smart Keys' paste control, and drops.
+    override func paste(itemProviders: [NSItemProvider]) {
+        guard !isReadOnly else { return }
+        smartKeys.releaseCommand()
+        Task { take(await Clip.load(itemProviders)) }
+    }
+
+    /// Text goes to the shell (bracketed when it asked); the delegate takes
+    /// the rest, and everything while Files is in front.
+    private func take(_ clip: Clip) {
+        if delegate?.terminalView(self, paste: clip) == true { return }
+        guard let text = clip.text else { return }
         clearSelection()
         session.paste(text)
         didSendInput()
@@ -140,7 +172,7 @@ extension TerminalView {
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         switch action {
         case #selector(copy(_:)): selection != nil
-        case #selector(paste(_:)): !isReadOnly && UIPasteboard.general.hasStrings
+        case #selector(paste(_:)): !isReadOnly && UIPasteboard.general.numberOfItems > 0
         default: super.canPerformAction(action, withSender: sender)
         }
     }
@@ -152,6 +184,7 @@ extension TerminalView {
         case .key(let key): send(key)
         case .text(let text): send(TERM_KEY_NONE, text: text)
         case .hideKeyboard: _ = resignFirstResponder()
+        case .insert(let source): delegate?.terminalView(self, insertFrom: source)
         }
     }
 }
