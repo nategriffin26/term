@@ -24,6 +24,10 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
   <img src="docs/screens-files.png" alt="Swiping between tmux sessions, a Rust file in the code viewer, and a README rendered from the host">
 </p>
 
+<p align="center">
+  <img src="docs/screens-duo.png" alt="Term on the iPhone Duo's inner display: two tmux sessions side by side under the menu dock in the status band, and the Sessions panel opened from the dock">
+</p>
+
 ## How it works
 
 The app is Swift and UIKit with its own Metal renderer. Everything that touches the network or the terminal state lives in a Rust core. The two meet in one C header, [`term.h`](core/termcore/include/term.h), and nothing else crosses.
