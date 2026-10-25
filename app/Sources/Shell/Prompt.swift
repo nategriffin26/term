@@ -83,9 +83,12 @@ extension Tab {
         switch await Herdr.run(Herdr.snapshotCommand, on: saved, Herdr.parseSnapshot) {
         case .success(let snapshot):
           if let pane = snapshot.resolve(wanted) {
-            var target = saved
-            target.startupCommand = Herdr.attachCommand(pane.terminal)
-            connect(target, herdr: pane)
+            if host?.showTab(attachedTo: pane, on: saved) == true {
+              echo("\(pane.sessionName) is open in another tab.\r\n")
+              prompt()
+            } else {
+              connect(saved, herdr: pane)
+            }
           } else {
             echo("No agent, pane or workspace \(wanted) in herdr on \(name).\r\n")
             prompt()

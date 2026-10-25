@@ -277,11 +277,12 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     Self.tabsChanged()
   }
 
-  /// Opens `host` in the focused tab when it sits at the prompt, else in a new tab.
+  /// Opens `host` in the focused tab when it sits at the prompt, else in a new
+  /// tab. A herdr pane already open in a tab is brought forward instead: a
+  /// second attach would take the pane from that tab and end it.
   func open(_ host: Host, herdr pane: Herdr.Pane? = nil) {
+    if let pane, showTab(attachedTo: pane, on: host) { return }
     closeMenu()
-    var target = host
-    if let pane { target.startupCommand = Herdr.attachCommand(pane.terminal) }
     let tab: Tab
     if let focused = focusedTab, !focused.isConnected, focused.connecting == nil {
       tab = focused
@@ -291,7 +292,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       tab = created
     }
     tab.echo(pane.map { "herdr \(host.alias) \($0.sessionName)\r\n" } ?? "\(host.transport.rawValue) \(host.alias)\r\n")
-    tab.connect(target, herdr: pane)
+    tab.connect(host, herdr: pane)
   }
 
   /// A new local shell from the menu's + page.
@@ -352,6 +353,12 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   func tabWantsSettings(_ tab: Tab) { openMenu(.settings) }
 
   func tabWantsHerdrPicker(_ tab: Tab, host: Host) { presentHerdrPicker(for: host) }
+
+  func showTab(attachedTo pane: Herdr.Pane, on host: Host) -> Bool {
+    guard let open = Self.live.lazy.flatMap(\.tabs).first(where: { $0.isAttached(to: pane, on: host) }) else { return false }
+    zoom(into: open)
+    return true
+  }
 
   func terminalView(_ view: TerminalView, didChangeFontSize size: CGFloat) {
     AppSettings.shared.fontSize = Double(size)

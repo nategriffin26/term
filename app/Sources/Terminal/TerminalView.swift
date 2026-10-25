@@ -54,7 +54,7 @@ final class TerminalView: UIView {
         didSet { if showsSmartKeysWithHardwareKeyboard != oldValue { updateAccessory() } }
     }
     var keyClicksEnabled = true
-    /// A page to read (tmux history): no keyboard, no paste.
+    /// A page to read (herdr history): no keyboard, no paste.
     var isReadOnly = false
 
     /// Current grid size in cells.
@@ -221,7 +221,7 @@ final class TerminalView: UIView {
     /// Fits the grid inside the safe area, clear of rounded display corners
     /// and above the keyboard, then tells the session once the size settles:
     /// keyboard and rotation animations pass through in-between sizes, and
-    /// each resize would make the remote (tmux) redraw.
+    /// each resize would make the remote redraw.
     func layoutGrid() {
         guard let m = renderer?.fonts.metrics, bounds.width > 0, bounds.height > 0 else { return }
         // Corner adaptation of the safe area itself, so a corner already under

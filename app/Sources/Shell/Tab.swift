@@ -7,6 +7,9 @@ protocol TabHost: AnyObject {
   func tabWantsClose(_ tab: Tab)
   func tabWantsSettings(_ tab: Tab)
   func tabWantsHerdrPicker(_ tab: Tab, host: Host)
+  /// Brings forward the tab, in any window, attached to `pane` of `host`'s
+  /// herdr; false when there is none.
+  func showTab(attachedTo pane: Herdr.Pane, on host: Host) -> Bool
 }
 
 /// One shell (Blink's space): a local prompt session, and while connected a
@@ -115,8 +118,11 @@ final class Tab {
 
   // MARK: - Connecting
 
-  /// Opens `target` (its startup command, or `command` instead), replacing any remote.
+  /// Opens `target` with its startup command, or attaches its herdr `pane`,
+  /// replacing any remote.
   func connect(_ target: Host, herdr pane: Herdr.Pane? = nil) {
+    var target = target
+    if let pane { target.startupCommand = Herdr.attachCommand(pane.terminal) }
     connecting = nil
     let spec = Self.spec(for: target)
     guard let session = Session(connect: spec, cols: local.cols, rows: local.rows) else {
@@ -133,6 +139,12 @@ final class Tab {
       echo("Connecting to \(target.alias) (\(target.user)@\(target.hostname)) over \(via)…\r\n")
     }
     host?.tabDidChange(self)
+  }
+
+  /// Whether this tab shows, or is connecting to, `pane` of `host`'s herdr.
+  func isAttached(to pane: Herdr.Pane, on host: Host) -> Bool {
+    guard remote != nil || connecting != nil, let herdr, let target else { return false }
+    return herdr.id == pane.id && target.user == host.user && target.knownHostsKey == host.knownHostsKey
   }
 
   /// Replaces the remote's server in place, same screen. For a herdr pane the
