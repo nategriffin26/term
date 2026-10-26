@@ -61,6 +61,8 @@ New omp sessions load it. Without it, Term still reads omp's terminal title for 
 
 Cancelled or unfinished runs report **aborted**, not done. Stops and acknowledgements use fractional Unix seconds (older integer values still work); Term acknowledges the stop it displayed, so a later stop cannot be cleared by a delayed request. Exiting omp drains its pending update before removing `@agent`.
 
+Set omp to repaint only the screen when its terminal changes size: `omp config set tui.resizeScrollback preserve`. With `rebuild`, a resize (the keyboard rising, a rotation) makes omp erase tmux's history and write its whole transcript again, which on a long session takes seconds and scrolls past on the phone. Term keeps tabs that are off screen at the size of the one in front, so swiping between them resizes nothing.
+
 ### Connecting
 
 <p align="center">

@@ -12,6 +12,13 @@ protocol TerminalViewDelegate: AnyObject {
     func terminalView(_ view: TerminalView, paste clip: Clip) -> Bool
     /// Smart Keys' photo, camera and file keys.
     func terminalView(_ view: TerminalView, insertFrom source: InsertSource)
+    /// This view just sized its session's grid.
+    func terminalView(_ view: TerminalView, didSizeGrid grid: GridSize)
+}
+
+/// A terminal grid in cells, with the cell it was measured in (pixels).
+struct GridSize: Equatable {
+    var cols, rows, cellWidth, cellHeight: Int
 }
 
 /// A terminal surface: renders a Session with Metal, sizes its grid to
@@ -218,8 +225,16 @@ final class TerminalView: UIView {
     private func attach() {
         session.onFrame = { [weak self] in self?.setNeedsRender(build: false) }
         haveGeneration = .max
-        sessionSized = false
         resizeTask?.cancel()
+        // Off screen, a session that replaces another (a connection that
+        // completes) takes the grid this tab was fitted to; on screen, the
+        // next layout sizes it at once.
+        if window == nil, let grid {
+            sessionSized = true
+            apply(grid)
+        } else {
+            sessionSized = false
+        }
         selection = nil
         updateHandles()
         setNeedsLayout()
@@ -264,6 +279,13 @@ final class TerminalView: UIView {
         setNeedsRender(build: false)
     }
 
+    /// A swipe slides the view with a transform and animates it back. Its
+    /// insets follow where it is on screen, so a grid measured before it
+    /// rests is no size for the session; the swipe lays it out at rest.
+    private var isSliding: Bool {
+        !transform.isIdentity || !(layer.presentation()?.affineTransform().isIdentity ?? true)
+    }
+
     /// Fits the grid inside the safe area, clear of rounded display corners
     /// and above the keyboard, then tells the session once the size settles:
     /// keyboard and rotation animations pass through in-between sizes, and
@@ -285,22 +307,42 @@ final class TerminalView: UIView {
         let widthPx = max(0, Int(x1 - x0)), heightPx = max(0, Int(y1 - y0))
         let cols = max(1, widthPx / m.width), rows = max(1, heightPx / m.height)
         gridOrigin = CGPoint(x: x0 + CGFloat(max(0, widthPx - cols * m.width) / 2), y: y0)
-        if !isPinching {
-            let size = (cols: cols, rows: rows, w: m.width, h: m.height)
+        if !isPinching, !isSliding {
+            let grid = GridSize(cols: cols, rows: rows, cellWidth: m.width, cellHeight: m.height)
             resizeTask?.cancel()
             if !sessionSized {
                 sessionSized = true
-                session.resize(cols: size.cols, rows: size.rows, cellWidth: size.w, cellHeight: size.h)
+                size(grid)
             } else {
                 resizeTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(120))
                     guard !Task.isCancelled, let self else { return }
-                    self.session.resize(cols: size.cols, rows: size.rows, cellWidth: size.w, cellHeight: size.h)
+                    self.size(grid)
                 }
             }
         }
     }
 
+    private func size(_ next: GridSize) {
+        apply(next)
+        delegate?.terminalView(self, didSizeGrid: next)
+    }
+
+    /// Sizes the session of a view that is off screen to the grid it will
+    /// have when shown, so showing it is no resize for the program.
+    func fit(_ next: GridSize) {
+        resizeTask?.cancel()
+        sessionSized = true
+        apply(next)
+    }
+
+    private func apply(_ next: GridSize) {
+        grid = next
+        session.resize(cols: next.cols, rows: next.rows, cellWidth: next.cellWidth, cellHeight: next.cellHeight)
+    }
+
+    /// The grid last given to a session here.
+    private var grid: GridSize?
     /// The first size goes out at once so a new session starts at the right
     /// size; later ones wait for layout to settle.
     private var sessionSized = false

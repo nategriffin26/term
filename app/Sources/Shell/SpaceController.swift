@@ -427,6 +427,14 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     inserter.pick(source, for: tab)
   }
 
+  /// Tabs off screen take the focused pane's grid as it changes (keyboard,
+  /// rotation, fold, font), so showing one is no resize: a program redraws
+  /// for every resize, and omp can rewrite its whole transcript.
+  func terminalView(_ view: TerminalView, didSizeGrid grid: GridSize) {
+    guard focusedPane?.tab.view === view else { return }
+    for tab in tabs where !isShown(tab) { tab.view.fit(grid) }
+  }
+
   private func updateBannerTimer() {
     let needed = panes.contains { $0.tab.unreachable || ($0.tab.isConnected && $0.tab.connecting != nil) }
     if needed, bannerTimer == nil {
@@ -566,6 +574,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       } else {
         d.pane.banner.update(for: current)
       }
+      // At rest: measure the grid it held while sliding.
+      (target ?? current).view.setNeedsLayout()
     }
     if animated {
       UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
