@@ -6,23 +6,19 @@ import SwiftUI
 // MARK: - Lists and groups
 
 extension View {
-  /// A settings page: inset groups of `fill` on the panel's ground, body
-  /// type, switches in the accent. For the List at the root of a page.
+  /// A settings page: inset groups of `fill` on the panel's glass, rows 50
+  /// tall, body type, switches in the accent. For the List at the root of a page.
   func chromeList() -> some View {
     listStyle(.insetGrouped)
       .scrollContentBackground(.hidden)
-      .background(Chrome.raised)
       .contentMargins(.horizontal, Chrome.Space.m, for: .scrollContent)
+      .environment(\.defaultMinListRowHeight, Chrome.Size.row)
       .listRowBackground(Chrome.fill)
       .listRowSeparatorTint(Chrome.line)
       .font(Chrome.font(.body))
       .foregroundStyle(Chrome.fg)
       .tint(Chrome.accent)
       .preferredColorScheme(Chrome.colorScheme)
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbarBackground(Chrome.raised, for: .navigationBar)
-      .toolbarBackground(.visible, for: .navigationBar)
-      .toolbarColorScheme(Chrome.colorScheme, for: .navigationBar)
   }
 }
 
@@ -40,7 +36,9 @@ struct ListSection<Content: View, Footer: View>: View {
 
   var body: some View {
     Section {
-      content.listRowBackground(Chrome.fill)
+      content
+        .listRowBackground(Chrome.fill)
+        .listRowInsets(EdgeInsets(top: Chrome.Space.s, leading: Chrome.Space.l, bottom: Chrome.Space.s, trailing: Chrome.Space.l))
     } header: {
       if let title { SectionLabel(title) }
     } footer: {
@@ -219,32 +217,35 @@ struct SliderRow: View {
       LabeledContent { ValueText(text) } label: { Text(label) }
       Slider(value: $value, in: range, step: step).tint(Chrome.fg)
     }
+    .padding(.vertical, Chrome.Space.xs)
   }
 }
 
 // MARK: - Controls
 
 /// The segmented control: a capsule track of `fill2`, the chosen segment a
-/// lens of `fill3` that slides to the next pick. Picking the chosen one again does nothing.
-struct CapsuleSegmented<Value: Hashable>: View {
-  let options: [(Value, String)]
+/// lens of `fill3` that slides to the next pick. Picking the chosen one again
+/// does nothing. Segments share the width, or with `fills` off hug their
+/// labels (a compact control at a row's trailing edge).
+struct CapsuleSegmented<Value: Hashable, Label: View>: View {
+  let values: [Value]
   let selection: Value
   var busy = false
+  var fills = true
   let pick: (Value) -> Void
+  /// A segment's label, given whether it is the chosen one.
+  @ViewBuilder let label: (Value, Bool) -> Label
   @Namespace private var lens
 
   var body: some View {
     HStack(spacing: 0) {
-      ForEach(options.indices, id: \.self) { i in
-        let (value, label) = options[i]
+      ForEach(values, id: \.self) { value in
         let selected = value == selection
         Button { if !selected { pick(value) } } label: {
-          Text(label)
-            .font(Chrome.font(.body, selected ? .semibold : .medium))
-            .foregroundStyle(selected ? Chrome.fg : Chrome.fg2)
+          label(value, selected)
             .lineLimit(1)
             .padding(.horizontal, Chrome.Space.l)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: fills ? .infinity : nil)
             .frame(height: Chrome.Size.control - 6)
             .background {
               if selected {
@@ -264,6 +265,29 @@ struct CapsuleSegmented<Value: Hashable>: View {
     .animation(Chrome.spring, value: selection)
     .disabled(busy)
     .opacity(busy ? 0.5 : 1)
+  }
+}
+
+extension CapsuleSegmented where Label == SegmentText {
+  /// Segments labelled with words.
+  init(options: [(Value, String)], selection: Value, busy: Bool = false, fills: Bool = true,
+       pick: @escaping (Value) -> Void) {
+    let titles = Dictionary(options, uniquingKeysWith: { first, _ in first })
+    self.init(values: options.map(\.0), selection: selection, busy: busy, fills: fills, pick: pick) { value, selected in
+      SegmentText(text: titles[value] ?? "", selected: selected)
+    }
+  }
+}
+
+/// A segment's word: semibold fg when chosen, medium fg2 otherwise.
+struct SegmentText: View {
+  let text: String
+  let selected: Bool
+
+  var body: some View {
+    Text(text)
+      .font(Chrome.font(.body, selected ? .semibold : .medium))
+      .foregroundStyle(selected ? Chrome.fg : Chrome.fg2)
   }
 }
 
@@ -311,17 +335,24 @@ struct CircleButton: View {
   let action: () -> Void
 
   var body: some View {
-    Button(action: action) {
-      Image(systemName: symbol)
-        .font(Chrome.symbol(.control))
-        .foregroundStyle(Chrome.fg)
-        .frame(width: Chrome.Size.circle, height: Chrome.Size.circle)
-        .background(Circle().fill(Chrome.fill2))
-        .frame(width: Chrome.Size.target, height: Chrome.Size.target)
-        .contentShape(Rectangle())
-    }
-    .buttonStyle(PressScale(0.92))
-    .accessibilityLabel(label)
+    Button(action: action) { CircleSymbol(symbol: symbol) }
+      .buttonStyle(PressScale(0.92))
+      .accessibilityLabel(label)
+  }
+}
+
+/// CircleButton's face, for a Menu's label.
+struct CircleSymbol: View {
+  let symbol: String
+
+  var body: some View {
+    Image(systemName: symbol)
+      .font(Chrome.symbol(.control))
+      .foregroundStyle(Chrome.fg)
+      .frame(width: Chrome.Size.circle, height: Chrome.Size.circle)
+      .background(Circle().fill(Chrome.fill2))
+      .frame(width: Chrome.Size.target, height: Chrome.Size.target)
+      .contentShape(Rectangle())
   }
 }
 
@@ -337,11 +368,22 @@ struct PressScale: ButtonStyle {
   }
 }
 
-/// A page inside a tab: a back button and the title centred over the content.
-struct PageScaffold<Content: View>: View {
+/// A page inside a tab: a back button, the title centred over the content,
+/// and optional actions at the trailing edge (the title truncates before them).
+struct PageScaffold<Trailing: View, Content: View>: View {
   let title: String
   let back: () -> Void
-  @ViewBuilder let content: Content
+  let trailing: Trailing
+  let content: Content
+  @State private var trailingWidth: CGFloat = 0
+
+  init(title: String, back: @escaping () -> Void, @ViewBuilder trailing: () -> Trailing,
+       @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.back = back
+    self.trailing = trailing()
+    self.content = content()
+  }
 
   var body: some View {
     VStack(spacing: 0) {
@@ -350,10 +392,12 @@ struct PageScaffold<Content: View>: View {
           .font(Chrome.font(.title, .semibold))
           .foregroundStyle(Chrome.fg)
           .lineLimit(1)
-          .padding(.horizontal, Chrome.Size.target + Chrome.Space.m)
-        HStack {
+          .padding(.horizontal, max(Chrome.Size.target, trailingWidth) + Chrome.Space.m)
+        HStack(spacing: 0) {
           CircleButton(symbol: "chevron.left", label: "Back", action: back)
-          Spacer()
+          Spacer(minLength: 0)
+          trailing
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { trailingWidth = $0 }
         }
       }
       .padding(.horizontal, Chrome.Space.s)
@@ -361,6 +405,12 @@ struct PageScaffold<Content: View>: View {
       content
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
+  }
+}
+
+extension PageScaffold where Trailing == EmptyView {
+  init(title: String, back: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+    self.init(title: title, back: back, trailing: { EmptyView() }, content: content)
   }
 }
 

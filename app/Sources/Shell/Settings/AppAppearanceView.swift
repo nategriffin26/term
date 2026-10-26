@@ -5,21 +5,23 @@ import UIKit
 struct AppAppearancePage: View {
   @Bindable private var settings = AppSettings.shared
 
-  /// Picked accents; "From Terminal" (nil) is the first swatch.
-  private static let hues: [UInt32] = [0xF2A65A, 0xFF6B86, 0x7AA2FF, 0xB79BFF, 0xF5D547]
+  /// Picked accents after the first swatch, which is the terminal's cursor (nil).
+  private static let hues: [(rgb: UInt32, name: String)] = [
+    (0xF2A65A, "Amber"), (0xFF6B86, "Rose"), (0x7AA2FF, "Blue"), (0xB79BFF, "Violet"), (0xF5D547, "Yellow"),
+  ]
 
   var body: some View {
     List {
       ListSection("Colors") {
         Toggle("Match Terminal", isOn: $settings.appMatchesTerminal)
-        VStack(alignment: .leading, spacing: 10) {
-          Text("Accent")
-          HStack(spacing: 14) {
-            swatch(nil)
-            ForEach(Self.hues, id: \.self) { swatch($0) }
-          }
+      }
+      ListSection("Accent") {
+        HStack(spacing: Chrome.Space.s) {
+          Text(Self.hues.first { $0.rgb == settings.appAccent }?.name ?? "Cursor")
+          Spacer(minLength: Chrome.Space.s)
+          swatch(nil, name: "Cursor")
+          ForEach(Self.hues, id: \.rgb) { swatch($0.rgb, name: $0.name) }
         }
-        .padding(.vertical, 4)
       }
       if UIApplication.shared.supportsMultipleScenes {
         ListSection("Layout") {
@@ -27,21 +29,24 @@ struct AppAppearancePage: View {
         }
       }
     }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden)
+    .chromeList()
   }
 
-  /// A colour to pick; nil is the one the theme gives (the first swatch shows it).
-  private func swatch(_ rgb: UInt32?) -> some View {
+  /// A colour to pick; nil is the one the theme gives (its cursor's).
+  private func swatch(_ rgb: UInt32?, name: String) -> some View {
     let given = settings.appMatchesTerminal ? AppTheme.derived(from: settings.theme) : AppTheme.fixed()
-    let shown = rgb ?? given.accent.rgb
     let selected = settings.appAccent == rgb
     return Button { settings.appAccent = rgb } label: {
-      Circle().fill(Color(hex: shown)).frame(width: 26, height: 26)
-        .padding(4)
-        .overlay(Circle().strokeBorder(Chrome.fg, lineWidth: selected ? 2 : 0))
+      Circle().fill(Color(hex: rgb ?? given.accent.rgb))
+        .frame(width: 20, height: 20)
+        .padding(3)
+        .overlay(Circle().strokeBorder(Chrome.fg, lineWidth: 2).opacity(selected ? 1 : 0))
+        .frame(width: 30, height: Chrome.Size.target)
+        .contentShape(Rectangle())
     }
-    .buttonStyle(.plain)
-    .accessibilityLabel(rgb == nil ? "From Terminal" : String(format: "#%06X", rgb!))
+    .buttonStyle(PressScale(0.9))
+    .animation(Chrome.quick, value: selected)
+    .accessibilityLabel(name)
+    .accessibilityAddTraits(selected ? .isSelected : [])
   }
 }

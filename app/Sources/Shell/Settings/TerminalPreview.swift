@@ -2,23 +2,24 @@ import SwiftUI
 import UIKit
 
 /// The terminal appearance pages' pinned preview: a live terminal drawn
-/// with the current settings, ending on a prompt with the cursor over a glyph.
+/// with the current settings, ending on a prompt with the cursor.
 struct TerminalPreview: UIViewRepresentable {
   func makeUIView(context: Context) -> PreviewView { PreviewView() }
   func updateUIView(_ view: PreviewView, context: Context) {}
 }
 
 final class PreviewView: UIView {
-  /// Colours, styles, Powerline and Nerd Font glyphs; the cursor ends over the "s".
+  /// A prompt with a Nerd Font glyph, a coloured listing, the styles, the cursor.
   static let sample = [
-    "\u{1b}[1;34mterm>\u{1b}[0m ls\r\n",
-    "\u{1b}[1;34mProjects\u{1b}[0m  \u{1b}[1;32mbuild.sh\u{1b}[0m  notes.md  \u{1b}[35mphoto.png\u{1b}[0m\r\n",
-    (0..<8).map { "\u{1b}[4\($0)m  " }.joined() + "\u{1b}[0m\r\n",
-    (0..<8).map { "\u{1b}[10\($0)m  " }.joined() + "\u{1b}[0m\r\n",
-    "\u{1b}[1mbold\u{1b}[0m \u{1b}[3mitalic\u{1b}[0m \u{1b}[4munderline\u{1b}[0m \u{1b}[2mfaint\u{1b}[0m\r\n",
-    "\u{1b}[30;44m \u{e0a0} main \u{1b}[34;49m\u{e0b0}\u{1b}[0m \u{f07c} \u{f0e7} \u{f489}\r\n",
-    "\u{1b}[1;34mterm>\u{1b}[0m git status\u{1b}[6D",
+    prompt + "ls\r\n",
+    "\u{1b}[1;34msrc/\u{1b}[0m  \u{1b}[1;34mtests/\u{1b}[0m  \u{1b}[32mbuild.rs\u{1b}[0m  \u{1b}[33mREADME.md\u{1b}[0m\r\n",
+    "\u{1b}[1mbold\u{1b}[0m \u{1b}[2mfaint\u{1b}[0m \u{1b}[3mitalic\u{1b}[0m \u{1b}[4munderline\u{1b}[0m\r\n",
+    prompt,
   ].joined()
+  /// The sample's lines, which the preview is sized to show.
+  static let lines = 4
+
+  private static let prompt = "\u{1b}[34m~/api\u{1b}[0m \u{1b}[35m\u{e0a0} main\u{1b}[0m \u{1b}[32m❯\u{1b}[0m "
 
   private let session = Session(localCols: 40, rows: 8)
   private let terminal: TerminalView?

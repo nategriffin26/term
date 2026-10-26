@@ -3,28 +3,44 @@ import UIKit
 
 /// A terminal appearance page: the live preview pinned above its list.
 struct PreviewPage<Content: View>: View {
-  let title: String?
   @ViewBuilder let content: Content
 
   var body: some View {
     VStack(spacing: 0) {
-      TerminalPreview().frame(height: 142)
-      Rectangle().fill(Chrome.line2).frame(height: 1)
+      PreviewCard()
+        .padding(.horizontal, Chrome.Space.m)
+        .padding(.bottom, Chrome.Space.xs)
       content
     }
-    .modifier(TitledPage(title: title))
   }
 }
 
-private struct TitledPage: ViewModifier {
-  let title: String?
+/// The live preview on the theme's ground, its sixteen colours under it.
+private struct PreviewCard: View {
+  private let settings = AppSettings.shared
+  @Environment(\.displayScale) private var scale
 
-  func body(content: Content) -> some View {
-    if let title {
-      content.chromeList().navigationTitle(title)
-    } else {
-      content
+  /// The sample's lines at the current font, size and line height: the cells the terminal will draw.
+  private var previewHeight: CGFloat {
+    let fonts = FontSet(family: settings.fontFamily, pointSize: CGFloat(settings.fontSize), scale: scale,
+                        lineHeight: CGFloat(settings.lineSpacing))
+    return CGFloat(fonts.metrics.height) / scale * CGFloat(PreviewView.lines)
+  }
+
+  var body: some View {
+    let theme = settings.theme
+    VStack(alignment: .leading, spacing: Chrome.Space.m) {
+      TerminalPreview().frame(height: previewHeight)
+      HStack(spacing: 0) {
+        ForEach(0..<16, id: \.self) { i in
+          Circle().fill(Color(hex: theme.palette[i])).frame(width: 8, height: 8)
+          if i < 15 { Spacer(minLength: 0) }
+        }
+      }
     }
+    .padding(Chrome.Space.m)
+    .background(Color(hex: theme.background), in: RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous).strokeBorder(Chrome.line, lineWidth: 1))
   }
 }
 
@@ -32,78 +48,119 @@ private struct TitledPage: ViewModifier {
 struct TerminalAppearancePage: View {
   @Bindable private var settings = AppSettings.shared
 
-  /// The themes shown on the strip; the rest are behind All.
-  private static let strip = ["Term", "Tomorrow Night", "Dracula", "Nord", "Gruvbox Dark", "Catppuccin Mocha",
-                              "Solarized Dark", "Solarized Light"]
+  /// The themes on the strip; the rest are behind All.
+  static let strip = ["Dusk", "Tomorrow Night", "Catppuccin Mocha", "Gruvbox Dark", "Solarized Light", "Term",
+                      "Dracula", "Nord", "Rose Pine Dawn"]
 
-  private var stripThemes: [Theme] {
-    var names = Self.strip
-    if !names.contains(settings.themeName) { names.insert(settings.themeName, at: 0) }
-    return names.map(Theme.named)
+  /// The strip's names: the current theme first when the strip lacks it, and
+  /// only names the catalog has (an unknown name would show its fallback twice).
+  static func stripNames(current: String, catalog: [String]) -> [String] {
+    var names = strip.filter(catalog.contains)
+    if !names.contains(current), catalog.contains(current) { names.insert(current, at: 0) }
+    return names
   }
 
   var body: some View {
-    PreviewPage(title: nil) {
+    PreviewPage {
       List {
         Section {
-          ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-              ForEach(stripThemes) { theme in
-                Button { settings.themeName = theme.name } label: {
-                  ThemeTile(theme: theme, selected: theme.name == settings.themeName)
-                }
-                .buttonStyle(.plain)
-              }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 4)
-          }
-          .listRowInsets(EdgeInsets())
-          Toggle("Bold as Bright", isOn: $settings.boldIsBright)
+          themeStrip
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Color.clear)
         } header: {
           HStack {
-            Text("Theme").font(Chrome.font(.secondary, .medium)).foregroundStyle(Chrome.muted)
+            SectionLabel("Theme")
             Spacer()
-            NavigationLink("All") { ThemesView() }
-              .font(Chrome.font(.secondary, .medium))
-              .foregroundStyle(Chrome.accent)
+            PageLink(title: "All", page: .themes)
           }
-          .textCase(nil)
         }
-        .listRowBackground(Color.clear)
         ListSection("Font") {
-          NavigationLink { FontFamilyView() } label: {
-            LabeledContent { ValueText(settings.fontFamily) } label: { Text("Family") }
-          }
+          PageRow(page: .fontFamily, value: settings.fontFamily, monoValue: false) { Text("Family") }
           SliderRow(label: "Size", value: $settings.fontSize, range: AppSettings.fontSizeRange, step: 1,
-                     text: "\(Int(settings.fontSize)) pt")
+                    text: "\(Int(settings.fontSize)) pt")
           SliderRow(label: "Line Height", value: $settings.lineSpacing, range: AppSettings.lineSpacingRange,
-                     step: 0.05, text: String(format: "%.2f", settings.lineSpacing))
+                    step: 0.05, text: String(format: "%.2f", settings.lineSpacing))
+          Toggle("Bold as Bright", isOn: $settings.boldIsBright)
         }
         ListSection("Cursor") {
-          LabeledContent {
-            Picker("Shape", selection: $settings.cursorShape) {
-              ForEach(CursorShape.allCases, id: \.self) { Text($0.rawValue.capitalized) }
+          HStack {
+            Text("Shape")
+            Spacer()
+            CapsuleSegmented(values: CursorShape.allCases, selection: settings.cursorShape, fills: false) {
+              settings.cursorShape = $0
+            } label: { shape, selected in
+              CursorGlyph(shape: shape, selected: selected)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 230)
-          } label: { Text("Shape") }
+          }
           Toggle("Blink", isOn: $settings.cursorBlink)
           Toggle("Follow Programs", isOn: $settings.cursorFollowsPrograms)
-          LabeledContent {
-            Picker("Color", selection: $settings.cursorColor) {
-              ForEach(CursorColor.allCases, id: \.self) { Text($0.rawValue.capitalized) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 150)
-          } label: { Text("Color") }
+          HStack {
+            Text("Color")
+            Spacer()
+            CapsuleSegmented(options: [(CursorColor.theme, "Theme"), (.accent, "Accent")],
+                             selection: settings.cursorColor, fills: false) { settings.cursorColor = $0 }
+          }
         }
       }
-      .listStyle(.plain)
-      .scrollContentBackground(.hidden)
+      .chromeList()
     }
+  }
+
+  private var themeStrip: some View {
+    let names = Self.stripNames(current: settings.themeName, catalog: Theme.all.map(\.name))
+    return ScrollViewReader { proxy in
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(alignment: .top, spacing: Chrome.Space.s) {
+          ForEach(names, id: \.self) { name in
+            Button { settings.themeName = name } label: {
+              ThemeTile(theme: Theme.named(name), selected: name == settings.themeName)
+            }
+            .buttonStyle(PressScale())
+            .id(name)
+          }
+        }
+        .padding(.horizontal, Chrome.Space.xs)
+        .padding(.vertical, Chrome.Space.xs)
+      }
+      .onAppear { proxy.scrollTo(settings.themeName, anchor: .center) }
+    }
+  }
+}
+
+/// A cursor shape drawn as the terminal draws it, for the shape picker.
+private struct CursorGlyph: View {
+  let shape: CursorShape
+  let selected: Bool
+
+  var body: some View {
+    let color = selected ? Chrome.accent : Chrome.fg2
+    ZStack(alignment: .bottom) {
+      Color.clear
+      switch shape {
+      case .block: RoundedRectangle(cornerRadius: 1.5).fill(color).frame(width: 9)
+      case .bar: Capsule().fill(color).frame(width: 2)
+      case .underline: Capsule().fill(color).frame(width: 10, height: 2)
+      }
+    }
+    .frame(width: 10, height: 16)
+    .accessibilityElement()
+    .accessibilityLabel(shape.rawValue.capitalized)
+  }
+}
+
+/// A section's link to a page: a word in fg2 at the header's trailing edge.
+private struct PageLink: View {
+  let title: String
+  let page: SettingsPage
+  @Environment(\.settingsNav) private var nav
+
+  var body: some View {
+    Button(title) { nav.push(page) }
+      .font(Chrome.font(.secondary, .semibold))
+      .foregroundStyle(Chrome.fg2)
+      .buttonStyle(PressScale())
+      .frame(minHeight: Chrome.Size.target)
+      .contentShape(Rectangle())
   }
 }
 
@@ -113,15 +170,21 @@ private struct ThemeTile: View {
   let selected: Bool
 
   var body: some View {
-    VStack(spacing: 6) {
+    VStack(spacing: Chrome.Space.s) {
       ThemeThumbnail(theme: theme)
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Chrome.accent, lineWidth: selected ? 2 : 0))
+        .padding(3)
+        .overlay {
+          RoundedRectangle(cornerRadius: ThemeThumbnail.radius + 3, style: .continuous)
+            .strokeBorder(Chrome.accent, lineWidth: 2)
+            .opacity(selected ? 1 : 0)
+        }
       Text(theme.name)
-        .font(Chrome.font(.caption, selected ? .semibold : .regular))
+        .font(Chrome.font(.caption, selected ? .semibold : .medium))
         .foregroundStyle(selected ? Chrome.fg : Chrome.muted)
         .lineLimit(1)
     }
-    .frame(width: 84)
+    .frame(width: ThemeThumbnail.width + 6)
+    .animation(Chrome.quick, value: selected)
   }
 }
 
@@ -129,13 +192,16 @@ struct ThemesView: View {
   @Bindable private var settings = AppSettings.shared
 
   var body: some View {
-    PreviewPage(title: "Theme") {
-      ScrollViewReader { proxy in
-        List {
-          section("Dark", Theme.all.filter(\.isDark))
-          section("Light", Theme.all.filter { !$0.isDark })
+    SettingsPageView(title: "Themes") {
+      PreviewPage {
+        ScrollViewReader { proxy in
+          List {
+            section("Dark", Theme.all.filter(\.isDark))
+            section("Light", Theme.all.filter { !$0.isDark })
+          }
+          .chromeList()
+          .onAppear { proxy.scrollTo(settings.themeName, anchor: .center) }
         }
-        .onAppear { proxy.scrollTo(settings.themeName, anchor: .center) }
       }
     }
   }
@@ -144,17 +210,11 @@ struct ThemesView: View {
     if !themes.isEmpty {
       ListSection(title) {
         ForEach(themes) { theme in
-          Button {
+          ChoiceRow(chosen: theme.name == settings.themeName) {
             settings.themeName = theme.name
           } label: {
-            HStack(spacing: 12) {
-              ThemeThumbnail(theme: theme)
-              Text(theme.name)
-              Spacer()
-              if theme.name == settings.themeName {
-                Image(systemName: "checkmark").foregroundStyle(Chrome.accent)
-              }
-            }
+            ThemeThumbnail(theme: theme, compact: true)
+            Text(theme.name)
           }
           .id(theme.name)
         }
@@ -163,31 +223,63 @@ struct ThemesView: View {
   }
 }
 
-/// A theme at a glance: a prompt and cursor on its background, over its six colours.
-struct ThemeThumbnail: View {
-  let theme: Theme
-
-  private func color(_ rgb: UInt32) -> Color { Color(uiColor: UIColor(rgb: rgb)) }
+/// A row that picks one of a list: its label, a check on the chosen one.
+struct ChoiceRow<Label: View>: View {
+  let chosen: Bool
+  let pick: () -> Void
+  @ViewBuilder var label: Label
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 5) {
-      HStack(spacing: 0) {
-        Text("$ ls").foregroundStyle(color(theme.palette[2]))
-        Rectangle().fill(color(theme.cursor)).frame(width: 5, height: 10).padding(.leading, 2)
+    Button(action: pick) {
+      HStack(spacing: Chrome.Space.m) {
+        label
+        Spacer(minLength: Chrome.Space.s)
+        Image(systemName: "checkmark")
+          .font(Chrome.symbol(.inline))
+          .foregroundStyle(Chrome.accent)
+          .opacity(chosen ? 1 : 0)
       }
-      .font(Chrome.mono(.caption, .medium))
-      .foregroundStyle(color(theme.foreground))
-      HStack(spacing: 2) {
-        ForEach(1..<7, id: \.self) { i in
-          RoundedRectangle(cornerRadius: 1.5).fill(color(theme.palette[i])).frame(width: 8, height: 6)
-        }
-      }
+      .foregroundStyle(Chrome.fg)
+      .padding(.vertical, Chrome.Space.s)
+      .listRowContent()
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 7)
-    .frame(width: 80, alignment: .leading)
-    .background(color(theme.background), in: RoundedRectangle(cornerRadius: 6))
-    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Chrome.line2, lineWidth: 1))
+    .buttonStyle(RowStyle())
+    .listRowInsets(EdgeInsets())
+    .accessibilityAddTraits(chosen ? .isSelected : [])
+  }
+}
+
+/// A theme at a glance: a prompt and a listing on its ground, over a bar of
+/// its colours; compact (for a list row), the prompt alone.
+struct ThemeThumbnail: View {
+  static let width: CGFloat = 104
+  static let radius = Chrome.Radius.thumb
+  let theme: Theme
+  var compact = false
+
+  private func color(_ i: Int) -> Color { Color(hex: theme.palette[i]) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text("\(Text("~").foregroundStyle(color(4))) \(Text("❯").foregroundStyle(color(2))) ls")
+      if !compact {
+        Text("\(Text("src").foregroundStyle(color(4))) a.md \(Text("b.rs").foregroundStyle(color(3)))")
+      }
+      HStack(spacing: 0) {
+        ForEach([1, 3, 2, 6, 4, 5], id: \.self) { i in color(i) }
+      }
+      .frame(height: 4)
+      .clipShape(Capsule())
+      .padding(.top, compact ? 4 : 6)
+    }
+    .font(Chrome.mono(.caption, .medium))
+    .foregroundStyle(Color(hex: theme.foreground))
+    .lineLimit(1)
+    .padding(.horizontal, 6)
+    .padding(.vertical, Chrome.Space.s)
+    .frame(width: compact ? 64 : Self.width, alignment: .leading)
+    .background(Color(hex: theme.background), in: RoundedRectangle(cornerRadius: Self.radius, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: Self.radius, style: .continuous).strokeBorder(Chrome.line, lineWidth: 1))
   }
 }
 
@@ -196,21 +288,20 @@ struct FontFamilyView: View {
   private let families = FontFamilyView.monospacedFamilies()
 
   var body: some View {
-    PreviewPage(title: "Font") {
-      List {
-        ForEach(families, id: \.self) { family in
-          Button {
-            settings.fontFamily = family
-          } label: {
-            HStack {
-              Text(family).font(.custom(family, size: 15))
-              Spacer()
-              if family == settings.fontFamily {
-                Image(systemName: "checkmark").foregroundStyle(Chrome.accent)
+    SettingsPageView(title: "Font") {
+      PreviewPage {
+        List {
+          ListSection {
+            ForEach(families, id: \.self) { family in
+              ChoiceRow(chosen: family == settings.fontFamily) {
+                settings.fontFamily = family
+              } label: {
+                Text(family).font(.custom(family, size: Chrome.TextStep.body.rawValue))
               }
             }
           }
         }
+        .chromeList()
       }
     }
   }

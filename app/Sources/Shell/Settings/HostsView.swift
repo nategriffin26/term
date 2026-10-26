@@ -2,50 +2,73 @@ import SwiftUI
 
 struct HostsView: View {
   private let store = ConfigStore.shared
-  @State private var adding: Host?
+  @State private var editMode = EditMode.inactive
+  @Environment(\.settingsNav) private var nav
 
   var body: some View {
-    List {
-      ForEach(store.hosts) { host in
-        NavigationLink {
-          HostEditor(host: host, isNew: false)
-        } label: {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(host.alias)
-            ValueText(Self.summary(host))
+    SettingsPageView(title: "Hosts") {
+      HStack(spacing: 0) {
+        if !store.hosts.isEmpty {
+          Button(editMode.isEditing ? "Done" : "Edit") {
+            withAnimation(Chrome.spring) { editMode = editMode.isEditing ? .inactive : .active }
+          }
+          .buttonStyle(CapsuleButtonStyle(kind: .plain))
+        }
+        CircleButton(symbol: "plus", label: "Add Host") { nav.push(.newHost) }
+      }
+    } content: {
+      if store.hosts.isEmpty {
+        EmptyPage(symbol: "server.rack", title: "No Hosts")
+      } else {
+        List {
+          ListSection {
+            ForEach(store.hosts) { host in
+              Button { nav.push(.host(host)) } label: {
+                HStack(spacing: Chrome.Space.s) {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(host.alias).font(Chrome.mono(.body, .medium))
+                    Text(Self.summary(host)).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
+                  }
+                  .lineLimit(1)
+                  Spacer(minLength: Chrome.Space.s)
+                  if !editMode.isEditing { Chevron() }
+                }
+                .padding(.vertical, Chrome.Space.s)
+                .listRowContent()
+              }
+              .buttonStyle(RowStyle())
+              .listRowInsets(EdgeInsets())
+            }
+            .onDelete { offsets in
+              for host in offsets.map({ store.hosts[$0] }) { store.delete(host) }
+            }
+            .onMove { store.moveHosts(from: $0, to: $1) }
           }
         }
-      }
-      .onDelete { offsets in
-        for host in offsets.map({ store.hosts[$0] }) { store.delete(host) }
-      }
-      .onMove { store.moveHosts(from: $0, to: $1) }
-      .listRowBackground(Color.clear)
-    }
-    .chromeList()
-    .overlay {
-      if store.hosts.isEmpty {
-        ContentUnavailableView("No Hosts", systemImage: "server.rack",
-                               description: Text("Add a computer to reach with mosh or ssh."))
+        .chromeList()
+        .environment(\.editMode, $editMode)
       }
     }
-    .navigationTitle("Hosts")
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Button("Add Host", systemImage: "plus") {
-          adding = Host(alias: "", hostname: "", user: "")
-        }
-      }
-      ToolbarItem(placement: .secondaryAction) { EditButton() }
-    }
-    .sheet(item: $adding) { host in
-      NavigationStack { HostEditor(host: host, isNew: true) }
-    }
+    .onChange(of: store.hosts.isEmpty) { _, empty in if empty { editMode = .inactive } }
   }
 
   static func summary(_ host: Host) -> String {
     let port = host.port == 22 ? "" : ":\(host.port)"
     return "\(host.user)@\(host.hostname)\(port) · \(host.transport.rawValue)"
+  }
+}
+
+/// A page with nothing on it yet: its symbol and what is missing.
+struct EmptyPage: View {
+  let symbol: String
+  let title: String
+
+  var body: some View {
+    VStack(spacing: Chrome.Space.m) {
+      Image(systemName: symbol).font(Chrome.symbol(.hero)).foregroundStyle(Chrome.faint)
+      Text(title).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg2)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
 
@@ -56,7 +79,7 @@ struct HostEditor: View {
   @State private var port: String
   @State private var password: String
   @State private var pinnedKey: String?
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.settingsNav) private var nav
   private let keys = Keychain.keys()
 
   init(host: Host, isNew: Bool) {
@@ -68,77 +91,84 @@ struct HostEditor: View {
   }
 
   var body: some View {
-    List {
-      ListSection {
-        field("Alias", $host.alias, prompt: "Required")
-        field("HostName", $host.hostname, prompt: "Host or IP", keyboard: .URL)
-        field("Port", $port, prompt: "22", keyboard: .numberPad)
-        field("User", $host.user, prompt: "Required")
-      } footer: {
-        if let problem { Text(problem).foregroundStyle(.red) }
-      }
-
-      ListSection("Authentication") {
-        Picker("Key", selection: $host.keyName) {
-          Text(keys.isEmpty ? "None" : "Automatic").tag(String?.none)
-          ForEach(keys) { key in Text(key.name).tag(Optional(key.name)) }
+    SettingsPageView(title: isNew ? "New Host" : host.alias) {
+      Button("Save", action: save)
+        .buttonStyle(CapsuleButtonStyle())
+        .disabled(!canSave)
+        .opacity(canSave ? 1 : 0.4)
+    } content: {
+      List {
+        ListSection {
+          field("Alias", $host.alias, prompt: "Required")
+          field("HostName", $host.hostname, prompt: "Host or IP", keyboard: .URL)
+          field("Port", $port, prompt: "22", keyboard: .numberPad)
+          field("User", $host.user, prompt: "Required")
+        } footer: {
+          if let problem { Text(problem).font(Chrome.font(.secondary)).foregroundStyle(Chrome.bad) }
         }
-        LabeledContent("Password") {
-          SecureField("Optional", text: $password)
-            .multilineTextAlignment(.trailing)
-        }
-      }
 
-      ListSection {
-        Picker("Transport", selection: $host.transport) {
-          Text("Mosh").tag(Host.Transport.mosh)
-          Text("SSH").tag(Host.Transport.ssh)
+        ListSection("Authentication") {
+          LabeledContent("Key") {
+            Menu {
+              Picker("Key", selection: $host.keyName) {
+                Text(keys.isEmpty ? "None" : "Automatic").tag(String?.none)
+                ForEach(keys) { key in Text(key.name).tag(Optional(key.name)) }
+              }
+            } label: {
+              HStack(spacing: Chrome.Space.xs) {
+                ValueText(host.keyName ?? (keys.isEmpty ? "None" : "Automatic"), mono: host.keyName != nil)
+                Image(systemName: "chevron.up.chevron.down").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.faint)
+              }
+            }
+          }
+          LabeledContent("Password") {
+            SecureField("Password", text: $password, prompt: Text("Optional").foregroundStyle(Chrome.faint))
+              .font(Chrome.mono(.body))
+              .multilineTextAlignment(.trailing)
+          }
         }
-        field("Command", $host.startupCommand, prompt: "tmux new -A -s main")
-      }
 
-      if host.transport == .mosh {
-        ListSection("Mosh") {
-          field("Server", $host.moshServer, prompt: "mosh-server")
-          Picker("Prediction", selection: $host.prediction) {
-            Text("Adaptive").tag(Host.Prediction.adaptive)
-            Text("Always").tag(Host.Prediction.always)
-            Text("Never").tag(Host.Prediction.never)
+        ListSection {
+          LabeledContent("Transport") {
+            CapsuleSegmented(options: [(Host.Transport.mosh, "Mosh"), (.ssh, "SSH")], selection: host.transport,
+                             fills: false) { transport in withAnimation(Chrome.spring) { host.transport = transport } }
+          }
+          field("Command", $host.startupCommand, prompt: "tmux new -A -s main")
+        }
+
+        if host.transport == .mosh {
+          ListSection("Mosh") {
+            field("Server", $host.moshServer, prompt: "mosh-server")
+            LabeledContent("Prediction") {
+              CapsuleSegmented(options: [(Host.Prediction.adaptive, "Adaptive"), (.always, "Always"), (.never, "Never")],
+                               selection: host.prediction, fills: false) { host.prediction = $0 }
+            }
+          }
+        }
+
+        if let pinnedKey {
+          ListSection("Host Key") {
+            Text(SSHKeys.fingerprint(pinnedKey) ?? pinnedKey)
+              .font(Chrome.mono(.secondary))
+              .foregroundStyle(Chrome.fg2)
+              .textSelection(.enabled)
+            Button("Forget Host Key", role: .destructive) {
+              ConfigStore.shared.pinHostKey(nil, for: host.knownHostsKey)
+              self.pinnedKey = nil
+            }
+            .foregroundStyle(Chrome.bad)
           }
         }
       }
-
-      if let pinnedKey {
-        ListSection("Host Key") {
-          Text(SSHKeys.fingerprint(pinnedKey) ?? pinnedKey)
-            .font(Chrome.mono(.secondary))
-            .textSelection(.enabled)
-          Button("Forget Host Key", role: .destructive) {
-            ConfigStore.shared.pinHostKey(nil, for: host.knownHostsKey)
-            self.pinnedKey = nil
-          }
-        }
-      }
-    }
-    .chromeList()
-    .navigationTitle(isNew ? "New Host" : host.alias)
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      if isNew {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { dismiss() }
-        }
-      }
-      ToolbarItem(placement: .confirmationAction) {
-        Button("Save", action: save).disabled(!canSave)
-      }
+      .chromeList()
     }
   }
 
   private func field(_ title: String, _ text: Binding<String>, prompt: String,
                      keyboard: UIKeyboardType = .default) -> some View {
     LabeledContent(title) {
-      TextField(title, text: text, prompt: Text(prompt))
+      TextField(title, text: text, prompt: Text(prompt).foregroundStyle(Chrome.faint))
+        .font(Chrome.mono(.body))
         .multilineTextAlignment(.trailing)
         .keyboardType(keyboard)
         .textInputAutocapitalization(.never)
@@ -177,6 +207,6 @@ struct HostEditor: View {
     let h = trimmed
     ConfigStore.shared.save(h)
     Keychain.setPassword(password, for: h.id)
-    dismiss()
+    nav.pop()
   }
 }

@@ -2,57 +2,53 @@ import SwiftUI
 
 struct KeysView: View {
   @State private var keys = Keychain.keys()
-  @State private var sheet: Sheet?
-
-  private enum Sheet: String, Identifiable {
-    case generate, paste
-    var id: String { rawValue }
-  }
+  @Environment(\.settingsNav) private var nav
+  @Environment(\.settingsPageIsTop) private var isTop
 
   var body: some View {
-    List {
-      ForEach(keys) { key in
-        NavigationLink {
-          KeyDetailView(key: key) { reload() }
-        } label: {
-          VStack(alignment: .leading, spacing: 2) {
-            Text(key.name)
-            ValueText(key.type)
+    SettingsPageView(title: "Keys") {
+      Menu {
+        Button("Generate Ed25519 Key", systemImage: "wand.and.stars") { nav.push(.generateKey) }
+        Button("Import Private Key", systemImage: "doc.on.clipboard") { nav.push(.importKey) }
+      } label: {
+        CircleSymbol(symbol: "plus")
+      }
+      .tint(Chrome.fg)
+      .accessibilityLabel("Add Key")
+    } content: {
+      if keys.isEmpty {
+        EmptyPage(symbol: "key", title: "No Keys")
+      } else {
+        List {
+          ListSection {
+            ForEach(keys) { key in
+              Button { nav.push(.key(key)) } label: {
+                HStack(spacing: Chrome.Space.s) {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(key.name).font(Chrome.mono(.body, .medium))
+                    Text(key.type).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
+                  }
+                  .lineLimit(1)
+                  Spacer(minLength: Chrome.Space.s)
+                  Chevron()
+                }
+                .padding(.vertical, Chrome.Space.s)
+                .listRowContent()
+              }
+              .buttonStyle(RowStyle())
+              .listRowInsets(EdgeInsets())
+            }
+            .onDelete { offsets in
+              for key in offsets.map({ keys[$0] }) { Keychain.deleteKey(named: key.name) }
+              reload()
+            }
           }
         }
-      }
-      .onDelete { offsets in
-        for key in offsets.map({ keys[$0] }) { Keychain.deleteKey(named: key.name) }
-        reload()
-      }
-      .listRowBackground(Color.clear)
-    }
-    .chromeList()
-    .overlay {
-      if keys.isEmpty {
-        ContentUnavailableView("No Keys", systemImage: "key",
-                               description: Text("Generate a key, then add its public key to ~/.ssh/authorized_keys on the server."))
+        .chromeList()
       }
     }
-    .navigationTitle("Keys")
-    .toolbar {
-      ToolbarItem(placement: .primaryAction) {
-        Menu {
-          Button("Generate Ed25519 Key", systemImage: "wand.and.stars") { sheet = .generate }
-          Button("Import Private Key", systemImage: "doc.on.clipboard") { sheet = .paste }
-        } label: {
-          Label("Add Key", systemImage: "plus")
-        }
-      }
-    }
-    .sheet(item: $sheet, onDismiss: reload) { which in
-      NavigationStack {
-        switch which {
-        case .generate: GenerateKeyView(existing: Set(keys.map(\.name)))
-        case .paste: ImportKeyView(existing: Set(keys.map(\.name)))
-        }
-      }
-    }
+    // A key added or deleted on a page pushed over this one shows on return.
+    .onChange(of: isTop) { _, top in if top { reload() } }
   }
 
   private func reload() {
@@ -70,48 +66,64 @@ struct KeysView: View {
 
 struct KeyDetailView: View {
   let key: Keychain.Key
-  let onDelete: () -> Void
   @State private var confirmDelete = false
   @State private var copied = false
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.settingsNav) private var nav
 
   var body: some View {
-    List {
-      ListSection("Public Key") {
-        Text(key.publicKey)
-          .font(Chrome.mono(.secondary))
-          .textSelection(.enabled)
-        Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
-          UIPasteboard.general.string = key.publicKey
-          copied = true
+    SettingsPageView(title: key.name) {
+      List {
+        ListSection("Public Key") {
+          Text(key.publicKey)
+            .font(Chrome.mono(.secondary))
+            .foregroundStyle(Chrome.fg2)
+            .textSelection(.enabled)
+          HStack(spacing: Chrome.Space.s) {
+            Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
+              UIPasteboard.general.string = key.publicKey
+              withAnimation(Chrome.quick) { copied = true }
+            }
+            .buttonStyle(CapsuleButtonStyle())
+            ShareLink(item: key.publicKey) {
+              Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(CapsuleButtonStyle())
+            Spacer(minLength: 0)
+          }
+          .labelStyle(SymbolLabelStyle())
         }
-        ShareLink(item: key.publicKey) {
-          Label("Share", systemImage: "square.and.arrow.up")
-        }
-      }
-      ListSection {
-        ValueRow("Type", key.type)
-        if let fingerprint = SSHKeys.fingerprint(key.publicKey) {
-          LabeledContent("Fingerprint") {
-            Text(fingerprint).font(Chrome.mono(.secondary)).textSelection(.enabled)
+        ListSection {
+          ValueRow("Type", key.type)
+          if let fingerprint = SSHKeys.fingerprint(key.publicKey) {
+            LabeledContent("Fingerprint") {
+              Text(fingerprint).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).textSelection(.enabled)
+            }
           }
         }
+        ListSection {
+          Button("Delete Key", role: .destructive) { confirmDelete = true }
+            .foregroundStyle(Chrome.bad)
+        }
       }
-      ListSection {
-        Button("Delete Key", role: .destructive) { confirmDelete = true }
-      }
+      .chromeList()
     }
-    .chromeList()
-    .navigationTitle(key.name)
-    .navigationBarTitleDisplayMode(.inline)
     .confirmationDialog("Delete \(key.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
       Button("Delete Key", role: .destructive) {
         Keychain.deleteKey(named: key.name)
-        onDelete()
-        dismiss()
+        nav.pop()
       }
     } message: {
       Text("Servers that only trust this key will refuse the connection.")
+    }
+  }
+}
+
+/// A button's symbol at the inline size before its title.
+private struct SymbolLabelStyle: LabelStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    HStack(spacing: Chrome.Space.s) {
+      configuration.icon.font(Chrome.symbol(.inline))
+      configuration.title
     }
   }
 }
@@ -121,7 +133,7 @@ struct GenerateKeyView: View {
   @State private var name: String
   @State private var comment = "term-iphone"
   @State private var error: String?
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.settingsNav) private var nav
 
   init(existing: Set<String>) {
     self.existing = existing
@@ -129,28 +141,22 @@ struct GenerateKeyView: View {
   }
 
   var body: some View {
-    List {
-      ListSection {
-        LabeledContent("Name") {
-          TextField("Name", text: $name).multilineTextAlignment(.trailing)
+    SettingsPageView(title: "New Key") {
+      let ready = !name.trimmingCharacters(in: .whitespaces).isEmpty
+      Button("Generate", action: generate)
+        .buttonStyle(CapsuleButtonStyle())
+        .disabled(!ready)
+        .opacity(ready ? 1 : 0.4)
+    } content: {
+      List {
+        ListSection {
+          KeyField(title: "Name", text: $name)
+          KeyField(title: "Comment", text: $comment)
+        } footer: {
+          if let error { Text(error).font(Chrome.font(.secondary)).foregroundStyle(Chrome.bad) }
         }
-        LabeledContent("Comment") {
-          TextField("Comment", text: $comment).multilineTextAlignment(.trailing)
-        }
-      } footer: {
-        if let error { Text(error).foregroundStyle(.red) }
       }
-    }
-    .chromeList()
-    .textInputAutocapitalization(.never)
-    .autocorrectionDisabled()
-    .navigationTitle("New Key")
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-      ToolbarItem(placement: .confirmationAction) {
-        Button("Generate", action: generate).disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-      }
+      .chromeList()
     }
   }
 
@@ -160,7 +166,7 @@ struct GenerateKeyView: View {
     guard let key = SSHKeys.generate(comment: comment) else { error = "Key generation failed."; return }
     do {
       try Keychain.addKey(name: name, privateKey: key.privateKey, publicKey: key.publicKey)
-      dismiss()
+      nav.pop()
     } catch {
       self.error = Self.message(error)
     }
@@ -174,12 +180,28 @@ struct GenerateKeyView: View {
   }
 }
 
+/// A key form's text: label left, SF Mono right.
+private struct KeyField: View {
+  let title: String
+  @Binding var text: String
+
+  var body: some View {
+    LabeledContent(title) {
+      TextField(title, text: $text)
+        .font(Chrome.mono(.body))
+        .multilineTextAlignment(.trailing)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+    }
+  }
+}
+
 struct ImportKeyView: View {
   let existing: Set<String>
   @State private var name: String
   @State private var text = ""
   @State private var error: String?
-  @Environment(\.dismiss) private var dismiss
+  @Environment(\.settingsNav) private var nav
 
   init(existing: Set<String>) {
     self.existing = existing
@@ -187,36 +209,36 @@ struct ImportKeyView: View {
   }
 
   var body: some View {
-    List {
-      ListSection {
-        LabeledContent("Name") {
-          TextField("Name", text: $name).multilineTextAlignment(.trailing)
+    SettingsPageView(title: "Import Key") {
+      let ready = !text.isEmpty && !name.trimmingCharacters(in: .whitespaces).isEmpty
+      Button("Import", action: importKey)
+        .buttonStyle(CapsuleButtonStyle())
+        .disabled(!ready)
+        .opacity(ready ? 1 : 0.4)
+    } content: {
+      List {
+        ListSection {
+          KeyField(title: "Name", text: $name)
+        }
+        ListSection("OpenSSH Private Key") {
+          TextEditor(text: $text)
+            .font(Chrome.mono(.secondary))
+            .scrollContentBackground(.hidden)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .frame(minHeight: 180)
+          // The system paste control reads the pasteboard without the
+          // "Allow Paste" prompt a programmatic read triggers.
+          PasteButton(payloadType: String.self) { strings in
+            text = strings.first ?? ""
+          }
+          .buttonBorderShape(.capsule)
+          .tint(Chrome.fill3)
+        } footer: {
+          if let error { Text(error).font(Chrome.font(.secondary)).foregroundStyle(Chrome.bad) }
         }
       }
-      ListSection("OpenSSH Private Key") {
-        TextEditor(text: $text)
-          .font(Chrome.mono(.secondary))
-          .frame(minHeight: 180)
-        // The system paste control reads the pasteboard without the
-        // "Allow Paste" prompt a programmatic read triggers.
-        PasteButton(payloadType: String.self) { strings in
-          text = strings.first ?? ""
-        }
-      } footer: {
-        if let error { Text(error).foregroundStyle(.red) }
-      }
-    }
-    .chromeList()
-    .textInputAutocapitalization(.never)
-    .autocorrectionDisabled()
-    .navigationTitle("Import Key")
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-      ToolbarItem(placement: .confirmationAction) {
-        Button("Import", action: importKey)
-          .disabled(text.isEmpty || name.trimmingCharacters(in: .whitespaces).isEmpty)
-      }
+      .chromeList()
     }
   }
 
@@ -230,7 +252,7 @@ struct ImportKeyView: View {
     }
     do {
       try Keychain.addKey(name: name, privateKey: privateKey, publicKey: publicKey)
-      dismiss()
+      nav.pop()
     } catch {
       self.error = GenerateKeyView.message(error)
     }
