@@ -6,7 +6,12 @@ import PackageDescription
 let package = Package(
   name: "ScreenHost",
   platforms: [.macOS(.v15)],
+  products: [.executable(name: "term-screen-host", targets: ["ScreenHost"])],
   targets: [
     .target(name: "ScreenProtocol"),
-  ]
+    .executableTarget(name: "ScreenHost", dependencies: ["ScreenProtocol"]),
+    .executableTarget(name: "ScreenHostProbe", dependencies: ["ScreenProtocol"]),
+    .testTarget(name: "ScreenHostTests", dependencies: ["ScreenHost", "ScreenProtocol"]),
+  ],
+  swiftLanguageModes: [.v5]
 )
