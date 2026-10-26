@@ -173,4 +173,112 @@ final class TmuxListTests: XCTestCase {
     XCTAssertEqual(age(86399), "23h")
     XCTAssertEqual(age(86400), "1d")
   }
+
+  // MARK: - Agent rows
+
+  private let now = Date(timeIntervalSince1970: 1_000_000)
+
+  private func agent(_ state: AgentInfo.State, unread: Bool = false, since: TimeInterval = 720) -> AgentInfo {
+    var agent = AgentInfo(session: "api", state: state, since: now.addingTimeInterval(-since))
+    agent.unread = unread
+    return agent
+  }
+
+  /// The session behind the rows below: last output 25 minutes ago.
+  private var quiet: Tmux.Session { session("$1", "api", activity: 1_000_000 - 1500) }
+
+  /// Bug it catches: a stop he has seen keeps saying "finished" (or a stop
+  /// he hasn't reads as a bare age), so the row lies about needing him.
+  func testAStopReadsAsItsWordUntilSeenThenAsItsAge() {
+    XCTAssertEqual(TmuxList.status(agent(.done, unread: true), quiet, now: now), .finished)
+    XCTAssertEqual(TmuxList.status(agent(.error, unread: true), quiet, now: now), .failed("error"))
+    XCTAssertEqual(TmuxList.status(agent(.exited, unread: true), quiet, now: now), .failed("exited"))
+    XCTAssertEqual(TmuxList.status(agent(.aborted, unread: true), quiet, now: now), .stopped)
+    for state in [AgentInfo.State.done, .error, .exited, .aborted, .idle] {
+      XCTAssertEqual(TmuxList.status(agent(state), quiet, now: now), .age("25m"), "\(state) once seen")
+    }
+    XCTAssertEqual(TmuxList.status(nil, quiet, now: now), .age("25m"), "a shell")
+  }
+
+  /// Bug it catches: entering a session (which marks it seen) hides that
+  /// omp still waits on an unanswered question.
+  func testAQuestionWaitsUntilAnsweredSeenOrNot() {
+    XCTAssertEqual(TmuxList.status(agent(.ask), quiet, now: now), .waits("asks you"))
+    XCTAssertEqual(TmuxList.status(agent(.ask, unread: true), quiet, now: now), .waits("asks you"))
+    XCTAssertEqual(TmuxList.status(agent(.approval), quiet, now: now), .waits("approve"))
+  }
+
+  /// Bug it catches: a working agent's time counted from the session's last
+  /// output (seconds ago while it prints) instead of when the turn began.
+  func testWorkingShowsTodoProgressAndTimeSinceItBegan() {
+    var working = agent(.working, since: 720)
+    XCTAssertEqual(TmuxList.status(working, quiet, now: now), .working(done: nil, total: nil, elapsed: "12m"))
+    working.todo = .init(done: 3, total: 7, current: "Wire refresh")
+    XCTAssertEqual(TmuxList.status(working, quiet, now: now), .working(done: 3, total: 7, elapsed: "12m"))
+  }
+
+  /// Bug it catches: every agent row grows a second line (or a stop he
+  /// hasn't seen grows none), and a multi-line answer breaks the line.
+  func testOnlyAnUnreadStopGrowsASecondLine() {
+    var ask = agent(.ask, unread: true)
+    ask.question = "Keep the old /v1 URLs as redirects?"
+    ask.answer = "an older answer"
+    XCTAssertEqual(TmuxList.note(ask), "Keep the old /v1 URLs as redirects?")
+    ask.unread = false
+    XCTAssertNil(TmuxList.note(ask), "seen: the pill says it, one line")
+    var done = agent(.done, unread: true)
+    done.answer = "Totals now round per line.\n\n  14 tests added,\tall green."
+    XCTAssertEqual(TmuxList.note(done), "Totals now round per line. 14 tests added, all green.")
+    done.answer = " \n "
+    XCTAssertNil(TmuxList.note(done), "a blank answer adds no empty line")
+    var working = agent(.working)
+    working.answer = "last turn's answer"
+    XCTAssertNil(TmuxList.note(working))
+    XCTAssertNil(TmuxList.note(nil))
+  }
+
+  /// Bug it catches: the preview shows empty or invented values ("$0.00",
+  /// "took 0s" while it works) for what the agent never reported.
+  func testPreviewFactsOnlyWhatIsKnown() {
+    var done = agent(.done, since: 60)
+    done.model = "Opus 5.5"
+    done.thinking = "high"
+    done.context = 21
+    done.cost = 0.837
+    done.took = 1080
+    done.branch = "fix-rounding"
+    done.path = "/Users/dev/billing"
+    XCTAssertEqual(TmuxList.facts(done, quiet, now: now), [
+      .init(label: "model", value: "Opus 5.5 · high"), .init(label: "context", value: "21%"),
+      .init(label: "cost", value: "$0.84"), .init(label: "took", value: "18m"),
+      .init(label: "branch", value: "fix-rounding"), .init(label: "path", value: "~/billing"),
+    ])
+    var working = agent(.working, since: 4800)
+    working.took = 30
+    working.branch = ""
+    XCTAssertEqual(TmuxList.facts(working, quiet, now: now), [
+      .init(label: "elapsed", value: "1h 20m"), .init(label: "path", value: "~"),
+    ], "while it works: how long so far, the session's folder when it sent none")
+  }
+
+  func testDurationAtItsBoundaries() {
+    XCTAssertEqual(TmuxList.duration(-5), "0s")
+    XCTAssertEqual(TmuxList.duration(59), "59s")
+    XCTAssertEqual(TmuxList.duration(60), "1m")
+    XCTAssertEqual(TmuxList.duration(3599), "59m")
+    XCTAssertEqual(TmuxList.duration(3600), "1h")
+    XCTAssertEqual(TmuxList.duration(3660), "1h 1m")
+    XCTAssertEqual(TmuxList.duration(86399), "23h 59m")
+    XCTAssertEqual(TmuxList.duration(86400), "1d")
+  }
+
+  /// Bug it catches: one long session name pushes every title off a phone's row.
+  func testNameColumnFitsTheLongestNameUpToACap() {
+    XCTAssertEqual(TmuxList.nameColumn([]), 4)
+    XCTAssertEqual(TmuxList.nameColumn(["ab", "web"]), 4)
+    XCTAssertEqual(TmuxList.nameColumn(["web", "billing"]), 7)
+    XCTAssertEqual(TmuxList.nameColumn(["fourteen-chars"]), 14)
+    XCTAssertEqual(TmuxList.nameColumn(["fifteen-chars-x"]), 14)
+    XCTAssertEqual(TmuxList.nameColumn(["café"]), 4, "counted in characters, not bytes")
+  }
 }

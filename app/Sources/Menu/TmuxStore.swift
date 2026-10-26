@@ -102,6 +102,105 @@ enum TmuxList {
     }
   }
 
+  /// How long something ran: "45s", "18m", "1h 20m", "2d".
+  static func duration(_ interval: TimeInterval) -> String {
+    let seconds = max(0, Int(interval))
+    switch seconds {
+    case ..<60: return "\(seconds)s"
+    case ..<3600: return "\(seconds / 60)m"
+    case ..<86400:
+      let minutes = seconds % 3600 / 60
+      return minutes == 0 ? "\(seconds / 3600)h" : "\(seconds / 3600)h \(minutes)m"
+    default: return "\(seconds / 86400)d"
+    }
+  }
+
+  /// What a row says at its right edge.
+  enum Status: Equatable {
+    /// Time since its last output: a shell, a server, an agent at rest.
+    case age(String)
+    /// An agent at work: its todo's progress when it keeps one, and how long it has run.
+    case working(done: Int?, total: Int?, elapsed: String)
+    /// It waits on him until he answers, seen or not: "asks you", "approve".
+    case waits(String)
+    case finished
+    /// It ended badly: "error", "exited".
+    case failed(String)
+    /// He (or someone) pressed Esc.
+    case stopped
+  }
+
+  /// The word for what an agent is doing; nil at rest.
+  static func stateWord(_ state: AgentInfo.State) -> String? {
+    switch state {
+    case .working: "working"
+    case .ask: "asks you"
+    case .approval: "approve"
+    case .done: "finished"
+    case .error: "error"
+    case .aborted: "stopped"
+    case .exited: "exited"
+    case .idle: nil
+    }
+  }
+
+  /// A row's right edge. A stop reads as its word until he has seen it,
+  /// then as its age; a question waits until it is answered.
+  static func status(_ agent: AgentInfo?, _ session: Tmux.Session, now: Date) -> Status {
+    let resting = Status.age(age(session.lastActivity, now: now))
+    guard let agent else { return resting }
+    switch agent.state {
+    case .working:
+      return .working(done: agent.todo?.done, total: agent.todo?.total, elapsed: age(agent.since ?? session.lastActivity, now: now))
+    case .ask, .approval: return .waits(stateWord(agent.state) ?? "")
+    case .idle: return resting
+    case .done, .error, .aborted, .exited:
+      guard agent.unread else { return resting }
+      switch agent.state {
+      case .done: return .finished
+      case .aborted: return .stopped
+      default: return .failed(stateWord(agent.state) ?? "")
+      }
+    }
+  }
+
+  /// A stop he hasn't seen grows a second line: the question, or the answer.
+  /// One line of it, whitespace folded.
+  static func note(_ agent: AgentInfo?) -> String? {
+    guard let agent, agent.unread else { return nil }
+    let text = [.ask, .approval].contains(agent.state) ? agent.question : agent.answer
+    let folded = text?.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    return folded?.isEmpty == false ? folded : nil
+  }
+
+  struct Fact: Equatable {
+    let label: String
+    let value: String
+  }
+
+  /// The long press's table for an agent, each row only when known.
+  static func facts(_ agent: AgentInfo, _ session: Tmux.Session, now: Date) -> [Fact] {
+    var facts: [Fact] = []
+    if let model = agent.model { facts.append(Fact(label: "model", value: [model, agent.thinking].compactMap { $0 }.joined(separator: " · "))) }
+    if let context = agent.context { facts.append(Fact(label: "context", value: "\(context)%")) }
+    if let cost = agent.cost { facts.append(Fact(label: "cost", value: String(format: "$%.2f", cost))) }
+    if agent.state == .working, let since = agent.since {
+      facts.append(Fact(label: "elapsed", value: duration(now.timeIntervalSince(since))))
+    } else if let took = agent.took {
+      facts.append(Fact(label: "took", value: duration(took)))
+    }
+    if let branch = agent.branch, !branch.isEmpty { facts.append(Fact(label: "branch", value: branch)) }
+    let path = agent.path ?? session.path
+    if !path.isEmpty { facts.append(Fact(label: "path", value: shortPath(path))) }
+    return facts
+  }
+
+  /// Names line up in a column as wide as the longest, in characters,
+  /// capped so a long one leaves room for the title.
+  static func nameColumn(_ names: [String]) -> Int {
+    min(max(names.map(\.count).max() ?? 0, 4), 14)
+  }
+
   /// Agents as a host just reported them, less the stops he has seen on
   /// this phone (`seen`: session id → the stop he saw) before the host's
   /// `@seen` caught up: a later stop is new again.
@@ -137,8 +236,6 @@ final class TmuxStore {
   }
 
   private(set) var servers: [String: Server] = [:]
-  /// Each snapshot's last lines, for its row.
-  private(set) var excerpts: [String: ScreenExcerpt] = [:]
   /// Each session's agent, by server key, then session id.
   private(set) var agents: [String: [String: AgentInfo]] = [:]
 
@@ -176,7 +273,6 @@ final class TmuxStore {
 
   /// The snapshot engine of a session, once it has been captured.
   func engine(_ key: String, _ id: String) -> Session? { engines[key + "\t" + id] }
-  func excerpt(_ key: String, _ id: String) -> ScreenExcerpt? { excerpts[key + "\t" + id] }
   /// The last capture of a session, as terminal bytes.
   func screen(_ key: String, _ id: String) -> Data? { screens[key + "\t" + id] }
 
@@ -277,7 +373,6 @@ final class TmuxStore {
       engines[id] = nil
       captured[id] = nil
       screens[id] = nil
-      excerpts[id] = nil
     }
     if servers[key] != server { servers[key] = server }
     // Sessions being closed take their agents with them.
@@ -336,8 +431,6 @@ final class TmuxStore {
     engine.feed(Tmux.screenBytes(screen, cursorX: session.cursorX, cursorY: session.cursorY))
     screens[id] = Tmux.screenBytes(screen, cursorX: session.cursorX, cursorY: session.cursorY, top: session.statusRows)
     captured[id] = session.lastActivity
-    let excerpt = ScreenExcerpt(engine)
-    if excerpts[id] != excerpt { excerpts[id] = excerpt }
   }
 
   // MARK: - Actions

@@ -38,6 +38,20 @@ struct MenuContent: View {
         tabs(titled: { $0 == model.tab })
       }
       Spacer(minLength: 8)
+      if model.tab == .tmux, model.tmuxSelecting {
+        let all = TmuxTab.rowIDs(TmuxStore.shared)
+        let checkedAll = !all.isEmpty && model.tmuxSelection.isSuperset(of: all)
+        Button(checkedAll ? "None" : "All") {
+          withAnimation(Helm.ease(0.15)) { model.tmuxSelection = checkedAll ? [] : all }
+        }
+        .font(Helm.sans(13, .medium))
+        .foregroundStyle(Helm.fg2)
+        .padding(.horizontal, 8)
+        .frame(height: 44)
+        .contentShape(Rectangle())
+        .buttonStyle(PressScale(0.94))
+        .transition(.opacity)
+      }
       if model.tab == .tmux, model.tmuxSelecting || TmuxStore.shared.hasSessions {
         Button(model.tmuxSelecting ? "Done" : "Select") {
           withAnimation(Helm.spring(0.4)) { model.tmuxSelecting.toggle() }
