@@ -36,6 +36,8 @@ struct SessionsOverview: View {
   @State private var newName = ""
   @State private var killing: Target?
   @State private var failure: String?
+  /// The group kept at the top while it loads and lays out.
+  @State private var reveal: String?
 
   /// A tmux session an action is about.
   struct Target: Identifiable {
@@ -72,8 +74,8 @@ struct SessionsOverview: View {
               VStack(alignment: .leading, spacing: 6) {
                 if showHeads {
                   HostHead(group: group, server: group.host.flatMap { store.servers[$0.serverKey] }, model: model) {
-                    let id = group.id
-                    DispatchQueue.main.async { withAnimation(Helm.spring(0.45)) { proxy.scrollTo(id, anchor: .top) } }
+                    reveal = group.id
+                    withAnimation(Helm.spring(0.45)) { proxy.scrollTo(group.id, anchor: .top) }
                   }
                 }
                 if !group.collapsed {
@@ -111,7 +113,17 @@ struct SessionsOverview: View {
         // (the terminal shrinks into its tile there), or at the host `tmux
         // host` asked for; closing forgets that host.
         .onChange(of: model.isOpen ? model.scrollTarget ?? Self.topID : nil, initial: true) { _, target in
+          reveal = target
           if let target { proxy.scrollTo(target, anchor: .top) } else { model.scrollTarget = nil }
+        }
+        // A host's sessions arrive after it opens, and the keyboard resizes
+        // the tiles: the group asked for stays at the top through both,
+        // until he scrolls himself.
+        .onScrollGeometryChange(for: CGSize.self, of: { CGSize(width: $0.containerSize.height, height: $0.contentSize.height) }) { _, _ in
+          if let reveal { proxy.scrollTo(reveal, anchor: .top) }
+        }
+        .onScrollPhaseChange { _, phase in
+          if phase == .interacting { reveal = nil }
         }
       }
     }
