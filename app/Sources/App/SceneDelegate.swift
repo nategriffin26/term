@@ -40,6 +40,13 @@ final class TerminalNavigationController: UINavigationController {
 
   required init?(coder: NSCoder) { fatalError("not used") }
 
+  /// The bar springs its items to new places when the window rotates or the
+  /// keyboard moves; the tmux count follows them.
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    (topViewController as? SpaceController)?.barDidLayout()
+  }
+
   override var childForStatusBarStyle: UIViewController? { topViewController }
   override var childForHomeIndicatorAutoHidden: UIViewController? { topViewController }
 }

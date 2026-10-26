@@ -127,3 +127,85 @@ final class DockBadge: UILabel {
     CGSize(width: max(18, super.intrinsicContentSize.width + 10), height: 16)
   }
 }
+
+/// The count on an item of the system's vertical bar (the tmux icon). The bar
+/// draws an item's own badge only when it builds the bar, so the count is a
+/// label laid over the bar on the icon's corner. The bar moves and springs its
+/// items itself (rotation, keyboard, overflow) and says nothing, so the label
+/// reads the icon's position on every frame until the icon has come to rest.
+@MainActor
+final class BarBadge {
+  let label = DockBadge()
+  private let host: () -> UIView?
+  private let itemFrame: (UIView) -> CGRect?
+  private var link: CADisplayLink?
+  private var lastItem: CGRect?
+  private var framesAtRest = 0
+  private static let restFrames = 15
+
+  /// True while it is reading the icon's position every frame.
+  var isFollowing: Bool { link != nil }
+
+  var count: Int {
+    get { label.count }
+    set {
+      label.count = newValue
+      follow()
+    }
+  }
+
+  /// `host` is the view the label lies over (nil while the bar is not shown);
+  /// `itemFrame` is the icon's frame in it (nil while the bar has none).
+  init(host: @escaping () -> UIView?, itemFrame: @escaping (UIView) -> CGRect?) {
+    self.host = host
+    self.itemFrame = itemFrame
+    // Above the bar however UIKit orders the bar's views.
+    label.layer.zPosition = 1000
+  }
+
+  isolated deinit { link?.invalidate() }
+
+  /// On the glyph's top-right corner, its top just above the icon's.
+  static func frame(onCornerOf item: CGRect, size: CGSize) -> CGRect {
+    CGRect(x: item.midX + 11 - size.width / 2, y: item.minY - 2, width: size.width, height: size.height)
+  }
+
+  /// The bar may have moved its items: place the label now and keep placing it until they stop.
+  func follow() {
+    framesAtRest = 0
+    lastItem = place()
+    guard link == nil, label.count > 0 else { return }
+    let ticker = Ticker { [weak self] in self?.tick() }
+    let link = CADisplayLink(target: ticker, selector: #selector(Ticker.fire))
+    link.add(to: .main, forMode: .common)
+    self.link = link
+  }
+
+  private func tick() {
+    let item = place()
+    if item == lastItem { framesAtRest += 1 } else { framesAtRest = 0 }
+    lastItem = item
+    if framesAtRest >= Self.restFrames || label.count == 0 {
+      link?.invalidate()
+      link = nil
+    }
+  }
+
+  /// Puts the label on the icon, or hides it while there is no icon to put it on. Returns the icon's frame.
+  private func place() -> CGRect? {
+    guard label.count > 0, let host = host(), let item = itemFrame(host), item.width > 0 else {
+      label.isHidden = true
+      return nil
+    }
+    if label.superview !== host { host.addSubview(label) }
+    label.frame = Self.frame(onCornerOf: item, size: label.intrinsicContentSize)
+    label.isHidden = false
+    return item
+  }
+
+  private final class Ticker: NSObject {
+    let onFire: () -> Void
+    init(_ onFire: @escaping () -> Void) { self.onFire = onFire }
+    @objc func fire() { onFire() }
+  }
+}
