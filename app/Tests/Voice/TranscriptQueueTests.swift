@@ -424,7 +424,8 @@ final class DictationTests: XCTestCase {
 
   /// Catches the bug the user reported: text generated while they are still
   /// talking. Two sentences with a pause between send nothing while
-  /// listening; stopping sends the recording once and types it once.
+  /// listening; stopping sends the recording once, with the terminal's
+  /// screen as its prompt, and types it once.
   func testNothingIsSentWhileRecordingAndTheTextTypesOnceAfterStop() async throws {
     let service = Service()
     service.reply = { _ in "Open the config, then run the tests." }
@@ -439,12 +440,14 @@ final class DictationTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(500))
     XCTAssertEqual(service.calls, 0, "sent while recording")
     XCTAssertEqual(terminal.typed, [])
+    terminal.dictationPrompt = "~/src % ls\nkubeconfig.yaml  zxq-deploy.sh"
     dictation.stop()
     XCTAssertEqual(dictation.state, .transcribing(pending: 1), "transcribing shows from the stop")
     await until("typed after stop") { !terminal.typed.isEmpty }
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertEqual(terminal.typed, ["Open the config, then run the tests."])
     XCTAssertEqual(service.calls, 1)
+    XCTAssertEqual(service.prompts, ["~/src % ls\nkubeconfig.yaml  zxq-deploy.sh"])
     XCTAssertEqual(dictation.state, .idle)
   }
 

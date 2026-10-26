@@ -36,6 +36,13 @@ final class RecordingTests: XCTestCase {
     XCTAssertEqual(recording(frames(room, 200) + frames(-40, 1) + frames(room, 100)).parts().count, 1, "one frame over the room counts")
   }
 
+  /// Catches a very quiet room's own noise read as speech: a room at -90 dBFS
+  /// with a hiss at -70 stays under the -55 dBFS line, so nothing is sent.
+  func testHissInAVeryQuietRoomIsNotSpeech() {
+    XCTAssertEqual(recording(frames(-90, 200) + frames(-70, 40) + frames(-90, 100)).parts().count, 0)
+    XCTAssertEqual(recording(frames(-90, 200) + frames(-50, 40) + frames(-90, 100)).parts().count, 1, "-50 is over the line")
+  }
+
   /// Catches the room sent with the speech (cost, and silence the model
   /// fills with words) or first and last sounds cut off: 0.3 s is kept
   /// before the first frame over the room and 0.5 s after the last.
