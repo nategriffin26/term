@@ -8,6 +8,7 @@ final class Input {
     private var buttons: [ScreenWire.MouseButton] = []
     private var keys = Set<UInt16>()
     private(set) var lastPoint: CGPoint?
+    private(set) var lastMoveTime = -Double.infinity
 
     init(post: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) }) {
         self.post = post
@@ -40,6 +41,7 @@ final class Input {
 
     func move(_ point: ScreenWire.Point) {
         guard point.x.isFinite, point.y.isFinite else { return }
+        lastMoveTime = ProcessInfo.processInfo.systemUptime
         let button = buttons.last
         let type: CGEventType = button == .left ? .leftMouseDragged :
             button == .right ? .rightMouseDragged : button == .middle ? .otherMouseDragged : .mouseMoved

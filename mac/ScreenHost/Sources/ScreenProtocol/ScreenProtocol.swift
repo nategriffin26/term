@@ -67,6 +67,8 @@ public struct Rect: Codable, Equatable, Sendable {
 /// - high: native pixels at the full bitrate;
 /// - medium: three quarters of the pixels on each axis at half the bitrate;
 /// - low: half the pixels on each axis at a quarter of the bitrate.
+/// Dimensions round down to even pixels for 4:2:0 encoding, so capture,
+/// VideoFormat and the decoded image have identical sizes.
 /// A level change restarts each stream with a VideoFormat (its new pixel size) and a key frame.
 public enum QualityLevel: String, Codable, Equatable, Sendable {
   case high, medium, low

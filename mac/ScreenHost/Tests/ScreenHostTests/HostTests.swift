@@ -4,6 +4,38 @@ import ScreenProtocol
 @testable import ScreenHost
 
 final class HostTests: XCTestCase {
+    func testWelcomeIncludesQualityAndCursorBeforePolling() throws {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let host = Host(clipboard: Clipboard(pasteboard: board))
+        var pair: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+        let client = SocketClient(pair[0])
+        defer { client.close(); Darwin.close(pair[1]) }
+        host.connect(client)
+        try client.receive?(.hello, JSONEncoder().encode(ScreenWire.Hello()))
+        var bytes = [UInt8](repeating: 0, count: 65536)
+        let count = recv(pair[1], &bytes, bytes.count, MSG_DONTWAIT)
+        XCTAssertGreaterThan(count, 0)
+        var reader = ScreenWire.FrameReader()
+        reader.append(Data(bytes.prefix(max(0, count))))
+        XCTAssertEqual(try reader.next()?.0, .welcome)
+        let quality = try XCTUnwrap(reader.next())
+        XCTAssertEqual(quality.0, .qualityState)
+        XCTAssertEqual(try ScreenWire.decode(ScreenWire.QualityState.self, from: quality.1), .init(mode: .adaptive, level: .high))
+        XCTAssertEqual(try reader.next()?.0, .cursor)
+    }
+
+    func testPointerMovesPostSynchronouslyInOrder() {
+        var locations: [CGPoint] = []
+        let input = Input { locations.append($0.location) }
+        for x in 0..<100 {
+            input.move(.init(x: Double(x), y: -50))
+            XCTAssertEqual(locations.count, x + 1)
+            XCTAssertEqual(locations.last, CGPoint(x: x, y: -50))
+        }
+    }
+
     func testScrollAndMomentumUseDifferentPhaseEncodings() {
         var events: [CGEvent] = []
         let input = Input { events.append($0) }

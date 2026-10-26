@@ -41,6 +41,7 @@ final class Decoder {
     }
 
     func decode(_ message: ScreenWire.VideoFrame) throws {
+        let first = image == nil
         var block: CMBlockBuffer?
         let length = message.sample.count
         var result = CMBlockBufferCreateWithMemoryBlock(allocator: nil, memoryBlock: nil, blockLength: length,
@@ -56,6 +57,10 @@ final class Decoder {
         result = VTDecompressionSessionDecodeFrame(session!, sampleBuffer: sample!, flags: [], frameRefcon: nil, infoFlagsOut: nil)
         VTDecompressionSessionWaitForAsynchronousFrames(session!)
         try require(result == noErr, "Cannot decode video frame: \(result)")
+        if first, let image {
+            let clean = CVImageBufferGetCleanRect(image)
+            print("decoded_display=\(message.display) buffer_pixels=\(CVPixelBufferGetWidth(image))x\(CVPixelBufferGetHeight(image)) clean_rect=\(clean)")
+        }
     }
 
     func save(_ path: String) throws {
@@ -86,6 +91,18 @@ final class Connection {
     var pointerCount = 0
     var decodeFrames = true
     var recordTimeline = false
+    var qualityStates: [(state: ScreenWire.QualityState, time: Double)] = []
+    var formatsAwaitingKeyframe = Set<UInt32>()
+    private var readInterval: Double = 0
+    private var nextRead: Double = 0
+    private var delayedRead = false
+
+    /// Restricts the real socket reader, allowing SSH and then the host's send
+    /// queue to fill. No host-side congestion injection.
+    func limitReads(every seconds: Double) {
+        readInterval = seconds
+        nextRead = 0
+    }
     var timeline: [UInt32: [(micros: UInt64, key: Bool, bytes: Int, received: UInt64)]] = [:]
 
     init(path: String) throws {
@@ -118,6 +135,18 @@ final class Connection {
     }
 
     private func readAvailable() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now < nextRead {
+            guard !delayedRead else { return }
+            delayedRead = true
+            source.suspend()
+            DispatchQueue.main.asyncAfter(deadline: .now() + (nextRead - now)) { [weak self] in
+                guard let self else { return }
+                self.delayedRead = false
+                self.source.resume()
+            }
+            return
+        }
         while true {
         let count = Darwin.recv(descriptor, &buffer, buffer.count, MSG_DONTWAIT)
         if count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) { return }
@@ -129,16 +158,28 @@ final class Connection {
                 case .welcome: welcome = try ScreenWire.decode(ScreenWire.Welcome.self, from: payload)
                 case .failure: failure = try ScreenWire.decode(ScreenWire.Failure.self, from: payload).message
                 case .clipboard: clipboards.append(try ScreenWire.decode(ScreenWire.Clipboard.self, from: payload))
-                case .cursor: cursorCount += 1
+                case .cursor:
+                    cursorCount += 1
+                    let image = try ScreenWire.decode(ScreenWire.CursorImage.self, from: payload)
+                    let bitmap = NSBitmapImageRep(data: image.png)
+                    print("cursor_bytes=\(image.png.count) pixels=\(bitmap?.pixelsWide ?? 0)x\(bitmap?.pixelsHigh ?? 0) scale=\(image.scale) hotspot=\(image.hotX),\(image.hotY)")
+                case .qualityState:
+                    let state = try ScreenWire.decode(ScreenWire.QualityState.self, from: payload)
+                    qualityStates.append((state, ProcessInfo.processInfo.systemUptime))
+                    print("received_quality_mode=\(state.mode.rawValue) level=\(state.level.rawValue) uptime=\(ProcessInfo.processInfo.systemUptime)")
                 case .pointerMoved: pointerCount += 1
                 case .videoFormat:
                     let format = try ScreenWire.decodeVideoFormat(payload)
                     if formats[format.display] != format {
                         formats[format.display] = format
                         decoders[format.display] = try Decoder(format)
+                        formatsAwaitingKeyframe.insert(format.display)
                     }
                 case .videoFrame:
                     let frame = try ScreenWire.decodeVideoFrame(payload)
+                    if formatsAwaitingKeyframe.remove(frame.display) != nil {
+                        try require(frame.isKeyframe, "New video format did not start with a key frame")
+                    }
                     if recordTimeline { timeline[frame.display, default: []].append((frame.captureMicros, frame.isKeyframe, frame.sample.count, DispatchTime.now().uptimeNanoseconds / 1000)) }
                     if frame.isKeyframe && firstKeyMillis[frame.display] == nil {
                         firstKeyMillis[frame.display] = Double(DispatchTime.now().uptimeNanoseconds - watchTime) / 1_000_000
@@ -151,6 +192,10 @@ final class Connection {
                 }
             }
         } catch { failure = String(describing: error) }
+        if readInterval > 0 {
+            nextRead = ProcessInfo.processInfo.systemUptime + readInterval
+            return
+        }
         }
     }
 
@@ -189,5 +234,9 @@ final class Connection {
         try wait(5) { counts.values.reduce(0, +) > previous }
         print("direct_peer_refused=true current_client_survived=true")
     }
-    deinit { source.cancel(); Darwin.close(descriptor) }
+    deinit {
+        source.cancel()
+        if delayedRead { source.resume() }
+        Darwin.close(descriptor)
+    }
 }

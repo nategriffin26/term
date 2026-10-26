@@ -18,6 +18,10 @@ do {
     try connection.wait(5) { connection.welcome != nil }
     let welcome = connection.welcome!
     print("welcome_version=\(welcome.version) screen_access=\(welcome.access.screen) input_access=\(welcome.access.input) locked=\(welcome.locked) displays=\(welcome.displays.count)")
+    if arguments.contains("--quality") {
+        try exerciseQuality(connection)
+        exit(0)
+    }
     if !arguments.contains("--welcome") {
         let directory = option("--output") ?? NSTemporaryDirectory() + "term-screen-shots"
         try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)

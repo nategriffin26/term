@@ -27,10 +27,12 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
     private var lastChange: UInt64 = 0
     private var refresh: DispatchWorkItem?
     private var nextPTS: Int64 = 0
-    private let bitrate: Int
+    private let quality: StreamQuality
     private let output: (ScreenWire.VideoFormat?, ScreenWire.VideoFrame) -> Bool
     private let failure: (String) -> Void
     private let congested: () -> Bool
+    private let transportSkipped: () -> Void
+    private var congestionDrops = 0
     private var encodeTimes: [Double] = []
     private var sentBytes = 0
     private var sentFrames = 0
@@ -41,21 +43,22 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
     private var statisticsStart = DispatchTime.now().uptimeNanoseconds
     private let statistics = ProcessInfo.processInfo.environment["TERM_SCREEN_METRICS"] == "1"
 
-    init(display: ScreenWire.Display, source: SCDisplay,
-         congested: @escaping () -> Bool,
+    init(display: ScreenWire.Display, source: SCDisplay, level: ScreenWire.QualityLevel,
+         congested: @escaping () -> Bool, transportSkipped: @escaping () -> Void,
          output: @escaping (ScreenWire.VideoFormat?, ScreenWire.VideoFrame) -> Bool,
          failure: @escaping (String) -> Void) throws {
         self.display = display
         self.congested = congested
         self.output = output
         self.failure = failure
-        bitrate = max(4_000_000, display.pixelWidth * display.pixelHeight * 3)
+        self.transportSkipped = transportSkipped
+        quality = StreamQuality(display: display, level: level)
         super.init()
         do { try createEncoder(.hevc) }
         catch { try createEncoder(.h264) }
         let configuration = SCStreamConfiguration()
-        configuration.width = display.pixelWidth
-        configuration.height = display.pixelHeight
+        configuration.width = quality.width
+        configuration.height = quality.height
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         configuration.queueDepth = 6
@@ -103,7 +106,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true,
             kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true,
         ]
-        let status = VTCompressionSessionCreate(allocator: nil, width: Int32(display.pixelWidth), height: Int32(display.pixelHeight),
+        let status = VTCompressionSessionCreate(allocator: nil, width: Int32(quality.width), height: Int32(quality.height),
             codecType: requested == .hevc ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264,
             encoderSpecification: specification as CFDictionary, imageBufferAttributes: nil,
             compressedDataAllocator: nil, outputCallback: { context, stamp, status, _, sample in
@@ -120,7 +123,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: 60 as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxKeyFrameInterval, value: 120 as CFNumber)
-        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: bitrate as CFNumber)
+        VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, value: quality.bitrate as CFNumber)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_MaxAllowedFrameQP, value: 51 as CFNumber)
         if requested == .h264 {
             VTSessionSetProperty(session, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_High_AutoLevel)
@@ -133,6 +136,11 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
             encoder = nil
             throw HostError("Cannot prepare the video encoder (\(prepared)).")
         }
+        if statistics {
+            var actual: Unmanaged<CFTypeRef>?
+            VTSessionCopyProperty(session, key: kVTCompressionPropertyKey_AverageBitRate, allocator: nil, valueOut: &actual)
+            print("display=\(display.id) pixels=\(quality.width)x\(quality.height) encoder_bitrate=\(actual?.takeRetainedValue() ?? 0 as CFNumber)")
+        }
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
@@ -141,6 +149,9 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
               let raw = attachments.first?[.status] as? Int, SCFrameStatus(rawValue: raw) == .complete,
               let image = sampleBuffer.imageBuffer else { return }
         if lastImage != nil, let dirty = attachments.first?[.dirtyRects] as? [NSValue], dirty.allSatisfy({ $0.rectValue.isEmpty }) { return }
+        if statistics && lastImage == nil {
+            print("display=\(display.id) capture_pixels=\(CVPixelBufferGetWidth(image))x\(CVPixelBufferGetHeight(image))")
+        }
         capturedFrames += 1
         lastImage = image
         lastChange = DispatchTime.now().uptimeNanoseconds
@@ -164,6 +175,8 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
     private func encode(_ image: CVPixelBuffer, captureMicros: UInt64, sharp: Bool) {
         guard !stopped, let encoder else { return }
         guard !congested() else {
+            congestionDrops += 1
+            transportSkipped()
             waitingForDrain = true
             return
         }
@@ -176,7 +189,12 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
         if sharpEncoding != sharp {
             sharpEncoding = sharp
             VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxAllowedFrameQP, value: (sharp ? 16 : 51) as CFNumber)
-            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: (sharp ? bitrate * 3 : bitrate) as CFNumber)
+            VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, value: (sharp ? quality.bitrate * 3 : quality.bitrate) as CFNumber)
+            if statistics && sharp {
+                var actual: Unmanaged<CFTypeRef>?
+                VTSessionCopyProperty(encoder, key: kVTCompressionPropertyKey_AverageBitRate, allocator: nil, valueOut: &actual)
+                print("display=\(display.id) sharp_encoder_bitrate=\(actual?.takeRetainedValue() ?? 0 as CFNumber)")
+            }
         }
         let properties: CFDictionary? = needsKeyframe ? [kVTEncodeFrameOptionKey_ForceKeyFrame: true] as CFDictionary : nil
         needsKeyframe = false
@@ -219,7 +237,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         let newFormat = parameterSets.isEmpty ? nil : ScreenWire.VideoFormat(display: display.id, codec: codec,
-            width: UInt32(display.pixelWidth), height: UInt32(display.pixelHeight), parameterSets: parameterSets)
+            width: UInt32(quality.width), height: UInt32(quality.height), parameterSets: parameterSets)
         let length = CMBlockBufferGetDataLength(block)
         var bytes = Data(count: length)
         let copied = bytes.withUnsafeMutableBytes { CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: length, destination: $0.baseAddress!) }
@@ -232,6 +250,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
             sentBytes += length
         } else {
             transportDrops += 1
+            transportSkipped()
             awaitingKeyframe = true
             needsKeyframe = true
             waitingForDrain = true
@@ -242,11 +261,12 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
             let seconds = Double(now - statisticsStart) / 1_000_000_000
             if seconds >= 5 {
                 encodeTimes.sort()
-                print(String(format: "display=%u encode_ms_p50=%.2f encode_ms_p95=%.2f fps=%.2f Mbit_s=%.2f frames=%d captured=%d encoder_drops=%d transport_drops=%d codec_drops=%d",
-                    display.id, encodeTimes[encodeTimes.count / 2], encodeTimes[min(encodeTimes.count - 1, Int(Double(encodeTimes.count) * 0.95))],
-                    Double(sentFrames) / seconds, Double(sentBytes) * 8 / seconds / 1_000_000, sentFrames, capturedFrames, encoderDrops, transportDrops, codecDrops))
+                print(String(format: "display=%u pixels=%dx%d target_Mbit_s=%.2f encode_ms_p50=%.2f encode_ms_p95=%.2f fps=%.2f Mbit_s=%.2f frames=%d captured=%d encoder_drops=%d transport_drops=%d congestion_drops=%d codec_drops=%d",
+                    display.id, quality.width, quality.height, Double(quality.bitrate) / 1_000_000,
+                    encodeTimes[encodeTimes.count / 2], encodeTimes[min(encodeTimes.count - 1, Int(Double(encodeTimes.count) * 0.95))],
+                    Double(sentFrames) / seconds, Double(sentBytes) * 8 / seconds / 1_000_000, sentFrames, capturedFrames, encoderDrops, transportDrops, congestionDrops, codecDrops))
                 encodeTimes.removeAll(keepingCapacity: true)
-                sentFrames = 0; sentBytes = 0; capturedFrames = 0; encoderDrops = 0; transportDrops = 0; codecDrops = 0; statisticsStart = now
+                sentFrames = 0; sentBytes = 0; capturedFrames = 0; encoderDrops = 0; transportDrops = 0; congestionDrops = 0; codecDrops = 0; statisticsStart = now
             }
         }
         if waitingForDrain && inFlight == 0 && !congested() { drained() }

@@ -21,6 +21,8 @@ final class Host {
     private var pointer = Desktop.pointer
     private var timers: [DispatchSourceTimer] = []
     private var observers: [NSObjectProtocol] = []
+    private var quality = QualityController()
+    private var transportSkips = 0
 
     init(clipboard: Clipboard = Clipboard()) { self.clipboard = clipboard }
 
@@ -63,6 +65,8 @@ final class Host {
         for timer in timers { timer.cancel() }
         timers.removeAll()
         welcomed = false
+        quality = QualityController()
+        transportSkips = 0
         client = nil
     }
 
@@ -81,8 +85,10 @@ final class Host {
             displays = Desktop.displays()
             pointer = Desktop.pointer
             client?.send(.welcome, ScreenWire.Welcome(name: hostName(), displays: displays, locked: locked, access: access, pointer: pointer))
+            client?.send(.qualityState, quality.state)
             clipboardQueue.async { [clipboard] in clipboard.reset() }
             cursor.reset()
+            if let image = cursor.changed() { client?.send(.cursor, image) }
             timer(every: 1.0 / 60) { [weak self] in self?.pollPointer() }
             timer(every: 0.25) { [weak self] in
                 guard let self else { return }
@@ -90,6 +96,7 @@ final class Host {
                 self.setLocked(Desktop.locked())
             }
             timer(every: 2) { [weak self] in self?.pollAccess() }
+            timer(every: 1) { [weak self] in self?.sampleQuality() }
             return
         }
         switch kind {
@@ -100,6 +107,12 @@ final class Host {
         case .keyframe:
             let request = try ScreenWire.decode(ScreenWire.KeyframeRequest.self, from: data)
             streams[request.display]?.keyframe()
+        case .quality:
+            let request = try ScreenWire.decode(ScreenWire.QualityRequest.self, from: data)
+            let previous = quality.level
+            if quality.select(request.mode, at: ProcessInfo.processInfo.systemUptime) {
+                applyQuality(previous: previous)
+            }
         case .setClipboard:
             // On this queue, so a ⌘V right behind it pastes the new content.
             clipboard.set(try ScreenWire.decode(ScreenWire.Clipboard.self, from: data))
@@ -148,7 +161,9 @@ final class Host {
         if let image = cursor.changed() { client?.send(.cursor, image) }
         let actual = Desktop.pointer
         let reference = input.lastPoint ?? CGPoint(x: pointer.x, y: pointer.y)
-        if hypot(actual.x - reference.x, actual.y - reference.y) > 0.5,
+        // CGEvent can still report the previous position just after a posted move.
+        if ProcessInfo.processInfo.systemUptime - input.lastMoveTime >= 0.25,
+           hypot(actual.x - reference.x, actual.y - reference.y) > 0.5,
            hypot(actual.x - pointer.x, actual.y - pointer.y) > 0.5 {
             client?.send(.pointerMoved, actual)
         }
@@ -179,6 +194,28 @@ final class Host {
         synchronizeStreams()
     }
 
+    private func sampleQuality() {
+        let skipped = transportSkips
+        transportSkips = 0
+        guard !streams.isEmpty else { return }
+        let previous = quality.level
+        if quality.sample(skipped: skipped, blocked: (client?.pendingVideos ?? 0) >= 2,
+                          at: ProcessInfo.processInfo.systemUptime) {
+            applyQuality(previous: previous)
+        }
+    }
+
+    private func applyQuality(previous: ScreenWire.QualityLevel) {
+        client?.send(.qualityState, quality.state)
+        if ProcessInfo.processInfo.environment["TERM_SCREEN_METRICS"] == "1" {
+            print("quality_mode=\(quality.mode.rawValue) quality_level=\(quality.level.rawValue) uptime=\(ProcessInfo.processInfo.systemUptime)")
+        }
+        if quality.level != previous {
+            stopStreams()
+            synchronizeStreams()
+        }
+    }
+
     private func stopStreams() {
         generation += 1
         for stream in streams.values { stream.stop() }
@@ -206,10 +243,14 @@ final class Host {
                         self.client?.send(.failure, ScreenWire.Failure(message: "Display \(id) is no longer connected."))
                         continue
                     }
-                    let pipeline = try DisplayStream(display: display, source: source,
+                    let pipeline = try DisplayStream(display: display, source: source, level: self.quality.level,
                         congested: { [weak self] in
                             guard let self else { return true }
                             return (self.client?.pendingVideos ?? 2) + self.streams.values.reduce(0) { $0 + $1.inFlight } >= 2
+                        },
+                        transportSkipped: { [weak self] in
+                            guard let self, (self.client?.pendingVideos ?? 0) > 0 else { return }
+                            self.transportSkips += 1
                         },
                         output: { [weak self] format, frame in
                             guard let self, !self.locked, self.streams[id] != nil else { return false }
@@ -224,7 +265,11 @@ final class Host {
                         })
                     self.streams[id] = pipeline
                     do { try await pipeline.start() }
-                    catch { self.streams.removeValue(forKey: id)?.stop(); throw error }
+                    catch {
+                        guard self.generation == current else { return }
+                        self.streams.removeValue(forKey: id)?.stop()
+                        throw error
+                    }
                     guard self.generation == current else { return }
                     self.power.hold(!self.streams.isEmpty)
                 }
