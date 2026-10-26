@@ -33,6 +33,7 @@ fn expected() -> Vec<(String, u64)> {
     layout!(TermStatus, "TermStatus", [kind, last_heard_ms, rtt_ms]);
     layout!(TermCallbacks, "TermCallbacks", [ctx, event]);
     layout!(TermFileEntry, "TermFileEntry", [name, size, mtime, mode, flags]);
+    layout!(TermSvgImage, "TermSvgImage", [pixels, width, height]);
 
     macro_rules! values {
         ($($c:literal = $rust:expr),* $(,)?) => { $( v.push(($c.to_string(), $rust as u64)); )* };
@@ -73,6 +74,9 @@ fn expected() -> Vec<(String, u64)> {
         "TERM_TRANSPORT_MOSH" = transport::MOSH, "TERM_TRANSPORT_SSH" = transport::SSH,
         "TERM_PREDICT_ADAPTIVE" = predict::ADAPTIVE, "TERM_PREDICT_ALWAYS" = predict::ALWAYS,
         "TERM_PREDICT_NEVER" = predict::NEVER,
+        "TERM_SVG_OK" = svg_status::OK, "TERM_SVG_ARGUMENT" = svg_status::ARGUMENT,
+        "TERM_SVG_PARSE" = svg_status::PARSE, "TERM_SVG_NO_FONTS" = svg_status::NO_FONTS,
+        "TERM_SVG_TOO_LARGE" = svg_status::TOO_LARGE, "TERM_SVG_INTERNAL" = svg_status::INTERNAL,
     );
     v
 }

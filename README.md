@@ -162,7 +162,7 @@ app/                    Swift app (UIKit + Metal), XcodeGen project in project.y
   Sources/Menu          floating menu, Sessions overview, tmux tab, swipe HUD
   Sources/Files         SFTP browser, viewers, editor
 core/                   Rust workspace
-  termcore              C ABI (include/term.h), sessions, tokio runtime, SFTP
+  termcore              C ABI (include/term.h), sessions, tokio runtime, SFTP, SVG rasterizer
   vt                    libghostty-vt wrapper
   mosh                  sans-IO mosh 1.4 client
   ssh                   russh client, mosh bootstrap
@@ -179,6 +179,7 @@ docs/                   README images
 - [mosh](https://mosh.org), the protocol and the server Term talks to (GPL-3.0).
 - [russh](https://github.com/Eugeny/russh) and [russh-sftp](https://github.com/AspectUnk/russh-sftp) (Apache-2.0).
 - [Runestone](https://github.com/simonbs/Runestone) and [TreeSitterLanguages](https://github.com/simonbs/TreeSitterLanguages) for the editor, on [tree-sitter](https://tree-sitter.github.io) (MIT).
+- [resvg](https://github.com/linebender/resvg) rasterizes the diagrams Term draws (Apache-2.0 OR MIT).
 - [swift-cmark](https://github.com/swiftlang/swift-cmark) for Markdown (BSD-2-Clause).
 - [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and [Iosevka](https://github.com/be5invis/Iosevka) as patched by [Nerd Fonts](https://www.nerdfonts.com) (SIL OFL 1.1; licenses in [`app/Resources/Fonts`](app/Resources/Fonts)).
 - [Geist and Geist Mono](https://github.com/vercel/geist-font) for the app's chrome (SIL OFL 1.1; license in [`app/Sources/Menu/Fonts`](app/Sources/Menu/Fonts)).

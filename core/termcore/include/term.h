@@ -383,6 +383,43 @@ char *term_session_text(TermSession *s, uint16_t col0, uint32_t row0, uint16_t c
 
 void term_string_free(char *s);
 
+// ---- SVG (resvg, text feature only) -----------------------------------------
+// Rasterizes the diagram SVGs Pele produces. No resource is fetched: images
+// and external references in the SVG are ignored.
+
+// Registers the fonts SVG text is drawn with, from TTF/OTF files, replacing any
+// earlier set; call once at launch and again only when the font changes. The
+// first face's family also answers serif, sans-serif and monospace. Unreadable
+// paths are skipped. Returns the number of faces loaded; 0 clears the set.
+uint32_t term_svg_fonts(const char *const *paths, uint32_t count);
+
+typedef enum {
+  TERM_SVG_OK = 0,
+  TERM_SVG_ARGUMENT = 1,   // NULL/empty svg or NULL out
+  TERM_SVG_PARSE = 2,      // not an SVG resvg can parse, or it has no size
+  TERM_SVG_NO_FONTS = 3,   // term_svg_fonts has not loaded a face; text would be dropped
+  TERM_SVG_TOO_LARGE = 4,  // svg over 4 MiB, or output over 16384 px an edge / 16 Mpx
+  TERM_SVG_INTERNAL = 5,   // the rasterizer panicked (see term_svg_render)
+} TermSvgStatus;
+
+typedef struct {
+  uint8_t *pixels;  // width * height * 4 bytes, premultiplied RGBA, rows tightly packed
+  uint32_t width, height;
+} TermSvgImage;
+
+// Renders svg (UTF-8, `len` bytes) scaled so its width is width_px (0: the SVG's
+// own size) and its height keeps the aspect ratio, over `background`
+// (0xAARRGGBB; alpha 0 leaves it transparent). Thread-safe; ~2-6 ms for a
+// phone-sized diagram. On TERM_SVG_OK, *out owns the pixels until term_svg_free;
+// on any other status *out is zeroed.
+// A rasterizer panic is returned as TERM_SVG_INTERNAL only in builds that
+// unwind; the release profile has panic = "abort", where it ends the process.
+int32_t term_svg_render(const uint8_t *svg, size_t len, uint32_t width_px, uint32_t background,
+                        TermSvgImage *out);
+
+// Frees *img's pixels and zeroes it; NULL, a zeroed image or a second call is a no-op.
+void term_svg_free(TermSvgImage *img);
+
 #ifdef __cplusplus
 }
 #endif

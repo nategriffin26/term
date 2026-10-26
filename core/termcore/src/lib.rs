@@ -7,6 +7,7 @@ pub mod files;
 pub mod net;
 mod remote;
 mod session;
+pub mod svg;
 
 use std::ffi::{CStr, CString, c_char};
 use std::sync::Arc;
@@ -15,6 +16,7 @@ pub use abi::*;
 pub use files::*;
 pub use net::*;
 pub use session::Session;
+pub use svg::*;
 use session::{Remote, SCROLLBACK, State};
 
 /// A counted reference for the duration of one call, so a callback that frees
