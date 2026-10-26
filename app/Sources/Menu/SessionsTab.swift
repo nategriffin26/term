@@ -154,8 +154,8 @@ struct SessionsOverview: View {
   private func tile(_ item: SessionMap.Item, in group: SessionMap.Group, current: Tab?, size: CGSize, fonts: FontSet?) -> some View {
     switch item {
     case .tab(let id, let session, let others):
-      if let (space, tab) = model.space(of: id) {
-        TabTile(model: model, space: space, tab: tab, session: session, others: others, isCurrent: tab === current,
+      if let (owner, tab) = model.space(of: id) {
+        TabTile(model: model, owner: owner, tab: tab, session: session, others: others, isCurrent: tab === current,
                 size: size, fonts: fonts, actions: actions(group.host, session: session, tab: tab))
       }
     case .session(let session, let others):
@@ -403,7 +403,9 @@ private struct TileLabel: View {
 /// tmux session stays on its host and turns into a snapshot).
 private struct TabTile: View {
   let model: MenuModel
-  let space: SpaceController
+  /// The window the tab is in; tapping and History go through the window
+  /// showing the overview, which brings another window's tab forward.
+  let owner: SpaceController
   let tab: Tab
   let session: Tmux.Session?
   let others: Int
@@ -426,7 +428,7 @@ private struct TabTile: View {
             model.tileFrames[tab.id] = frame
           }
         Button {
-          space.close(tab)
+          owner.close(tab)
         } label: {
           Image(systemName: "xmark")
             .font(.system(size: 9, weight: .bold))
@@ -445,7 +447,7 @@ private struct TabTile: View {
                   isCurrent: isCurrent, dot: Self.dot(for: tab, isCurrent: isCurrent), others: others)
         if tab.isConnected {
           Button {
-            space.showHistory(for: tab)
+            model.space?.showHistory(for: tab)
           } label: {
             Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
               .font(.system(size: 13))
@@ -461,7 +463,7 @@ private struct TabTile: View {
       .frame(width: size.width, height: 36, alignment: .leading)
     }
     .contentShape(Rectangle())
-    .onTapGesture { space.zoom(into: tab) }
+    .onTapGesture { model.space?.zoom(into: tab) }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("\(tab.sessionName), \(tab.hostName ?? "local")")
     .accessibilityAddTraits(.isButton)
@@ -470,12 +472,12 @@ private struct TabTile: View {
         Button("Rename", systemImage: "pencil", action: rename)
       }
       if tab.isConnected {
-        Button("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") { space.showHistory(for: tab) }
+        Button("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") { model.space?.showHistory(for: tab) }
       }
       if others > 0, let detach = actions.detachOthers {
         Button("Detach Others", systemImage: "rectangle.portrait.and.arrow.right", action: detach)
       }
-      Button("Close Tab", systemImage: "xmark") { space.close(tab) }
+      Button("Close Tab", systemImage: "xmark") { owner.close(tab) }
       if let kill = actions.kill {
         Button("Kill Session", systemImage: "trash", role: .destructive, action: kill)
       }
