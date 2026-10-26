@@ -216,7 +216,29 @@ function ascii(json) {
 }
 
 // `@diagrams`: published sources oldest first, the value last written, and the hashes this message already added.
-const d = { list: [], json: "", writing: undefined, again: false, current: new Set() };
+const d = { list: [], json: "", writing: undefined, again: false, current: new Set(), seeded: false };
+
+/** An earlier omp in this pane published sources whose drawings are still on screen and in history: keep them. */
+function seedDiagrams() {
+  if (d.seeded) return;
+  d.seeded = true;
+  try {
+    execFile(tmux, ["show-options", "-pqv", "-t", pane, "@diagrams"], { timeout: 2_000 }, (error, stdout) => {
+      if (error) return;
+      let earlier;
+      try {
+        earlier = JSON.parse(String(stdout).trim())?.d;
+      } catch {
+        return;
+      }
+      if (!Array.isArray(earlier)) return;
+      const kept = earlier.filter(
+        (e) => typeof e?.h === "string" && typeof e.t === "number" && typeof e.src === "string" && !d.list.some((x) => x.h === e.h),
+      );
+      d.list = [...kept.map(({ h, t, src }) => ({ h, t, src })), ...d.list];
+    });
+  } catch {}
+}
 
 /** The sources of the closed ```mermaid fences in a message's text. */
 function fences(text) {
@@ -411,7 +433,10 @@ export default function termAgent(pi) {
       } catch {}
     });
 
-  on("session_start", (_e, ctx) => start(pi, ctx));
+  on("session_start", (_e, ctx) => {
+    seedDiagrams();
+    start(pi, ctx);
+  });
   on("session_switch", (_e, ctx) => start(pi, ctx));
 
   on("input", (e) => {

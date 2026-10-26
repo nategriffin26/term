@@ -12,7 +12,8 @@ interface EventHarness {
   emit(name: string, event?: object, ctx?: object): unknown;
   tick(ms?: number): Promise<void>;
 }
-function harness() {
+/** `pane`: the `@diagrams` value the pane already holds, as tmux prints it. */
+function harness(pane = "") {
   let clock = 1_792_987_200_100;
   let held = false;
   let seen = 0;
@@ -39,7 +40,7 @@ function harness() {
           const stamp = Number(value.match(/,([\d.]+)}$/)?.[1] ?? value);
           seen = args.includes("-F") ? Math.max(seen, stamp) : stamp;
         }
-        callback(null);
+        callback(null, args[0] === "show-options" && args.includes("@diagrams") ? pane + "\n" : "");
       };
       if (held && !args.includes("-u")) pending.push(finish);
       else finish();
@@ -51,10 +52,9 @@ function harness() {
     get agent() { return agent!; },
     /** The last `@diagrams` value written. */
     get diagrams() {
-      const set = commands.filter(args => args.includes("@diagrams")).at(-1);
-      return set?.at(-1);
+      return commands.filter(args => args[0] === "set-option" && args.includes("@diagrams")).at(-1)?.at(-1);
     },
-    get diagramWrites() { return commands.filter(args => args.includes("@diagrams")).length; },
+    get diagramWrites() { return commands.filter(args => args[0] === "set-option" && args.includes("@diagrams")).length; },
     get seen() { return seen; },
     hold() { held = true; },
     release() { held = false; for (const finish of pending.splice(0)) finish(); },
@@ -193,6 +193,24 @@ describe("Term omp diagrams", () => {
       await h.emit("message_end", said(fence(src)));
     }
     expect(published(h).d.map(e => e.src)).toEqual([seq, flow]);
+  });
+
+  test("a restarted omp keeps the sources an earlier one left in the pane, ahead of its own", async () => {
+    const earlier = { h: "0123456789ab", t: 1_792_980_000, src: seq };
+    const h = harness(JSON.stringify({ v: 1, d: [earlier] }));
+    await h.emit("session_start");
+    await h.emit("message_end", said(fence(flow)));
+    expect(published(h).d.map(e => e.src)).toEqual([seq, flow]);
+    expect(published(h).d[0]).toEqual(earlier);
+  });
+
+  test("a pane value that is not a source list, or entries missing fields, are dropped", async () => {
+    for (const pane of ["", "not json", JSON.stringify({ v: 1, d: "x" }), JSON.stringify({ v: 1, d: [{ h: "a", src: seq }, { h: 1, t: 1, src: seq }] })]) {
+      const h = harness(pane);
+      await h.emit("session_start");
+      await h.emit("message_end", said(fence(flow)));
+      expect(published(h).d.map(e => e.src)).toEqual([flow]);
+    }
   });
 
   test("the value stays within 12 KB by dropping the oldest, and one source over the cap is skipped", async () => {
