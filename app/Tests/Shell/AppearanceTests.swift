@@ -392,6 +392,18 @@ final class DerivedAppThemeTests: XCTestCase {
     XCTAssertEqual(picked.accent.rgb, 0xFF6B86)
     XCTAssertEqual(picked.bg, a.bg)
   }
+
+  /// The system's white "Clear" label vanished on Dusk's mint (1.4:1) and
+  /// read poorly on its pink (2.7:1).
+  func testSwipeActionFillsCarryWhiteLabelsOnEveryTheme() {
+    for shipped in Theme.all {
+      let a = AppTheme.derived(from: shipped)
+      XCTAssertGreaterThanOrEqual(AppTheme.contrast(a.swipeBad.rgb, 0xFFFFFF), 4.5, shipped.name)
+      XCTAssertGreaterThanOrEqual(AppTheme.contrast(a.swipeAccent.rgb, 0xFFFFFF), 4.5, shipped.name)
+    }
+    let paper = AppTheme.derived(from: theme(fg: 0x000000, bg: 0xFFFFFF), accent: 0x1A5FB4)
+    XCTAssertEqual(paper.swipeAccent.rgb, 0x1A5FB4, "an accent white already reads on (6.5:1) is kept")
+  }
 }
 
 @MainActor

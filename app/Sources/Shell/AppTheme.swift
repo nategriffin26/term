@@ -36,6 +36,11 @@ struct AppTheme: Identifiable, Hashable, Sendable {
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) < 128
   }
 
+  /// Swipe-action fills. The system draws their labels white on every
+  /// theme, so they are `bad` and `accent` darkened until white reads on them.
+  var swipeBad: Tone { Tone(rgb: Self.legible(bad.rgb, on: 0xFFFFFF, ratio: 4.5, toward: 0x000000)) }
+  var swipeAccent: Tone { Tone(rgb: Self.legible(accent.rgb, on: 0xFFFFFF, ratio: 4.5, toward: 0x000000)) }
+
   /// The app's colours follow the terminal theme: ground, panel and text
   /// are the theme's own colours mixed toward each other; the accent (what
   /// needs you) is `accent`, else the cursor colour if it has colour, else
@@ -122,8 +127,11 @@ struct AppThemeTrait: UITraitDefinition {
 }
 
 extension UIWindowScene {
-  /// Hands the current app theme to this scene's views.
+  /// Hands the current app theme to this scene's views, and its lightness to
+  /// everything the system draws there (menus, alerts, keyboards, pickers).
   @MainActor func applyAppTheme() {
-    traitOverrides[AppThemeTrait.self] = AppSettings.shared.appTheme
+    let theme = AppSettings.shared.appTheme
+    traitOverrides[AppThemeTrait.self] = theme
+    traitOverrides.userInterfaceStyle = theme.isDark ? .dark : .light
   }
 }

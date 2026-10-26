@@ -12,6 +12,7 @@ import UIKit
 ///   muted, faint. Washes and hairlines are the text colour at fixed
 ///   opacities (fill < fill2 < fill3; line, line2), so light themes work
 ///   with no extra code. No literal colours, no white or black, no system blue.
+///   Swipe actions fill with `swipeBad` and `swipeAccent`: their labels are always white.
 /// - State: `needsYou` (the accent) is the one loud signal: a filled pill on
 ///   a row and the count on the dock and the tmux tab. `done` is the accent
 ///   as a check and a word, `working` a ring in fg, `failed` is bad. The
@@ -63,6 +64,10 @@ enum Chrome {
   @MainActor static var done: Color { accent }
   @MainActor static var working: Color { fg }
   @MainActor static var failed: Color { bad }
+
+  // Swipe actions: white labels on every theme (see AppTheme.swipeBad).
+  @MainActor static var swipeBad: Color { theme.swipeBad.color }
+  @MainActor static var swipeAccent: Color { theme.swipeAccent.color }
 
   /// Whether system controls (switches, keyboards, bars) should be dark.
   @MainActor static var isDark: Bool { theme.isDark }
@@ -158,7 +163,7 @@ enum Chrome {
 
   /// How much of the theme's ground tints glass: enough that text on it reads
   /// over a busy terminal, little enough that the terminal still shows.
-  static let glassTint: CGFloat = 0.55
+  static let glassTint: CGFloat = 0.75
 
   /// Liquid Glass tinted with the theme's ground, for SwiftUI's `glassEffect`.
   @MainActor static var glass: Glass { .regular.tint(theme.bg.color.opacity(glassTint)) }
@@ -198,7 +203,6 @@ final class GlassView: UIVisualEffectView {
     let theme = traitCollection[AppThemeTrait.self]
     let effect = UIGlassEffect(style: .regular)
     effect.tintColor = theme.bg.uiColor.withAlphaComponent(Chrome.glassTint)
-    overrideUserInterfaceStyle = theme.isDark ? .dark : .light
     return effect
   }
 }

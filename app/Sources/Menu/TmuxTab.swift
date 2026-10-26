@@ -75,11 +75,15 @@ struct TmuxTab: View {
     .id(generation)
     .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
-    .contentMargins(.horizontal, Chrome.Space.m, for: .scrollContent)
+    .contentMargins(.horizontal, 0, for: .scrollContent)
     .contentMargins(.top, Chrome.Space.s, for: .scrollContent)
     .listSectionSpacing(Chrome.Space.s)
     .environment(\.defaultMinListRowHeight, 0)
     .animation(Chrome.fade, value: hosts.map { store.servers[$0.serverKey]?.sessions.map(\.id) ?? [] })
+    // The groups' edges are the list's: a row swiped open slides its text
+    // past the group's leading edge, and the list's bounds cut it there.
+    .clipped()
+    .padding(.horizontal, Chrome.Space.m)
   }
 
   private func row(_ session: Tmux.Session, on host: Host, nameWidth: CGFloat, store: TmuxStore) -> some View {
@@ -114,10 +118,10 @@ struct TmuxTab: View {
     .listRowSeparatorTint(Chrome.line)
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
       Button("Close", role: .destructive, action: close)
-        .tint(Chrome.bad)
+        .tint(Chrome.swipeBad)
       if unread {
         Button("Clear", action: clear)
-          .tint(Chrome.accent)
+          .tint(Chrome.swipeAccent)
       }
     }
     .contextMenu {
@@ -136,6 +140,8 @@ struct TmuxTab: View {
         TmuxPreview(model: model, host: host, session: session)
       }
     }
+    // The menu's icons take the tint: the system menu's text colour, not the accent.
+    .tint(.primary)
     .accessibilityLabel("\(session.name), \(host.alias)")
     .accessibilityValue([agent?.title ?? session.command, agent.flatMap { TmuxList.stateWord($0.state) }, TmuxList.note(agent)]
       .compactMap { $0 }.joined(separator: ", "))

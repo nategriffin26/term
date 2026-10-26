@@ -48,11 +48,6 @@ final class MenuPanel: UIViewController {
     view.isHidden = true
   }
 
-  /// The system controls' style does not follow the app theme by itself.
-  private func applyAppTheme() {
-    host.overrideUserInterfaceStyle = traitCollection[AppThemeTrait.self].isDark ? .dark : .light
-  }
-
   override func viewDidLoad() {
     super.viewDidLoad()
     scrim.backgroundColor = Chrome.UI.overlay
@@ -60,8 +55,6 @@ final class MenuPanel: UIViewController {
     scrim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(scrimTapped)))
     view.addSubview(scrim)
 
-    registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.applyAppTheme() }
-    applyAppTheme()
     view.addSubview(card)
     card.addSubview(glass)
 

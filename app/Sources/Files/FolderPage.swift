@@ -139,9 +139,8 @@ private struct FolderList: View {
         .buttonStyle(RowStyle())
         .contextMenu { EntryMenu(entry: entry, browser: browser, context: context) }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-          // The list's accent tint would otherwise paint it blue.
           Button(role: .destructive) { Task { await browser.delete([entry]) } } label: { Label("Delete", systemImage: "trash") }
-            .tint(Chrome.bad)
+            .tint(Chrome.swipeBad)
         }
         .onDrag { browser.dragProvider(entry) }
     }
