@@ -59,19 +59,24 @@ struct TmuxTab: View {
     return List {
       ForEach(hosts) { host in
         let server = store.servers[host.serverKey]
+        let sessions = server?.sessions ?? []
+        let stateRow = server.map(TmuxServerState.shows) ?? false
         Section {
-          ForEach(server?.sessions ?? []) { session in
-            row(session, on: host, nameWidth: nameWidth, store: store)
+          ForEach(sessions) { session in
+            row(session, on: host, nameWidth: nameWidth, store: store,
+                ends: GroupEnds(top: session.id == sessions.first?.id, bottom: !stateRow && session.id == sessions.last?.id))
           }
-          if let server, TmuxServerState.shows(server) {
+          if let server, stateRow {
             TmuxServerState(host: host, server: server)
               .listRowInsets(EdgeInsets(top: 0, leading: Chrome.Space.l, bottom: 0, trailing: Chrome.Space.l))
-              .listRowBackground(Chrome.fill)
+              .listRowBackground(GroupEnds(top: sessions.isEmpty, bottom: true).shape.fill(Chrome.fill))
           }
         } header: {
           TmuxHostHead(host: host, server: server)
             .listRowInsets(EdgeInsets(top: 0, leading: Chrome.Space.l, bottom: Chrome.Space.s, trailing: Chrome.Space.l))
         }
+        // With no side margins the list draws square section lines across the rounded group.
+        .listSectionSeparator(.hidden)
       }
     }
     .id(generation)
@@ -83,12 +88,13 @@ struct TmuxTab: View {
     .environment(\.defaultMinListRowHeight, 0)
     .animation(Chrome.fade, value: hosts.map { store.servers[$0.serverKey]?.sessions.map(\.id) ?? [] })
     // The groups' edges are the list's: a row swiped open slides its text
-    // past the group's leading edge, and the list's bounds cut it there.
+    // past the group's leading edge, and the list's bounds cut it there. With
+    // no side margins the list draws square groups, so the rows round the ends.
     .clipped()
     .padding(.horizontal, Chrome.Space.m)
   }
 
-  private func row(_ session: Tmux.Session, on host: Host, nameWidth: CGFloat, store: TmuxStore) -> some View {
+  private func row(_ session: Tmux.Session, on host: Host, nameWidth: CGFloat, store: TmuxStore, ends: GroupEnds) -> some View {
     let id = Self.rowID(host, session)
     let mine = model.tabs(on: host, session: session.name)
     let others = TmuxList.others(on: session, term: mine.filter(\.isConnected).count)
@@ -115,8 +121,9 @@ struct TmuxTab: View {
               checked: model.tmuxSelecting ? model.tmuxSelection.contains(id) : nil)
     }
     .buttonStyle(RowStyle())
+    .clipShape(ends.shape)
     .listRowInsets(EdgeInsets())
-    .listRowBackground(Chrome.fill)
+    .listRowBackground(ends.shape.fill(Chrome.fill))
     .listRowSeparatorTint(Chrome.line)
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
       Button("Close", role: .destructive) { Haptics.firm(); close() }
@@ -221,6 +228,18 @@ struct TmuxTab: View {
 
   static func rowID(_ host: Host, _ session: Tmux.Session) -> String {
     host.serverKey + "\t" + session.id
+  }
+}
+
+/// Which ends of a group a row sits at: those corners take the group radius.
+private struct GroupEnds {
+  let top: Bool
+  let bottom: Bool
+
+  var shape: UnevenRoundedRectangle {
+    let top = top ? Chrome.Radius.group : 0, bottom = bottom ? Chrome.Radius.group : 0
+    return UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom,
+                                  bottomTrailingRadius: bottom, topTrailingRadius: top, style: .continuous)
   }
 }
 
