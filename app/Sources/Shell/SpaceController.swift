@@ -541,9 +541,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       let w = d.pane.container.bounds.width
       var x = g.translation(in: view).x
       if (x < 0 && d.next == nil) || (x > 0 && d.previous == nil) { x *= 0.25 }
-      d.pane.tab.view.transform = CGAffineTransform(translationX: x, y: 0)
-      d.next?.view.transform = CGAffineTransform(translationX: w + x, y: 0)
-      d.previous?.view.transform = CGAffineTransform(translationX: -w + x, y: 0)
+      apply(PagerStrip.dragged(by: x, width: w), to: d, current: d.pane.tab)
       trackHUD(d, offset: x / max(w, 1))
     case .ended:
       guard let d = drag else { return }
@@ -559,6 +557,12 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     }
   }
 
+  private func apply(_ strip: PagerStrip, to d: Drag, current: Tab) {
+    current.view.transform = CGAffineTransform(translationX: strip.current, y: 0)
+    d.previous?.view.transform = CGAffineTransform(translationX: strip.previous, y: 0)
+    d.next?.view.transform = CGAffineTransform(translationX: strip.next, y: 0)
+  }
+
   private func finishDrag(to target: Tab?, animated: Bool) {
     guard let d = drag else { return }
     drag = nil
@@ -568,17 +572,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let hadFocus = current.view.isFirstResponder
     settleHUD(on: target ?? current, in: d.pane)
     let moves = {
-      if let target {
-        let out: CGFloat = target === d.next ? -w : w
-        current.view.transform = CGAffineTransform(translationX: out, y: 0)
-        target.view.transform = .identity
-        let other = target === d.next ? d.previous : d.next
-        other?.view.transform = CGAffineTransform(translationX: -out, y: 0)
-      } else {
-        current.view.transform = .identity
-        d.next?.view.transform = CGAffineTransform(translationX: w, y: 0)
-        d.previous?.view.transform = CGAffineTransform(translationX: -w, y: 0)
-      }
+      let page: PagerStrip.Page = target == nil ? .current : target === d.next ? .next : .previous
+      self.apply(PagerStrip.resting(on: page, width: w), to: d, current: current)
     }
     let done = { [weak self] in
       guard let self else { return }
