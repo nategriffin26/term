@@ -101,8 +101,8 @@ final class Host {
             let request = try ScreenWire.decode(ScreenWire.KeyframeRequest.self, from: data)
             streams[request.display]?.keyframe()
         case .setClipboard:
-            let content = try ScreenWire.decode(ScreenWire.Clipboard.self, from: data)
-            clipboardQueue.async { [clipboard] in clipboard.set(content) }
+            // On this queue, so a ⌘V right behind it pastes the new content.
+            clipboard.set(try ScreenWire.decode(ScreenWire.Clipboard.self, from: data))
         case .pointer, .button, .scroll, .key, .modifiers, .text:
             guard access.input else { client?.send(.failure, ScreenWire.Failure(message: "Allow Term Screen Host in System Settings > Privacy & Security > Accessibility.")); return }
             switch kind {

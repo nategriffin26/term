@@ -100,6 +100,27 @@ final class HostTests: XCTestCase {
         XCTAssertNil(clipboard.changed())
     }
 
+    // Bug: a phone write landing while a Mac read runs was recorded as already
+    // sent, then echoed back to the phone on the next poll.
+    func testWriteDuringReadIsNeverSentBack() {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        var clipboard: Clipboard!
+        var wrote = false
+        clipboard = Clipboard(pasteboard: board, access: { .allow }, read: { type in
+            if !wrote {
+                wrote = true
+                clipboard.set(.init(items: [.init(type: "public.utf8-plain-text", data: Data("from the phone".utf8))]))
+            }
+            return board.data(forType: type)
+        })
+        board.clearContents()
+        board.setString("copied on the Mac", forType: .string)
+        XCTAssertNil(clipboard.changed())
+        XCTAssertNil(clipboard.changed())
+        XCTAssertEqual(board.string(forType: .string), "from the phone")
+    }
+
     func testDeniedClipboardNeverReadsAndReportsOncePerConnection() {
         let board = NSPasteboard.withUniqueName()
         defer { board.releaseGlobally() }

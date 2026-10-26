@@ -66,7 +66,12 @@ final class Clipboard {
     private let pasteboard: NSPasteboard
     private let access: () -> Access
     private let read: (NSPasteboard.PasteboardType) -> Data?
+    /// The change count of the content this side last read or wrote. Writes
+    /// come from the main queue (in order with the input that follows them,
+    /// such as ⌘V) while reads run on the clipboard queue and may wait on the
+    /// system's paste approval, so only this count is shared, under its lock.
     private var count: Int
+    private let countLock = NSLock()
     private var attemptedApproval = false
     private var reportedDenial = false
 
@@ -88,7 +93,7 @@ final class Clipboard {
     }
 
     func reset() {
-        count = pasteboard.changeCount
+        countLock.withLock { count = pasteboard.changeCount }
         attemptedApproval = false
         reportedDenial = false
     }
@@ -106,8 +111,9 @@ final class Clipboard {
             }
             return true
         }
-        guard permitted(), count != pasteboard.changeCount else { return nil }
+        let known = countLock.withLock { count }
         let nextCount = pasteboard.changeCount
+        guard permitted(), known != nextCount else { return nil }
         var items = Self.types.compactMap { type -> ScreenWire.ClipboardItem? in
             guard permitted(), let data = read(.init(type)) else { return nil }
             return .init(type: type, data: data)
@@ -119,18 +125,27 @@ final class Clipboard {
             items.append(.init(type: "public.png", data: png))
         }
         guard permitted() else { return nil }
-        count = nextCount
+        // A write landed while this read ran: the content may be mixed, and the write is ours.
+        let superseded = countLock.withLock {
+            guard count == known else { return true }
+            count = nextCount
+            return false
+        }
+        if superseded { return nil }
         return .init(items: items)
     }
 
+    /// Replaces the Mac's clipboard at once, so input that follows it sees the new content.
     func set(_ clipboard: ScreenWire.Clipboard) {
         let item = NSPasteboardItem()
         for representation in clipboard.items where Self.types.contains(representation.type) {
             item.setData(representation.data, forType: .init(representation.type))
         }
-        pasteboard.clearContents()
-        if !item.types.isEmpty { pasteboard.writeObjects([item]) }
-        count = pasteboard.changeCount
+        countLock.withLock {
+            pasteboard.clearContents()
+            if !item.types.isEmpty { pasteboard.writeObjects([item]) }
+            count = pasteboard.changeCount
+        }
     }
 }
 
