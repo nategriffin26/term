@@ -62,7 +62,7 @@ final class Inserter {
     case .files:
       let files = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
       files.allowsMultipleSelection = true
-      files.overrideUserInterfaceStyle = .dark
+      files.overrideUserInterfaceStyle = Chrome.isDark ? .dark : .light
       let delegate = DocumentImporter.Coordinator { [weak self, weak tab] urls in
         self?.pickerDelegate = nil
         guard let self, let tab, !urls.isEmpty else { return }
