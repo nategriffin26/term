@@ -191,8 +191,8 @@ final class TmuxListTests: XCTestCase {
   /// he hasn't reads as a bare age), so the row lies about needing him.
   func testAStopReadsAsItsWordUntilSeenThenAsItsAge() {
     XCTAssertEqual(TmuxList.status(agent(.done, unread: true), quiet, now: now), .finished)
-    XCTAssertEqual(TmuxList.status(agent(.error, unread: true), quiet, now: now), .failed("error"))
-    XCTAssertEqual(TmuxList.status(agent(.exited, unread: true), quiet, now: now), .failed("exited"))
+    XCTAssertEqual(TmuxList.status(agent(.error, unread: true), quiet, now: now), .failed("Failed"))
+    XCTAssertEqual(TmuxList.status(agent(.exited, unread: true), quiet, now: now), .failed("Exited"))
     XCTAssertEqual(TmuxList.status(agent(.aborted, unread: true), quiet, now: now), .stopped)
     for state in [AgentInfo.State.done, .error, .exited, .aborted, .idle] {
       XCTAssertEqual(TmuxList.status(agent(state), quiet, now: now), .age("25m"), "\(state) once seen")
@@ -203,9 +203,9 @@ final class TmuxListTests: XCTestCase {
   /// Bug it catches: entering a session (which marks it seen) hides that
   /// omp still waits on an unanswered question.
   func testAQuestionWaitsUntilAnsweredSeenOrNot() {
-    XCTAssertEqual(TmuxList.status(agent(.ask), quiet, now: now), .waits("asks you"))
-    XCTAssertEqual(TmuxList.status(agent(.ask, unread: true), quiet, now: now), .waits("asks you"))
-    XCTAssertEqual(TmuxList.status(agent(.approval), quiet, now: now), .waits("approve"))
+    XCTAssertEqual(TmuxList.status(agent(.ask), quiet, now: now), .waits("Asks you"))
+    XCTAssertEqual(TmuxList.status(agent(.ask, unread: true), quiet, now: now), .waits("Asks you"))
+    XCTAssertEqual(TmuxList.status(agent(.approval), quiet, now: now), .waits("Approve"))
   }
 
   /// Bug it catches: a working agent's time counted from the session's last

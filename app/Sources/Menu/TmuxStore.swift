@@ -121,25 +121,26 @@ enum TmuxList {
     case age(String)
     /// An agent at work: its todo's progress when it keeps one, and how long it has run.
     case working(done: Int?, total: Int?, elapsed: String)
-    /// It waits on him until he answers, seen or not: "asks you", "approve".
+    /// It waits on him until he answers, seen or not: "Asks you", "Approve".
     case waits(String)
     case finished
-    /// It ended badly: "error", "exited".
+    /// It ended badly: "Failed", "Exited".
     case failed(String)
     /// He (or someone) pressed Esc.
     case stopped
   }
 
-  /// The word for what an agent is doing; nil at rest.
+  /// The word for what an agent is doing, in sentence case like the rest of
+  /// the chrome; nil at rest.
   static func stateWord(_ state: AgentInfo.State) -> String? {
     switch state {
-    case .working: "working"
-    case .ask: "asks you"
-    case .approval: "approve"
-    case .done: "finished"
-    case .error: "error"
-    case .aborted: "stopped"
-    case .exited: "exited"
+    case .working: "Working"
+    case .ask: "Asks you"
+    case .approval: "Approve"
+    case .done: "Finished"
+    case .error: "Failed"
+    case .aborted: "Stopped"
+    case .exited: "Exited"
     case .idle: nil
     }
   }

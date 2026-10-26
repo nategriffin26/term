@@ -3,22 +3,26 @@ import UIKit
 
 /// The menu's tabs as icons in a free strip of the screen (the iPhone Duo
 /// inner display's status-bar band, left of the clock). Each icon opens the
-/// panel out of itself; the open tab's icon is drawn in the accent.
+/// panel out of itself; while the panel is open the icons sit on a glass
+/// capsule and the open tab's icon is filled in the accent.
 @MainActor
 final class MenuDock: UIView {
   var onTap: ((MenuTab) -> Void)?
+  private let glass = GlassView()
   private var buttons: [MenuTab: UIButton] = [:]
   /// Counts on icons (the tmux tab: sessions whose agent stopped for him).
   private var badges: [MenuTab: UILabel] = [:]
+  private var selected: MenuTab?
 
-  static let itemSize = CGSize(width: 44, height: 44)
+  static let itemSize = CGSize(width: Chrome.Size.target, height: Chrome.Size.target)
 
   override init(frame: CGRect) {
     super.init(frame: frame)
+    glass.cornerConfiguration = .capsule()
+    glass.isUserInteractionEnabled = false
+    addSubview(glass)
     for tab in MenuTab.allCases {
       var config = UIButton.Configuration.plain()
-      config.image = UIImage(systemName: tab.symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular))
-      config.baseForegroundColor = Chrome.UI.fg2
       config.contentInsets = .zero
       let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in self?.onTap?(tab) })
       button.accessibilityLabel = tab.title
@@ -28,6 +32,7 @@ final class MenuDock: UIView {
       addSubview(button)
       buttons[tab] = button
     }
+    drawIcons()
   }
 
   required init?(coder: NSCoder) { fatalError("not used") }
@@ -38,14 +43,15 @@ final class MenuDock: UIView {
 
   override func layoutSubviews() {
     super.layoutSubviews()
+    glass.frame = bounds.insetBy(dx: 0, dy: (Chrome.Size.target - Chrome.Size.circle) / 2)
     for (i, tab) in MenuTab.allCases.enumerated() {
       buttons[tab]?.frame = CGRect(origin: CGPoint(x: CGFloat(i) * Self.itemSize.width, y: 0), size: Self.itemSize)
     }
     for (tab, badge) in badges {
       guard let button = buttons[tab] else { continue }
-      // On the glyph's top-right corner.
-      let width = max(16, badge.intrinsicContentSize.width + 8)
-      badge.frame = CGRect(x: button.frame.midX + 13 - width / 2, y: button.frame.midY - 17, width: width, height: 16)
+      // On the glyph's top-right corner, its top on the capsule's.
+      let width = max(18, badge.intrinsicContentSize.width + 10)
+      badge.frame = CGRect(x: button.frame.midX + 11 - width / 2, y: glass.frame.minY, width: width, height: 16)
     }
   }
 
@@ -58,8 +64,10 @@ final class MenuDock: UIView {
     }
     let badge = badges[tab] ?? {
       let label = UILabel()
-      label.font = Chrome.uiFont(.caption, .semibold)
+      label.font = Chrome.uiFont(.caption, .bold)
       label.textAlignment = .center
+      label.backgroundColor = Chrome.UI.accent
+      label.textColor = Chrome.UI.onAccent
       label.layer.cornerRadius = 8
       label.clipsToBounds = true
       label.isUserInteractionEnabled = false
@@ -67,17 +75,30 @@ final class MenuDock: UIView {
       badges[tab] = label
       return label
     }()
-    badge.backgroundColor = Chrome.UI.accent
-    badge.textColor = UIColor(Chrome.onAccent)
     badge.text = "\(count)"
     badge.isHidden = false
     setNeedsLayout()
   }
 
-  /// Draws `tab`'s icon in the accent (the open tab), the rest quiet.
+  /// The open tab (nil when the panel is closed): its icon filled in the
+  /// accent, the glass under the icons while the panel is open.
   func setSelected(_ tab: MenuTab?) {
-    for (t, button) in buttons {
-      button.configuration?.baseForegroundColor = t == tab ? Chrome.UI.accent : Chrome.UI.fg2
+    guard tab != selected else { return }
+    let opened = (selected == nil) != (tab == nil)
+    selected = tab
+    drawIcons()
+    guard opened else { return }
+    let animator = UIViewPropertyAnimator(duration: Chrome.springDuration, timingParameters: Chrome.springTiming)
+    animator.addAnimations { self.glass.isGlassShown = tab != nil }
+    animator.startAnimation()
+  }
+
+  private func drawIcons() {
+    for (tab, button) in buttons {
+      let on = tab == selected
+      button.configuration?.image = UIImage(systemName: on ? tab.selectedSymbol : tab.symbol, withConfiguration: Chrome.uiSymbol(.dock))
+      button.configuration?.baseForegroundColor = on ? Chrome.UI.accent : Chrome.UI.fg
+      button.accessibilityTraits = on ? [.button, .selected] : .button
     }
   }
 

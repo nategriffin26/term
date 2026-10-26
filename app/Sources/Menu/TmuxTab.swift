@@ -22,18 +22,12 @@ struct TmuxTab: View {
     let hosts = TmuxList.servers(ConfigStore.shared.hosts, first: model.tmuxTarget)
     VStack(spacing: 0) {
       if hosts.isEmpty {
-        VStack(spacing: 14) {
+        VStack(spacing: Chrome.Space.m) {
           Text("No saved hosts")
             .font(Chrome.font(.body, .semibold))
             .foregroundStyle(Chrome.fg)
           Button("Add Host") { model.tab = .settings }
-            .font(Chrome.font(.secondary, .medium))
-            .foregroundStyle(Chrome.fg)
-            .padding(.horizontal, 12)
-            .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Chrome.fill2))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Chrome.line2, lineWidth: 1))
-            .buttonStyle(PressScale())
+            .buttonStyle(CapsuleButtonStyle())
         }
         .padding(.top, 72)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -63,24 +57,27 @@ struct TmuxTab: View {
     return List {
       ForEach(hosts) { host in
         let server = store.servers[host.serverKey]
-        TmuxHostHead(host: host, server: server)
-          .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-          .listRowSeparator(.hidden)
-          .listRowBackground(Color.clear)
-        ForEach(server?.sessions ?? []) { session in
-          row(session, on: host, nameWidth: nameWidth, store: store)
-        }
-        if let server {
-          TmuxServerState(host: host, server: server)
-            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-            .listRowSeparator(.hidden)
-            .listRowBackground(Color.clear)
+        Section {
+          ForEach(server?.sessions ?? []) { session in
+            row(session, on: host, nameWidth: nameWidth, store: store)
+          }
+          if let server, TmuxServerState.shows(server) {
+            TmuxServerState(host: host, server: server)
+              .listRowInsets(EdgeInsets(top: 0, leading: Chrome.Space.l, bottom: 0, trailing: Chrome.Space.l))
+              .listRowBackground(Chrome.fill)
+          }
+        } header: {
+          TmuxHostHead(host: host, server: server)
+            .listRowInsets(EdgeInsets(top: 0, leading: Chrome.Space.l, bottom: Chrome.Space.s, trailing: Chrome.Space.l))
         }
       }
     }
     .id(generation)
-    .listStyle(.plain)
+    .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
+    .contentMargins(.horizontal, Chrome.Space.m, for: .scrollContent)
+    .contentMargins(.top, Chrome.Space.s, for: .scrollContent)
+    .listSectionSpacing(Chrome.Space.s)
     .environment(\.defaultMinListRowHeight, 0)
     .animation(Chrome.fade, value: hosts.map { store.servers[$0.serverKey]?.sessions.map(\.id) ?? [] })
   }
@@ -113,9 +110,8 @@ struct TmuxTab: View {
     }
     .buttonStyle(RowStyle())
     .listRowInsets(EdgeInsets())
-    .listRowBackground(Color.clear)
+    .listRowBackground(Chrome.fill)
     .listRowSeparatorTint(Chrome.line)
-    .alignmentGuide(.listRowSeparatorLeading) { _ in 16 }
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
       Button("Close", role: .destructive, action: close)
         .tint(Chrome.bad)
@@ -150,37 +146,28 @@ struct TmuxTab: View {
     let picked = selected(store)
     let count = picked.reduce(0) { $0 + $1.1.count }
     let unread = picked.reduce(0) { total, pick in total + pick.1.count { store.agent(pick.0.serverKey, $0.id)?.unread == true } }
-    return VStack(spacing: 0) {
-      Rectangle().fill(Chrome.line).frame(height: 1)
-      HStack(spacing: 0) {
-        if store.unreadCount > 0 {
-          Button(unread > 0 ? "Clear \(unread)" : "Clear") { clearSelected(store) }
-            .font(Chrome.font(.body, .medium))
-            .foregroundStyle(Chrome.fg)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .contentShape(Rectangle())
-            .buttonStyle(PressScale())
-            .disabled(unread == 0)
-            .opacity(unread == 0 ? 0.4 : 1)
-          Rectangle().fill(Chrome.line).frame(width: 1, height: 24)
+    return HStack(spacing: Chrome.Space.m) {
+      if store.unreadCount > 0 {
+        Button { clearSelected(store) } label: {
+          Text(unread > 0 ? "Clear \(unread)" : "Clear").frame(maxWidth: .infinity)
         }
-        Button(count > 0 ? "Close \(count)" : "Close") { confirming = true }
-          .font(Chrome.font(.body, .medium))
-          .foregroundStyle(Chrome.bad)
-          .frame(maxWidth: .infinity)
-          .frame(height: 50)
-          .contentShape(Rectangle())
-          .buttonStyle(PressScale())
-          .disabled(count == 0)
-          .opacity(count == 0 ? 0.4 : 1)
-          .confirmationDialog(count == 1 ? "Close 1 tmux session?" : "Close \(count) tmux sessions?",
-                              isPresented: $confirming, titleVisibility: .visible) {
-            Button("Close \(count)", role: .destructive) { closeSelected(store) }
-            Button("Cancel", role: .cancel) {}
-          }
+        .buttonStyle(CapsuleButtonStyle())
+        .disabled(unread == 0)
+        .opacity(unread == 0 ? 0.4 : 1)
+      }
+      Button { confirming = true } label: {
+        Text(count > 0 ? "Close \(count)" : "Close").frame(maxWidth: .infinity)
+      }
+      .buttonStyle(CapsuleButtonStyle(kind: .destructive))
+      .disabled(count == 0)
+      .opacity(count == 0 ? 0.4 : 1)
+      .confirmationDialog(count == 1 ? "Close 1 tmux session?" : "Close \(count) tmux sessions?",
+                          isPresented: $confirming, titleVisibility: .visible) {
+        Button("Close \(count)", role: .destructive) { closeSelected(store) }
+        Button("Cancel", role: .cancel) {}
       }
     }
+    .padding(Chrome.Space.m)
   }
 
   /// Every listed session's row id: what Select's All checks.
@@ -238,36 +225,36 @@ private struct TmuxRow: View {
   let session: Tmux.Session
   let agent: AgentInfo?
   let nameWidth: CGFloat
-  /// A Term tab is on it (filled accent), or another client is (ring).
+  /// A Term tab is on it (filled), or another client is (ring).
   let dot: Dot?
   /// Select mode's checkbox; nil outside it.
   let checked: Bool?
 
-  /// The first line's height: every row is at least 44 pt tall.
+  /// The first line's height: with the padding, a row is 50 tall.
   private static let lineHeight: CGFloat = 20
 
   var body: some View {
     let note = TmuxList.note(agent)
-    HStack(alignment: .top, spacing: 0) {
+    HStack(alignment: .top, spacing: Chrome.Space.s) {
       if let checked {
         Image(systemName: checked ? "checkmark.circle.fill" : "circle")
-          .font(.system(size: 20, weight: .light))
-          .foregroundStyle(checked ? Chrome.accent : Chrome.faint)
+          .font(Chrome.symbol(.control))
+          .foregroundStyle(checked ? Chrome.fg : Chrome.muted)
           .frame(height: Self.lineHeight)
-          .padding(.trailing, 10)
           .transition(.move(edge: .leading).combined(with: .opacity))
       }
       dotView
-        .frame(width: 7, height: Self.lineHeight)
-        .padding(.trailing, 5)
+        .frame(width: Chrome.Space.m, height: Self.lineHeight)
       Text(session.name)
         .font(Chrome.mono(TmuxTab.nameStep, .medium))
         .foregroundStyle(Chrome.fg)
         .truncationMode(.tail)
         .frame(width: nameWidth, height: Self.lineHeight, alignment: .leading)
-        .padding(.trailing, 12)
-      VStack(alignment: .leading, spacing: 3) {
-        HStack(spacing: 8) {
+        // Rows are split from the names' leading edge.
+        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+        .padding(.trailing, Chrome.Space.xs)
+      VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: Chrome.Space.s) {
           title
           Spacer(minLength: 0)
           TimelineView(.everyMinute) { context in
@@ -278,17 +265,18 @@ private struct TmuxRow: View {
         .frame(height: Self.lineHeight)
         if let note {
           Text(note)
-            .font(Chrome.font(.secondary))
+            .font(Chrome.font(.body))
             .foregroundStyle([.ask, .approval].contains(agent?.state) ? Chrome.fg : Chrome.muted)
             .truncationMode(.tail)
+            .frame(height: Self.lineHeight)
         }
       }
     }
     .lineLimit(1)
     .opacity(TmuxList.isIdle(session, now: .now) ? 0.5 : 1)
-    .padding(.leading, checked == nil ? 5 : 14)
-    .padding(.trailing, 16)
-    .padding(.vertical, note == nil ? 12 : 10)
+    .padding(.leading, Chrome.Space.m)
+    .padding(.trailing, Chrome.Space.l)
+    .padding(.vertical, (Chrome.Size.row - Self.lineHeight) / 2)
     .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
   }
@@ -296,10 +284,10 @@ private struct TmuxRow: View {
   @ViewBuilder private var dotView: some View {
     switch dot {
     case .term:
-      Circle().fill(Chrome.accent).frame(width: 7, height: 7)
+      Circle().fill(Chrome.fg).frame(width: 7, height: 7)
         .accessibilityLabel("open in Term")
     case .elsewhere:
-      Circle().strokeBorder(Chrome.fg2, lineWidth: 1.2).frame(width: 7, height: 7)
+      Circle().strokeBorder(Chrome.fg2, lineWidth: 1.4).frame(width: 7, height: 7)
         .accessibilityLabel("attached")
     case nil:
       Color.clear
@@ -311,7 +299,7 @@ private struct TmuxRow: View {
   @ViewBuilder private var title: some View {
     if let title = agent?.title {
       Text(title)
-        .font(Chrome.font(.secondary))
+        .font(Chrome.font(.body))
         .foregroundStyle(Chrome.fg2)
         .truncationMode(.tail)
     } else {
@@ -334,36 +322,33 @@ private struct TmuxStatusView: View {
     switch status {
     case .age(let age):
       Text(age)
-        .font(Chrome.mono(.caption))
+        .font(Chrome.font(.secondary, .medium))
+        .monospacedDigit()
         .foregroundStyle(Chrome.muted)
     case .working(let done, let total, let elapsed):
-      HStack(spacing: 6) {
+      HStack(spacing: Chrome.Space.s) {
         ProgressRing(fraction: total.flatMap { total in done.map { total > 0 ? Double($0) / Double(total) : 0 } })
-        Text([done.flatMap { done in total.map { "\(done)/\($0)" } }, elapsed].compactMap { $0 }.joined(separator: " · "))
-          .font(Chrome.mono(.caption))
+        Text(elapsed)
+          .font(Chrome.font(.secondary, .medium))
+          .monospacedDigit()
           .foregroundStyle(Chrome.muted)
       }
     case .waits(let word):
-      Text(word)
-        .font(Chrome.font(.caption, .semibold))
-        .foregroundStyle(Chrome.onAccent)
-        .padding(.horizontal, 8)
-        .frame(height: 20)
-        .background(Capsule().fill(Chrome.accent))
+      NeedsYouPill(text: word)
     case .finished:
-      HStack(spacing: 4) {
-        Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
-        Text("finished").font(Chrome.font(.secondary, .medium))
+      HStack(spacing: Chrome.Space.xs) {
+        Image(systemName: "checkmark").font(Chrome.symbol(.inline))
+        Text(TmuxList.stateWord(.done) ?? "").font(Chrome.font(.secondary, .semibold))
       }
-      .foregroundStyle(Chrome.accent)
+      .foregroundStyle(Chrome.done)
     case .failed(let word):
-      HStack(spacing: 4) {
-        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10, weight: .semibold))
-        Text(word).font(Chrome.font(.secondary, .medium))
+      HStack(spacing: Chrome.Space.xs) {
+        Image(systemName: "exclamationmark.circle.fill").font(Chrome.symbol(.inline))
+        Text(word).font(Chrome.font(.secondary, .semibold))
       }
-      .foregroundStyle(Chrome.bad)
+      .foregroundStyle(Chrome.failed)
     case .stopped:
-      Text("stopped")
+      Text(TmuxList.stateWord(.aborted) ?? "")
         .font(Chrome.font(.secondary, .medium))
         .foregroundStyle(Chrome.fg2)
     }
@@ -376,13 +361,14 @@ private struct TmuxHostHead: View {
   let server: TmuxStore.Server?
 
   var body: some View {
-    HStack(spacing: 8) {
+    HStack(spacing: Chrome.Space.s) {
       Text(host.alias)
-        .font(Chrome.mono(.secondary, .semibold))
-        .foregroundStyle(Chrome.fg2)
+        .font(Chrome.font(.body, .semibold))
+        .foregroundStyle(Chrome.fg)
       if let count = server?.sessions.count, count > 0 {
         Text("\(count)")
-          .font(Chrome.mono(.secondary))
+          .font(Chrome.font(.body, .medium))
+          .monospacedDigit()
           .foregroundStyle(Chrome.muted)
       }
       if server == nil || server?.status == .loading {
@@ -390,23 +376,29 @@ private struct TmuxHostHead: View {
       }
       Spacer(minLength: 0)
     }
-    .padding(.top, 10)
-    .frame(height: 40, alignment: .bottom)
-    .padding(.bottom, 6)
+    .textCase(nil)
+    .lineLimit(1)
   }
 }
 
-/// Why a host lists no sessions, in a few words.
+/// Why a host lists no sessions, in a few words, as a row of its group.
 private struct TmuxServerState: View {
   let host: Host
   let server: TmuxStore.Server
 
+  /// Whether there is something to say: not while loading or listing sessions.
+  static func shows(_ server: TmuxStore.Server) -> Bool {
+    switch server.status {
+    case .loading: false
+    case .ready: server.sessions.isEmpty
+    default: true
+    }
+  }
+
   var body: some View {
     switch server.status {
-    case .loading:
-      EmptyView()
-    case .ready:
-      if server.sessions.isEmpty { line("No tmux sessions") }
+    case .loading, .ready:
+      line("No tmux sessions")
     case .notRunning:
       line("tmux not running")
     case .notInstalled:
@@ -416,37 +408,31 @@ private struct TmuxServerState: View {
     case .unreachable(let message):
       // The reason on its own line: cut beside the word, its useful end
       // ("Connection refused") was lost on a phone.
-      HStack(spacing: 10) {
-        VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: Chrome.Space.m) {
+        VStack(alignment: .leading, spacing: 2) {
           Text("Unreachable")
-            .font(Chrome.font(.secondary))
-            .foregroundStyle(Chrome.fg2)
+            .font(Chrome.font(.body))
+            .foregroundStyle(Chrome.fg)
           Text(message)
-            .font(Chrome.mono(.caption))
+            .font(Chrome.mono(.secondary))
             .foregroundStyle(Chrome.muted)
             .lineLimit(2)
         }
         Spacer(minLength: 0)
         Button("Retry") { TmuxStore.shared.refresh(host) }
-          .font(Chrome.font(.secondary, .medium))
-          .foregroundStyle(Chrome.fg)
-          .padding(.horizontal, 12)
-          .frame(height: 28)
-          .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Chrome.fill2))
-          .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Chrome.line2, lineWidth: 1))
-          .buttonStyle(PressScale())
+          .buttonStyle(CapsuleButtonStyle())
       }
-      .padding(.vertical, 6)
-      .frame(minHeight: 44)
+      .padding(.vertical, Chrome.Space.s)
+      .frame(minHeight: Chrome.Size.row)
     }
   }
 
   private func line(_ text: String) -> some View {
     Text(text)
-      .font(Chrome.font(.secondary))
+      .font(Chrome.font(.body))
       .foregroundStyle(Chrome.fg2)
       .lineLimit(2)
-      .frame(minHeight: 44)
+      .frame(maxWidth: .infinity, minHeight: Chrome.Size.row, alignment: .leading)
   }
 }
 
@@ -471,7 +457,7 @@ private struct TmuxPreview: View {
     ThumbnailView(source: { TmuxStore.shared.engine(serverKey, id) }, renderer: model.tmuxPreviews, fonts: fonts,
                   inset: Self.inset)
       .frame(width: width, height: min(height, width * 1.6))
-      .background(Color.black)
+      .background(Color(uiColor: AppSettings.shared.theme.backgroundColor))
   }
 
   private var cellWidth: Int {

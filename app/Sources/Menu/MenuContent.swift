@@ -10,7 +10,6 @@ struct MenuContent: View {
   var body: some View {
     VStack(spacing: 0) {
       header
-      Rectangle().fill(Chrome.line).frame(height: 1)
       ZStack {
         ForEach(MenuTab.allCases) { tab in
           let shown = model.tab == tab
@@ -24,64 +23,51 @@ struct MenuContent: View {
       .animation(Chrome.fade, value: model.tab)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .background(Chrome.raised)
-    .environment(\.colorScheme, .dark)
     .tint(Chrome.accent)
   }
 
   private var header: some View {
-    HStack(spacing: 2) {
+    HStack(spacing: 0) {
       // Every tab's name when the panel is wide enough; on a phone only the
       // open one's, the others by icon.
       ViewThatFits(in: .horizontal) {
         tabs(titled: { _ in true })
         tabs(titled: { $0 == model.tab })
       }
-      Spacer(minLength: 8)
+      Spacer(minLength: Chrome.Space.s)
       if model.tab == .tmux, model.tmuxSelecting {
         let all = TmuxTab.rowIDs(TmuxStore.shared)
         let checkedAll = !all.isEmpty && model.tmuxSelection.isSuperset(of: all)
-        Button(checkedAll ? "None" : "All") {
+        headerButton(checkedAll ? "None" : "All") {
           withAnimation(Chrome.quick) { model.tmuxSelection = checkedAll ? [] : all }
         }
-        .font(Chrome.font(.secondary, .medium))
-        .foregroundStyle(Chrome.fg2)
-        .padding(.horizontal, 8)
-        .frame(height: 44)
-        .contentShape(Rectangle())
-        .buttonStyle(PressScale(0.94))
         .transition(.opacity)
       }
       if model.tab == .tmux, model.tmuxSelecting || TmuxStore.shared.hasSessions {
-        Button(model.tmuxSelecting ? "Done" : "Select") {
+        headerButton(model.tmuxSelecting ? "Done" : "Select", chosen: model.tmuxSelecting) {
           withAnimation(Chrome.spring) { model.tmuxSelecting.toggle() }
         }
-        .font(Chrome.font(.secondary, .medium))
-        .foregroundStyle(model.tmuxSelecting ? Chrome.accent : Chrome.fg2)
-        .padding(.horizontal, 8)
-        .frame(height: 44)
-        .contentShape(Rectangle())
-        .buttonStyle(PressScale(0.94))
       }
-      Button {
-        model.space?.closeMenu()
-      } label: {
-        Image(systemName: "xmark")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(Chrome.fg2)
-          .frame(width: 30, height: 30)
-          .background(Circle().fill(Chrome.fill2))
-          .frame(width: 44, height: 44)
-          .contentShape(Rectangle())
-      }
-      .buttonStyle(PressScale(0.94))
-      .accessibilityLabel("Close")
+      CircleButton(symbol: "xmark", label: "Close") { model.space?.closeMenu() }
     }
-    .padding(.leading, 8)
-    .padding(.trailing, 2)
-    .frame(height: 50)
+    // The track and the close circle sit 12 pt in from the panel's edges.
+    .padding(.leading, Chrome.Space.m)
+    .padding(.trailing, Chrome.Space.m - (Chrome.Size.target - Chrome.Size.circle) / 2)
+    .padding(.top, Chrome.Space.m - (Chrome.Size.target - Chrome.Size.circle) / 2)
+    .padding(.bottom, Chrome.Space.s)
   }
 
+  private func headerButton(_ title: String, chosen: Bool = false, action: @escaping () -> Void) -> some View {
+    Button(title, action: action)
+      .font(Chrome.font(.body, chosen ? .semibold : .medium))
+      .foregroundStyle(Chrome.fg)
+      .padding(.horizontal, Chrome.Space.s)
+      .frame(height: Chrome.Size.target)
+      .contentShape(Rectangle())
+      .buttonStyle(PressScale(0.94))
+  }
+
+  /// A capsule track of tabs; the open one sits in a lens that slides to the next.
   private func tabs(titled: @escaping (MenuTab) -> Bool) -> some View {
     HStack(spacing: 2) {
       ForEach(MenuTab.allCases) { tab in
@@ -90,32 +76,31 @@ struct MenuContent: View {
         Button {
           withAnimation(Chrome.spring) { model.tab = tab }
         } label: {
-          HStack(spacing: 6) {
-            Image(systemName: tab.symbol)
-              .font(.system(size: 14, weight: .regular))
-              .foregroundStyle(selected ? Chrome.accent : Chrome.muted)
+          HStack(spacing: Chrome.Space.s) {
+            Image(systemName: selected ? tab.selectedSymbol : tab.symbol)
+              .font(Chrome.symbol(.control))
+              .foregroundStyle(selected ? Chrome.accent : Chrome.fg2)
               .overlay(alignment: .topTrailing) {
                 if count > 0, !titled(tab) { CountBadge(count: count).offset(x: 9, y: -8) }
               }
             if titled(tab) {
               Text(tab.title)
-                .font(Chrome.font(.secondary, .medium))
-                .foregroundStyle(selected ? Chrome.fg : Chrome.muted)
+                .font(Chrome.font(.body, selected ? .semibold : .medium))
+                .foregroundStyle(selected ? Chrome.fg : Chrome.fg2)
                 .fixedSize()
               if count > 0 { CountBadge(count: count) }
             }
           }
-          .padding(.horizontal, 11)
-          .frame(minWidth: 40)
-          .frame(height: 32)
+          .padding(.horizontal, Chrome.Space.m)
+          .frame(height: Chrome.Size.control - 4)
           .background {
             if selected {
-              RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Chrome.fill2)
+              Capsule().fill(Chrome.fill3)
+                .overlay(Capsule().strokeBorder(Chrome.line2, lineWidth: 1))
                 .matchedGeometryEffect(id: "tab", in: indicator)
             }
           }
-          .contentShape(Rectangle())
+          .contentShape(Capsule())
         }
         .buttonStyle(PressScale(0.94))
         .accessibilityLabel(tab.title)
@@ -123,6 +108,8 @@ struct MenuContent: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
       }
     }
+    .padding(Chrome.Space.xs)
+    .background(Capsule().fill(Chrome.fill))
   }
 
   @ViewBuilder

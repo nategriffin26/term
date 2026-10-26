@@ -53,8 +53,8 @@ struct SessionsOverview: View {
             VStack(alignment: .leading, spacing: 10) {
               if groups.count > 1 {
                 Text(group.space === model.space ? "This window" : "Other window")
-                  .font(Chrome.font(.secondary, .semibold))
-                  .foregroundStyle(Chrome.fg2)
+                  .font(Chrome.font(.body, .semibold))
+                  .foregroundStyle(Chrome.fg)
               }
               LazyVGrid(columns: Array(repeating: GridItem(.fixed(grid.tileWidth), spacing: Self.spacing, alignment: .top),
                                        count: grid.columns),
@@ -109,10 +109,10 @@ private struct SessionTile: View {
       ZStack(alignment: .topTrailing) {
         ThumbnailView(source: { tab.current }, renderer: model.thumbnails, fonts: fonts)
           .frame(width: size.width, height: size.height)
-          .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+          .clipShape(RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous))
           .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-              .strokeBorder(isCurrent ? Chrome.accent : Chrome.line2, lineWidth: isCurrent ? 1.5 : 1)
+            RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous)
+              .strokeBorder(isCurrent ? Chrome.fg : Chrome.line2, lineWidth: isCurrent ? 1.5 : 1)
           }
           .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             model.tileFrames[tab.id] = frame
@@ -120,13 +120,15 @@ private struct SessionTile: View {
         Button {
           owner.close(tab)
         } label: {
+          // On the terminal's own colours: an opaque ground keeps it legible.
           Image(systemName: "xmark")
-            .font(.system(size: 9, weight: .bold))
+            .font(Chrome.symbol(.inline))
+            .imageScale(.small)
             .foregroundStyle(Chrome.fg2)
-            .frame(width: 22, height: 22)
-            .background(Circle().fill(Chrome.raised.opacity(0.92)))
-            .overlay(Circle().strokeBorder(Chrome.line2, lineWidth: 1))
-            .frame(width: 40, height: 40)
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(Chrome.raised))
+            .overlay(Circle().fill(Chrome.fill2))
+            .frame(width: Chrome.Size.target, height: Chrome.Size.target)
             .contentShape(Rectangle())
         }
         .buttonStyle(PressScale(0.9))
@@ -153,9 +155,9 @@ private struct SessionTile: View {
             model.space?.showHistory(for: tab)
           } label: {
             Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
-              .font(.system(size: 13))
+              .font(Chrome.symbol(.inline))
               .foregroundStyle(Chrome.muted)
-              .frame(width: 36, height: 36)
+              .frame(width: Chrome.Size.control, height: Chrome.Size.control)
               .contentShape(Rectangle())
           }
           .buttonStyle(PressScale(0.9))
@@ -163,7 +165,7 @@ private struct SessionTile: View {
         }
       }
       // As tall as the history button, so tiles without one line up.
-      .frame(width: size.width, height: 36, alignment: .leading)
+      .frame(width: size.width, height: Chrome.Size.control, alignment: .leading)
     }
     .contentShape(Rectangle())
     .onTapGesture { model.space?.zoom(into: tab) }
@@ -178,10 +180,10 @@ private struct SessionTile: View {
     }
   }
 
-  /// Dot beside the host: connecting (accent) or out of contact (amber).
+  /// Dot beside the host: connecting (the text colour) or out of contact (amber).
   static func state(of tab: Tab) -> Color? {
     if tab.unreachable { return Chrome.warn }
-    if tab.connecting != nil { return Chrome.accent }
+    if tab.connecting != nil { return Chrome.fg2 }
     return nil
   }
 }
@@ -193,11 +195,10 @@ private struct NewTile: View {
   var body: some View {
     Button(action: action) {
       Image(systemName: "plus")
-        .font(.system(size: 20, weight: .light))
-        .foregroundStyle(Chrome.muted)
+        .font(Chrome.symbol(.dock))
+        .foregroundStyle(Chrome.fg2)
         .frame(width: size.width, height: size.height)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Chrome.fill))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Chrome.line2, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous).fill(Chrome.fill))
     }
     .buttonStyle(PressScale())
     .accessibilityLabel("New session")

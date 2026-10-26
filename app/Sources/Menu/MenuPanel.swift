@@ -4,6 +4,8 @@ import UIKit
 /// The floating menu: a glass card over the visible terminal (the safe
 /// area above the keyboard), on a scrim. It grows out of the dock icon that
 /// opened it and collapses back into it; without an icon it scales in.
+/// Glass fades by materializing (its effect set in an animation), never by
+/// alpha, which breaks the effect.
 @MainActor
 final class MenuPanel: UIViewController {
   let model: MenuModel
@@ -17,6 +19,7 @@ final class MenuPanel: UIViewController {
 
   private let scrim = UIView()
   private let card = UIView()
+  private let glass = GlassView()
   private let clip = UIView()
   private let ghost = UIImageView()
   private let keyboardSpacer = UIView()
@@ -25,8 +28,6 @@ final class MenuPanel: UIViewController {
   private var contentAnimator: UIViewPropertyAnimator?
   private var landingAnimator: UIViewPropertyAnimator?
   private var openedFrom: MenuTab?
-
-  static let cornerRadius: CGFloat = 18
 
   init(model: MenuModel) {
     self.model = model
@@ -47,9 +48,8 @@ final class MenuPanel: UIViewController {
     view.isHidden = true
   }
 
-  /// A layer's CGColor and the system controls' style do not follow the app theme by themselves.
+  /// The system controls' style does not follow the app theme by itself.
   private func applyAppTheme() {
-    card.layer.borderColor = Chrome.UI.line2.resolvedColor(with: traitCollection).cgColor
     host.overrideUserInterfaceStyle = traitCollection[AppThemeTrait.self].isDark ? .dark : .light
   }
 
@@ -60,19 +60,12 @@ final class MenuPanel: UIViewController {
     scrim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(scrimTapped)))
     view.addSubview(scrim)
 
-    card.backgroundColor = Chrome.UI.raised
-    card.layer.cornerCurve = .continuous
     registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.applyAppTheme() }
     applyAppTheme()
-    card.layer.borderWidth = 1 / max(traitCollection.displayScale, 1)
-    card.layer.shadowColor = UIColor.black.cgColor
-    card.layer.shadowOpacity = 0.45
-    card.layer.shadowRadius = 25
-    card.layer.shadowOffset = CGSize(width: 0, height: 18)
     view.addSubview(card)
+    card.addSubview(glass)
 
     clip.clipsToBounds = true
-    clip.layer.cornerCurve = .continuous
     card.addSubview(clip)
     setCorner(nil)
 
@@ -124,25 +117,16 @@ final class MenuPanel: UIViewController {
   }
 
   private func place(_ frame: CGRect) {
-    card.frame = frame
-    clip.frame = card.bounds
+    setCardFrame(frame)
     host.view.frame = clip.bounds
     setCorner(nil)
-    card.layer.shadowPath = Self.roundedPath(card.bounds, radii: [.topLeft, .topRight, .bottomRight, .bottomLeft].map {
-      card.effectiveRadius(corner: $0)
-    })
   }
 
-  /// A rectangle with its own radius per corner, clockwise from the top left.
-  private static func roundedPath(_ r: CGRect, radii: [CGFloat]) -> CGPath {
-    let path = CGMutablePath()
-    path.move(to: CGPoint(x: r.minX + radii[0], y: r.minY))
-    path.addArc(tangent1End: CGPoint(x: r.maxX, y: r.minY), tangent2End: CGPoint(x: r.maxX, y: r.maxY), radius: radii[1])
-    path.addArc(tangent1End: CGPoint(x: r.maxX, y: r.maxY), tangent2End: CGPoint(x: r.minX, y: r.maxY), radius: radii[2])
-    path.addArc(tangent1End: CGPoint(x: r.minX, y: r.maxY), tangent2End: CGPoint(x: r.minX, y: r.minY), radius: radii[3])
-    path.addArc(tangent1End: CGPoint(x: r.minX, y: r.minY), tangent2End: CGPoint(x: r.maxX, y: r.minY), radius: radii[0])
-    path.closeSubpath()
-    return path
+  /// The card and the glass and clip that fill it.
+  private func setCardFrame(_ frame: CGRect) {
+    card.frame = frame
+    glass.frame = card.bounds
+    clip.frame = card.bounds
   }
 
   // MARK: - Open and close
@@ -160,23 +144,20 @@ final class MenuPanel: UIViewController {
     openedFrom = source == nil ? nil : tab
     stopAnimations()
 
-    card.layer.shadowPath = nil
     host.view.frame = CGRect(origin: .zero, size: target.size)
     host.view.layoutIfNeeded()
     host.view.alpha = 0
     host.view.transform = CGAffineTransform(translationX: 0, y: 10)
+    card.transform = .identity
     if let source {
-      card.transform = .identity
-      card.alpha = 1
-      card.frame = source
-      clip.frame = card.bounds
+      setCardFrame(source)
       setCorner(min(source.width, source.height) / 2)
+      UIView.performWithoutAnimation { glass.isGlassShown = true }
       showGhost(for: tab, in: source.size)
     } else {
-      card.frame = target
-      clip.frame = card.bounds
+      setCardFrame(target)
       setCorner(nil)
-      card.alpha = 0
+      glass.isGlassShown = false
       card.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
       ghost.alpha = 0
     }
@@ -184,9 +165,8 @@ final class MenuPanel: UIViewController {
     let animator = UIViewPropertyAnimator(duration: 0.45, timingParameters: Chrome.springTiming)
     animator.addAnimations { [self] in
       card.transform = .identity
-      card.alpha = 1
-      card.frame = target
-      clip.frame = CGRect(origin: .zero, size: target.size)
+      glass.isGlassShown = true
+      setCardFrame(target)
       ghost.center = CGPoint(x: target.width / 2, y: target.height / 2)
       setCorner(nil)
       scrim.alpha = 1
@@ -217,7 +197,6 @@ final class MenuPanel: UIViewController {
     model.isOpen = false
     willClose?()
     stopAnimations()
-    card.layer.shadowPath = nil
     let tab = model.tab
     let end = openedFrom.flatMap { _ in iconFrame?(tab) }
 
@@ -231,17 +210,16 @@ final class MenuPanel: UIViewController {
     animator.addAnimations { [self] in
       scrim.alpha = 0
       if let end {
-        card.frame = end
-        clip.frame = CGRect(origin: .zero, size: end.size)
+        setCardFrame(end)
         setCorner(min(end.width, end.height) / 2)
       } else {
-        card.alpha = 0
+        glass.isGlassShown = false
         card.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
       }
     }
     if end != nil {
-      // The dock icon draws above the card: the card thins out as it lands under it.
-      let landing = UIViewPropertyAnimator(duration: 0.2, curve: .easeIn) { self.card.alpha = 0 }
+      // The dock icon draws above the card: the card dissolves as it lands under it.
+      let landing = UIViewPropertyAnimator(duration: 0.2, curve: .easeIn) { self.glass.isGlassShown = false }
       landingAnimator = landing
       landing.startAnimation(afterDelay: 0.18)
     }
@@ -250,7 +228,6 @@ final class MenuPanel: UIViewController {
       cardAnimator = nil
       guard position == .end, !isOpen else { return }
       view.isHidden = true
-      card.alpha = 1
       card.transform = .identity
       ghost.alpha = 0
       host.view.transform = .identity
@@ -270,14 +247,14 @@ final class MenuPanel: UIViewController {
     let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Chrome.fadeTiming)
     animator.addAnimations { [self] in
       scrim.alpha = 0
-      card.alpha = 0
+      glass.isGlassShown = false
+      host.view.alpha = 0
     }
     animator.addCompletion { [weak self] position in
       guard let self else { return }
       cardAnimator = nil
       guard position == .end, !isOpen else { return }
       view.isHidden = true
-      card.alpha = 1
       completion()
     }
     cardAnimator = animator
@@ -294,16 +271,17 @@ final class MenuPanel: UIViewController {
     view.layoutIfNeeded()
     stopAnimations()
     openedFrom = nil
+    card.transform = .identity
     place(targetFrame)
     host.view.layoutIfNeeded()
-    host.view.alpha = 1
+    host.view.alpha = 0
     host.view.transform = .identity
     ghost.alpha = 0
-    card.transform = .identity
-    card.alpha = 0
+    glass.isGlassShown = false
     let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Chrome.fadeTiming)
     animator.addAnimations { [self] in
-      card.alpha = 1
+      glass.isGlassShown = true
+      host.view.alpha = 1
       scrim.alpha = 1
     }
     animator.addCompletion { [weak self] _ in
@@ -325,16 +303,16 @@ final class MenuPanel: UIViewController {
   }
 
   /// `radius` while growing out of or into an icon; nil at rest: concentric
-  /// with the display's rounded corners where the card nears them, 18 pt elsewhere.
+  /// with the display's rounded corners where the card nears them, the panel's radius elsewhere.
   private func setCorner(_ radius: CGFloat?) {
     let config: UICornerConfiguration = radius.map { .corners(radius: .fixed($0)) }
-      ?? .corners(radius: .containerConcentric(minimum: Self.cornerRadius))
-    card.cornerConfiguration = config
+      ?? .corners(radius: .containerConcentric(minimum: Chrome.Radius.panel))
+    glass.cornerConfiguration = config
     clip.cornerConfiguration = config
   }
 
   private func showGhost(for tab: MenuTab, in size: CGSize) {
-    ghost.image = UIImage(systemName: tab.symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular))
+    ghost.image = UIImage(systemName: tab.selectedSymbol, withConfiguration: Chrome.uiSymbol(.dock))
     ghost.bounds = CGRect(x: 0, y: 0, width: 44, height: 44)
     ghost.center = CGPoint(x: size.width / 2, y: size.height / 2)
     ghost.alpha = 1

@@ -25,6 +25,9 @@ enum MenuTab: String, CaseIterable, Identifiable {
     case .settings: "gearshape"
     }
   }
+
+  /// The open tab's glyph: the filled variant.
+  var selectedSymbol: String { symbol + ".fill" }
 }
 
 /// Pages of the Sessions tab.
