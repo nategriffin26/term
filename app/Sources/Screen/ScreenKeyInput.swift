@@ -121,8 +121,8 @@ final class ScreenKeyInput: UIView, UITextInput {
     return rest
   }
 
-  /// Focus left while keys were down: the Mac must not keep them pressed.
-  private func releaseHardwareKeys() {
+  /// Focus left, or the Screen's input moves elsewhere, while keys were down: the Mac must not keep them pressed.
+  func releaseHardwareKeys() {
     repeater.stop()
     repeating = nil
     for code in down.values { session?.keyUp(code) }

@@ -390,6 +390,8 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     placeCursor()
   }
 
+  func releaseKeys() { input.releaseHardwareKeys() }
+
   private func startMomentum() {
     momentum?.invalidate()
     guard phaser.inMomentum else { return }

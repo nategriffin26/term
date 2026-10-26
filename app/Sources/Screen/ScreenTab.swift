@@ -119,41 +119,48 @@ private struct ScreenStateView: View {
         }
       case .live:
         if session.locked {
-          locked
-        } else if !session.access.screen {
-          message {
-            title("Allow screen recording on \(mac)")
-            detail("System Settings › Privacy & Security › Screen & System Audio Recording › Term Screen Host")
-          } actions: { hostsButton }
-        } else if !session.access.input {
-          banner("Allow Term Screen Host in Privacy & Security › Accessibility on \(mac)")
+          sharingState("\(mac) is locked")
+        } else if session.needsAccess {
+          sharingState("Term Screen Host needs access on \(mac)")
         }
       }
-      if let notice = session.notice {
-        banner(notice).transition(.opacity)
+      VStack(spacing: Chrome.Space.s) {
+        if let grants = missingGrants { banner("Allow Term Screen Host in \(grants)") }
+        if let notice = session.notice { banner(notice).transition(.opacity) }
       }
+      .padding(Chrome.Space.m)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .allowsHitTesting(false)
     }
     .animation(Chrome.fade, value: session.phase)
     .animation(Chrome.fade, value: session.notice)
     .animation(Chrome.fade, value: session.sharing)
   }
 
-  /// The locked Mac through Screen Sharing: signing in, or what it needs to.
+  /// Over Screen Sharing's picture while the host lacks its grants: what to approve in System Settings.
+  private var missingGrants: String? {
+    guard session.phase == .live, !session.locked, session.needsAccess, session.sharing == .live else { return nil }
+    let grants = [session.access.screen ? nil : "Screen & System Audio Recording",
+                  session.access.input ? nil : "Accessibility"]
+    return grants.compactMap { $0 }.joined(separator: " and ")
+  }
+
+  /// Screen Sharing standing in for the host: signing in, or what it needs to.
   @ViewBuilder
-  private var locked: some View {
+  private func sharingState(_ text: String) -> some View {
     switch session.sharing {
     case .live:
       EmptyView()
     case .off, .signingIn, .held:
       message {
         ProgressView().tint(Chrome.muted)
-        Text("\(mac) is locked").font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg2)
+        Text(text).font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg2)
       } actions: { EmptyView() }
     case .needsPassword:
-      message { title("\(mac) is locked") } actions: { passwordButton }
+      message { title(text) } actions: { passwordButton }
     case .failed(let reason):
       message {
-        title("\(mac) is locked")
+        title(text)
         detail(reason)
       } actions: {
         Button("Try Again") { session.startSharing() }.buttonStyle(CapsuleButtonStyle(kind: .standard))
@@ -222,8 +229,5 @@ private struct ScreenStateView: View {
       .padding(.horizontal, Chrome.Space.l)
       .padding(.vertical, Chrome.Space.s)
       .background(Capsule().fill(Chrome.raised).overlay(Capsule().strokeBorder(Chrome.line2, lineWidth: 1)))
-      .padding(Chrome.Space.m)
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-      .allowsHitTesting(false)
   }
 }

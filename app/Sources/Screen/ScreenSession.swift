@@ -44,6 +44,22 @@ protocol ScreenSurface: AnyObject {
   /// The Mac moved its pointer, or a connection placed it.
   func pointerMoved()
   func cursorChanged()
+  /// Lets go of the hardware keys held down, through the session, while it still sends to the engine that got them.
+  func releaseKeys()
+}
+
+/// Makes the engines a session drives; tests hand in fakes.
+@MainActor
+struct ScreenEngines {
+  var host: (Host, @escaping (ScreenEvent) -> Void) -> ScreenEngine
+  /// Screen Sharing, signed in with the Mac password.
+  var sharing: (Host, String, @escaping (ScreenEvent) -> Void) -> ScreenEngine
+
+  static let live = ScreenEngines(
+    host: { host, onEvent in ScreenHostEngine(spec: Tab.spec(for: host), onEvent: onEvent) },
+    sharing: { host, password, onEvent in
+      ScreenVNCEngine(spec: Tab.spec(for: host), user: host.user, password: password, onEvent: onEvent)
+    })
 }
 
 /// The menu's Screen tab for one window: which Mac, the connection to it,
@@ -62,7 +78,8 @@ final class ScreenSession {
     case lost(String)
   }
 
-  /// Screen Sharing (VNC) while the Mac is locked: Term Screen Host cannot see its login window.
+  /// Screen Sharing (VNC) while Term Screen Host can't show or drive the Mac:
+  /// the Mac is locked, the host is missing, or it lacks its privacy grants.
   enum Sharing: Equatable {
     case off
     /// No Mac password saved yet.
@@ -121,6 +138,7 @@ final class ScreenSession {
   /// A held drag's button and where it went down: released before any disconnect.
   @ObservationIgnored var heldButton: ScreenWire.MouseButton?
 
+  @ObservationIgnored private let engines: ScreenEngines
   @ObservationIgnored private var engine: ScreenEngine?
   @ObservationIgnored private var vnc: ScreenEngine?
   @ObservationIgnored private var echo = PasteboardEcho()
@@ -132,7 +150,8 @@ final class ScreenSession {
   private static let hostKey = "screen.host"
   private static let syncedKey = "screen.pasteboardSynced"
 
-  init() {
+  init(engines: ScreenEngines = .live) {
+    self.engines = engines
     if let id = UserDefaults.standard.string(forKey: Self.hostKey).flatMap(UUID.init(uuidString:)) {
       host = ConfigStore.shared.hosts.first { $0.id == id }
       if let host { settings = ScreenSettings.load(for: host.id) }
@@ -186,7 +205,7 @@ final class ScreenSession {
     guard let host else { return }
     phase = .connecting
     modifiers.reset()
-    engine = ScreenHostEngine(spec: Tab.spec(for: host)) { [weak self] event in self?.handle(event) }
+    engine = engines.host(host) { [weak self] event in self?.handle(event) }
   }
 
   /// Lets go of a held button first: a release must never be lost.
@@ -207,7 +226,7 @@ final class ScreenSession {
       watchShown()
       startPasteboardWatch()
     } else {
-      releaseHeldButton()
+      releaseInput()
       engine?.watch([])
       stopPasteboardWatch()
       keyboardUp = false
@@ -258,15 +277,19 @@ final class ScreenSession {
   /// Who takes input and draws the picture.
   private var activeEngine: ScreenEngine? { sharing == .live ? vnc : engine }
 
-  /// The picture can be driven: Screen Sharing is live, or the host is and the Mac unlocked.
-  var drivable: Bool { sharing == .live || (phase == .live && !locked) }
+  /// The picture can be driven: Screen Sharing is live, or the host is, with the Mac unlocked and its grants.
+  var drivable: Bool { sharing == .live || (phase == .live && !locked && !needsAccess) }
+
+  /// Term Screen Host lacks a privacy grant: it can't show the Mac, or can't drive it.
+  var needsAccess: Bool { !access.screen || !access.input }
 
   // MARK: - Screen Sharing
 
   /// Runs Screen Sharing while the Screen shows and the host can't: the Mac
-  /// is locked, or Term Screen Host isn't running on it.
+  /// is locked, Term Screen Host isn't running on it, or it lacks a privacy
+  /// grant (Screen Sharing lets the user approve it in System Settings).
   private func updateSharing() {
-    guard isShown, (phase == .live && locked) || phase == .hostNotRunning else {
+    guard isShown, (phase == .live && (locked || needsAccess)) || phase == .hostNotRunning else {
       if sharing == .live { holdSharing() } else if sharing != .held { stopSharing() }
       return
     }
@@ -286,7 +309,7 @@ final class ScreenSession {
     hostRetryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
       MainActor.assumeIsolated {
         guard let self, self.isShown, self.phase == .hostNotRunning, self.engine == nil, let host = self.host else { return }
-        self.engine = ScreenHostEngine(spec: Tab.spec(for: host)) { [weak self] event in self?.handle(event) }
+        self.engine = self.engines.host(host) { [weak self] event in self?.handle(event) }
       }
     }
   }
@@ -300,15 +323,13 @@ final class ScreenSession {
       return
     }
     sharing = .signingIn
-    vnc = ScreenVNCEngine(spec: Tab.spec(for: host), user: host.user, password: password) { [weak self] event in
-      self?.handleSharing(event)
-    }
+    vnc = engines.sharing(host, password) { [weak self] event in self?.handleSharing(event) }
   }
 
   private func stopSharing() {
     guard sharing != .off || vnc != nil else { return }
     let wasLive = sharing == .live
-    if wasLive { releaseHeldButton() }
+    if wasLive { releaseInput() }
     vnc?.close()
     vnc = nil
     sharing = .off
@@ -325,7 +346,7 @@ final class ScreenSession {
 
   /// Screen Sharing goes idle, still open, and the host's picture comes back.
   private func holdSharing() {
-    releaseHeldButton()
+    releaseInput()
     vnc?.watch([])
     sharing = .held
     leaveSharing()
@@ -333,12 +354,11 @@ final class ScreenSession {
 
   /// Screen Sharing's picture and input take over from the host's.
   private func enterSharing() {
-    releaseHeldButton()
+    releaseInput()
     hostPointer = pointer
     sharing = .live
     viewport = nil
     if let frame = sharingDisplays.first?.frame { pointer = CGPoint(x: frame.width / 2, y: frame.height / 2) }
-    if !modifiers.held.isEmpty { send(.modifiers(modifiers.held)) }
     watchShown()
     surface?.cursorChanged()
     surface?.pointerMoved()
@@ -421,6 +441,7 @@ final class ScreenSession {
       updateSharing()
     case .access(let granted):
       access = granted
+      updateSharing()
     case .failure(let message):
       show(notice: message)
     case .closed(let closure):
@@ -432,6 +453,11 @@ final class ScreenSession {
         phase = .hostNotRunning
         scheduleHostRetry()
       case .unreachable(let reason): phase = .unreachable(reason)
+      // Approving Screen Recording on the Mac restarts the host (Quit & Reopen):
+      // the picture stays on Screen Sharing until it answers again.
+      case .ended where needsAccess:
+        phase = .hostNotRunning
+        scheduleHostRetry()
       case .ended(let reason): phase = .lost(reason)
       }
       updateSharing()
@@ -486,6 +512,17 @@ final class ScreenSession {
     heldButton = nil
     send(.button(button, down: false, at: pointer, clicks: 1))
     consumeOnce()
+  }
+
+  /// Lets the Mac go before the engine with the input stops having it (the
+  /// Screen hides, or Screen Sharing takes over or hands back): the held
+  /// button, the hardware keys, then every modifier the toolbar latched.
+  private func releaseInput() {
+    releaseHeldButton()
+    surface?.releaseKeys()
+    let held = modifiers.held
+    modifiers.reset()
+    if !held.isEmpty { send(.modifiers([])) }
   }
 
   func scroll(_ events: [ScreenWire.ScrollEvent]) {
@@ -566,10 +603,14 @@ final class ScreenSession {
       return
     }
     let context = LAContext()
-    context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Type your Mac password") { ok, _ in
+    context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Type your Mac password") { [weak self] ok, _ in
       guard ok else { return }
       DispatchQueue.main.async {
-        MainActor.assumeIsolated { self.typeSecret(password, withReturn: withReturn) }
+        MainActor.assumeIsolated {
+          // Only for the Mac it was asked for: Face ID can take a while.
+          guard let self, self.host?.id == host.id else { return }
+          self.typeSecret(password, withReturn: withReturn)
+        }
       }
     }
   }
@@ -594,8 +635,10 @@ final class ScreenSession {
     // keeps what an earlier attempt left: click, then ⌘A and Delete clear it.
     click(.left, at: sharingFocusPoint)
     surface?.pointerMoved()
+    let target = vnc
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-      guard let self, self.sharing == .live else { return }
+      // The same Screen Sharing session, or the password goes nowhere.
+      guard let self, self.sharing == .live, self.vnc === target else { return }
       self.press(MacKey.a, with: .command, consume: false)
       self.press(MacKey.delete, consume: false)
       self.sendSecret(password, withReturn: withReturn)
@@ -607,17 +650,47 @@ final class ScreenSession {
     if withReturn { press(MacKey.returnKey) }
   }
 
-  /// The main display's middle in Screen Sharing's framebuffer, placed by the
-  /// host's arrangement (the framebuffer holds every display); the middle of
-  /// the framebuffer when the host never said.
+  /// The main display's middle in Screen Sharing's framebuffer, where the
+  /// login window's password field takes a click; the framebuffer's middle
+  /// when the host never said.
   private var sharingFocusPoint: CGPoint {
-    let frame = sharingDisplays.first?.frame.cg ?? .zero
-    let bounds = hostDisplays.reduce(CGRect.null) { $0.union($1.frame.cg) }
-    guard let main = (hostDisplays.first(where: \.isMain) ?? hostDisplays.first)?.frame.cg, !bounds.isEmpty else {
-      return CGPoint(x: frame.midX, y: frame.midY)
+    let framebuffer = sharingDisplays.first?.frame.cg ?? .zero
+    let layout = Self.sharingLayout(hostDisplays)
+    let bounds = layout.values.reduce(CGRect.null) { $0.union($1) }
+    guard let main = (hostDisplays.first(where: \.isMain) ?? hostDisplays.first).flatMap({ layout[$0.id] }),
+          !bounds.isEmpty else {
+      return CGPoint(x: framebuffer.midX, y: framebuffer.midY)
     }
-    return CGPoint(x: (main.midX - bounds.minX) / bounds.width * frame.width,
-                   y: (main.midY - bounds.minY) / bounds.height * frame.height)
+    return CGPoint(x: (main.midX - bounds.minX) * (framebuffer.width / bounds.width),
+                   y: (main.midY - bounds.minY) * (framebuffer.height / bounds.height))
+  }
+
+  /// Where Screen Sharing draws each display in its framebuffer: at native
+  /// pixels, each at its point origin in its own pixels, pushed clear of a
+  /// display it would overlap on the side it sits on in the arrangement. A
+  /// 2x built-in with a 1x display to its right and 687 pt above composes
+  /// to 6896x2921 px, the built-in 687 px down, as Screen Sharing sends it.
+  private static func sharingLayout(_ displays: [ScreenWire.Display]) -> [UInt32: CGRect] {
+    var placed: [(points: CGRect, pixels: CGRect)] = []
+    var layout: [UInt32: CGRect] = [:]
+    for display in displays.sorted(by: { ($0.frame.x, $0.frame.y) < ($1.frame.x, $1.frame.y) }) {
+      let points = display.frame.cg
+      let scale = points.width > 0 ? CGFloat(display.pixelWidth) / points.width : 1
+      var pixels = CGRect(x: points.minX * scale, y: points.minY * scale,
+                          width: CGFloat(display.pixelWidth), height: CGFloat(display.pixelHeight))
+      for other in placed where pixels.intersects(other.pixels) {
+        if points.minX >= other.points.maxX {
+          pixels.origin.x = other.pixels.maxX
+        } else if points.minY >= other.points.maxY {
+          pixels.origin.y = other.pixels.maxY
+        } else if points.maxY <= other.points.minY {
+          pixels.origin.y = other.pixels.minY - pixels.height
+        }
+      }
+      placed.append((points, pixels))
+      layout[display.id] = pixels
+    }
+    return layout
   }
 
   // MARK: - Clipboard
