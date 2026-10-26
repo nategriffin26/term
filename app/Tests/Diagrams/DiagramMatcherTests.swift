@@ -96,6 +96,34 @@ final class DiagramMatcherTests: XCTestCase {
     XCTAssertEqual(DiagramMatcher.match(try rows("cap-120"), []), [])
   }
 
+  /// On a page (tmux history), a drawing at the first or last row is whole.
+  func testPageDrawingsAreNeverOpen() throws {
+    let rows = try rows("cap-120")
+    let flow = try XCTUnwrap(DiagramMatcher.match(Array(rows[32...86]), sources, screen: false).first)
+    XCTAssertEqual(flow, .init(top: 0, bottom: 54, hash: "flow"))
+    XCTAssertEqual(DiagramMatcher.match(Array(rows[32...86]), sources).first?.openTop, true)
+  }
+
+  static let pie = "pie title Pets adopted\n  \"Dogs\" : 386\n  \"Cats\" : 85\n  \"Rats\" : 15"
+
+  /// omp prints types its ASCII renderer lacks as source between fences.
+  func testSourceTextBlockMatchesFromFenceToFence() {
+    let rows = ["Here are the pets:", "", "```mermaid", "pie title Pets adopted", "  \"Dogs\" : 386",
+                "  \"Cats\" : 85", "  \"Rats\" : 15", "```", "", "Dogs win."]
+    let pie = DiagramMatcher.Candidate(hash: "pie", time: 3, source: Self.pie)
+    XCTAssertEqual(DiagramMatcher.match(rows, sources + [pie]), [.init(top: 2, bottom: 7, hash: "pie")])
+    XCTAssertEqual(DiagramMatcher.match(rows, sources), [])
+  }
+
+  /// Unclosed at the screen's bottom: it may go on below. A plain code block is not one.
+  func testSourceTextBlockOpenAtTheBottomAndOtherFences() {
+    let pie = DiagramMatcher.Candidate(hash: "pie", time: 3, source: Self.pie)
+    XCTAssertEqual(DiagramMatcher.match(["x", "```mermaid", "pie title Pets adopted", "  \"Dogs\" : 386"], [pie]),
+                   [.init(top: 1, bottom: 3, hash: "pie", openBottom: true)])
+    XCTAssertEqual(DiagramMatcher.match(["```", "pie title Pets adopted", "  \"Dogs\" : 386", "```"], [pie]), [])
+    XCTAssertEqual(DiagramMatcher.match(["x", "```mermaid"], [pie]), [])
+  }
+
   /// An edge label on its own row is bridged; a third plain row or a blank row ends the block.
   func testBlocksBridgeUpToTwoPlainRows() {
     let rows = ["┌─┐", "label", "more", "└─┘", "", "│", "a", "b", "c", "│"]
@@ -136,7 +164,41 @@ final class DiagramPlacementTests: XCTestCase {
   /// A drawing at row 0 may go on above the screen, one at row 44 below it.
   func place(top: Int, bottom: Int, height: CGFloat, width: CGFloat = 300) -> DiagramPlacement? {
     DiagramPlacement.place(.init(top: top, bottom: bottom, hash: "", openTop: top == 0, openBottom: bottom == 44),
-                           cols: 51, cell: cell, size: CGSize(width: width, height: height))
+                           cols: 51, rows: 45, cell: cell, size: CGSize(width: width, height: height))
+  }
+
+  /// On a page every drawing is whole: the part on screen is the tile, the
+  /// image keeps its place at the drawing's first row, off screen or not.
+  func page(top: Int, bottom: Int, height: CGFloat) -> DiagramPlacement? {
+    DiagramPlacement.place(.init(top: top, bottom: bottom, hash: ""), cols: 51, rows: 45, cell: cell,
+                           size: CGSize(width: 300, height: height))
+  }
+
+  func testPageDrawingAboveTheScreenMovesWithItsText() throws {
+    let p = try XCTUnwrap(page(top: -3, bottom: 10, height: 200))
+    XCTAssertEqual(p.tile, CGRect(x: 0, y: 0, width: 382.5, height: 11 * 17))
+    XCTAssertEqual(p.image.minY, -51)
+    XCTAssertEqual(p.image.height, 200)
+  }
+
+  /// Fitted to the whole drawing (14 rows), not to the 11 on screen.
+  func testPageDrawingFitsItsWholeBlock() throws {
+    let p = try XCTUnwrap(page(top: -3, bottom: 10, height: 14 * 17 + 10))
+    XCTAssertEqual(p.image.height, 14 * 17, accuracy: 0.001)
+  }
+
+  func testPageDrawingBelowTheScreenEndsAtTheLastRow() throws {
+    let p = try XCTUnwrap(page(top: 40, bottom: 60, height: 100))
+    XCTAssertEqual(p.tile, CGRect(x: 0, y: 40 * 17, width: 382.5, height: 5 * 17))
+    XCTAssertEqual(p.image.minY, 0)
+  }
+
+  /// One row on screen at either edge still shows; none does not.
+  func testPageDrawingAtTheEdges() {
+    XCTAssertEqual(page(top: -5, bottom: 0, height: 100)?.tile.height, 17)
+    XCTAssertNil(page(top: -5, bottom: -1, height: 100))
+    XCTAssertEqual(page(top: 44, bottom: 50, height: 100)?.tile.minY, 44 * 17)
+    XCTAssertNil(page(top: 45, bottom: 50, height: 100))
   }
 
   func testTileCoversExactlyTheVisibleRowsAndImageIsCentered() throws {

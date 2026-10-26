@@ -67,6 +67,10 @@ extension TerminalView {
             clearSelection()
             return
         }
+        if let diagram = diagramOverlay.diagram(at: g.location(in: self)) {
+            openDiagram(diagram)
+            return
+        }
         guard isFirstResponder else {
             _ = becomeFirstResponder()
             return
@@ -212,6 +216,11 @@ extension TerminalView {
         switch g.state {
         case .began:
             stopCoasting()
+            if let diagram = diagramOverlay.diagram(at: p) {
+                diagramOverlay.menuTarget = diagram
+                editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: DiagramOverlay.menuID, sourcePoint: p))
+                return
+            }
             let word = wordRange(at: gridPoint(at: p))
             selectionAnchor = word
             selection = word
@@ -284,10 +293,13 @@ extension TerminalView {
         return (GridPoint(row: p.row, col: a), GridPoint(row: p.row, col: b))
     }
 
-    /// Selected text, including rows scrolled out of view.
+    /// Selected text, including rows scrolled out of view; a drawn diagram
+    /// reads as its Mermaid source.
     var selectedText: String {
         guard let s = selection else { return "" }
-        return session.text(fromCol: s.start.col, row: s.start.row, toCol: s.end.col, row: s.end.row)
+        return DiagramCopy.text(from: s.start, to: s.end, cols: snapshot.cols, drawings: diagramOverlay.drawings) { a, b in
+            session.text(fromCol: a.col, row: a.row, toCol: b.col, row: b.row)
+        }
     }
 
     func updateHandles() {
@@ -318,10 +330,14 @@ extension TerminalView: @preconcurrency UIEditMenuInteractionDelegate {
     /// prompt a custom action triggers.
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration,
                              suggestedActions: [UIMenuElement]) -> UIMenu? {
-        suggestedActions.isEmpty ? nil : UIMenu(children: suggestedActions)
+        if configuration.identifier as? NSString == DiagramOverlay.menuID { return diagramMenu() }
+        return suggestedActions.isEmpty ? nil : UIMenu(children: suggestedActions)
     }
 
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, targetRectFor configuration: UIEditMenuConfiguration) -> CGRect {
+        if configuration.identifier as? NSString == DiagramOverlay.menuID {
+            return CGRect(origin: configuration.sourcePoint, size: .zero).insetBy(dx: -1, dy: -1)
+        }
         guard let span = selectionSpan else { return .zero }
         let a = rect(col: span.startCol, row: max(span.startRow, 0))
         let b = rect(col: span.endCol, row: min(span.endRow, max(snapshot.rows - 1, 0)))

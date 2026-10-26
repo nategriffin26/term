@@ -67,6 +67,7 @@ targets:
         NSLocalNetworkUsageDescription: Term connects to computers on your network over SSH and mosh.
         NSCameraUsageDescription: Term uploads photos you take to your computer.
         NSPhotoLibraryUsageDescription: Term uploads photos and videos you pick to your computer.
+        NSPhotoLibraryAddUsageDescription: Term saves diagrams you share to your photo library.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(TERM_BUNDLE_ID)

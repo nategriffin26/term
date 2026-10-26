@@ -74,6 +74,24 @@ final class DiagramEngine {
     }
     for ready in waiting.removeValue(forKey: request) ?? [] { ready() }
   }
+
+  /// Draws without caching: a zoomed or shared image is used once.
+  func draw(_ request: Request, source: String) async -> UIImage? {
+    await onWorker { $0.render(source, request) }
+  }
+
+  /// Pele's SVG with every CSS variable resolved, before resvg draws it.
+  func svg(_ request: Request, source: String) async -> String? {
+    await onWorker { $0.layout(source, request)?.svg }
+  }
+
+  private func onWorker<T: Sendable>(_ body: @escaping @Sendable (Worker) -> T) async -> T {
+    FontSet.registerFonts()
+    let worker = worker
+    return await withCheckedContinuation { done in
+      worker.queue.async { done.resume(returning: body(worker)) }
+    }
+  }
 }
 
 /// Owns the JavaScriptCore context and the fonts resvg draws with; touched
@@ -90,6 +108,15 @@ private final class Worker: @unchecked Sendable {
   private static let measureSize: CGFloat = 100
 
   func render(_ source: String, _ request: DiagramEngine.Request) -> UIImage? {
+    guard let laid = layout(source, request) else { return nil }
+    let style = request.style
+    let shown = min(laid.width, Double(request.maxWidth))
+    return Self.rasterize(laid.svg, widthPx: UInt32((shown * style.scale).rounded()),
+                          background: 0xFF00_0000 | style.background, scale: style.scale)
+  }
+
+  /// Pele's layout of `source` within `request.maxWidth`: a static SVG and its width in points.
+  func layout(_ source: String, _ request: DiagramEngine.Request) -> (svg: String, width: Double)? {
     dispatchPrecondition(condition: .onQueue(queue))
     let style = request.style
     guard let context = loadedContext(), useFonts(style.family) else { return nil }
@@ -102,9 +129,7 @@ private final class Worker: @unchecked Sendable {
       let svg = result.objectForKeyedSubscript("svg"), svg.isString,
       let width = result.objectForKeyedSubscript("width")?.toDouble(), width > 0
     else { return nil }
-    let shown = min(width, Double(request.maxWidth))
-    return Self.rasterize(svg.toString(), widthPx: UInt32((shown * style.scale).rounded()),
-                          background: 0xFF00_0000 | style.background, scale: style.scale)
+    return (svg.toString(), width)
   }
 
   private func loadedContext() -> JSContext? {

@@ -102,8 +102,8 @@ final class DiagramSource {
   func merge(_ fetched: [Entry]) {
     var changed = false
     for e in fetched where entries[e.hash] == nil || entries[e.hash]!.time < e.time {
-      if entries[e.hash] == nil { changed = true }
       entries[e.hash] = e
+      changed = true
     }
     guard changed else { return }
     if entries.count > Self.capacity {

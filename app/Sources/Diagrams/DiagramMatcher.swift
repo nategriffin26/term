@@ -16,10 +16,12 @@ enum DiagramMatcher {
     /// Rows in it that hold a glyph (bridged label rows don't count).
     var glyphRows: Int
 
-    /// The rows `drawn` covers of this block, on a screen `rows` tall.
-    func match(_ drawn: Drawn, rows: Int) -> Match {
+    /// The rows `drawn` covers of this block. On a screen `rows` tall it may
+    /// go on past either edge; on a whole page (`rows` nil) it ends where it ends.
+    func match(_ drawn: Drawn, screenRows rows: Int?) -> Match {
       Match(top: top + drawn.trimTop, bottom: bottom - drawn.trimBottom, hash: drawn.hash,
-            openTop: top == 0 || drawn.trimTop > 0, openBottom: bottom == rows - 1 || drawn.trimBottom > 0)
+            openTop: rows != nil && (top == 0 || drawn.trimTop > 0),
+            openBottom: rows.map { bottom == $0 - 1 || drawn.trimBottom > 0 } ?? false)
     }
   }
 
@@ -99,6 +101,27 @@ enum DiagramMatcher {
     return out
   }
 
+  /// Mermaid that omp printed as source, because its ASCII renderer lacks the
+  /// type: the rows from a "```mermaid" line through the closing "```", or
+  /// through the last row when the close is not in `rows` yet.
+  static func sourceBlocks(_ rows: [String]) -> [Block] {
+    var out: [Block] = []
+    var open: Int?
+    for (i, row) in rows.enumerated() {
+      let text = row.trimmingCharacters(in: .whitespaces)
+      if let top = open {
+        if text == "```" {
+          out.append(Block(top: top, bottom: i, glyphRows: 0))
+          open = nil
+        }
+      } else if text == "```mermaid" {
+        open = i
+      }
+    }
+    if let top = open, top < rows.count - 1 { out.append(Block(top: top, bottom: rows.count - 1, glyphRows: 0)) }
+    return out
+  }
+
   /// Lowercased ASCII words of two or more characters: a letter or digit,
   /// then letters, digits and `_-.@`, without trailing `.` or `-`.
   static func words(_ text: some StringProtocol) -> [String] {
@@ -144,9 +167,18 @@ enum DiagramMatcher {
     return best?.drawn
   }
 
-  static func match(_ rows: [String], _ candidates: [Candidate]) -> [Match] {
-    blocks(rows).filter { $0.glyphRows >= minGlyphRows }.compactMap { b in
-      drawn(rows[b.top...b.bottom], in: candidates).map { b.match($0, rows: rows.count) }
+  /// Every drawing and source-text block in `rows` that a candidate draws.
+  /// `screen`: the rows are a screen, whose drawings may go on past its edges.
+  static func match(_ rows: [String], _ candidates: [Candidate], screen: Bool = true) -> [Match] {
+    let edge = screen ? rows.count : nil
+    let drawings = blocks(rows).filter { $0.glyphRows >= minGlyphRows }.compactMap { b in
+      drawn(rows[b.top...b.bottom], in: candidates).map { b.match($0, screenRows: edge) }
     }
+    let sources = sourceBlocks(rows).compactMap { b in
+      drawn(rows[b.top + 1...b.bottom], in: candidates).map {
+        Match(top: b.top, bottom: b.bottom, hash: $0.hash, openTop: false, openBottom: edge != nil && b.bottom == rows.count - 1)
+      }
+    }
+    return (drawings + sources).sorted { $0.top < $1.top }
   }
 }
