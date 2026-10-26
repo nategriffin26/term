@@ -638,21 +638,18 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   /// Opens the menu on `tab` (nil: the last one used). Opening on the
   /// overview shrinks the terminal into its tile; other tabs scale in.
-  func openMenu(_ tab: MenuTab? = nil, page: SessionsPage = .grid, fromIcon: Bool = false) {
+  func openMenu(_ tab: MenuTab? = nil, fromIcon: Bool = false) {
     let tab = tab ?? menu.tab
     guard !panel.isOpen else {
-      if tab == .sessions { menu.sessionsPage = page }
+      if tab == .sessions { menu.sessionsPage = .grid }
       menu.tab = tab
       return
     }
-    // A closed panel opens straight onto its tab and page, with no
-    // cross-fade from the ones it closed on.
+    // A closed panel opens straight onto its tab, with no cross-fade from
+    // the one it closed on. The model puts every page back at its root.
     var quiet = Transaction()
     quiet.disablesAnimations = true
-    withTransaction(quiet) {
-      if tab == .sessions { menu.sessionsPage = page }
-      menu.tab = tab
-    }
+    withTransaction(quiet) { menu.tab = tab }
     hud.hide()
     if drag != nil { finishDrag(to: nil, animated: false) }
     let terminal = focusedTab?.view
@@ -663,7 +660,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
     if fromIcon {
       panel.open(tab, fromIcon: true)
-    } else if tab == .sessions, page == .grid, let pane = focusedPane, !UIAccessibility.isReduceMotionEnabled {
+    } else if tab == .sessions, let pane = focusedPane, !UIAccessibility.isReduceMotionEnabled {
       openOverview(shrinking: pane)
     } else {
       panel.open(tab, fromIcon: false)

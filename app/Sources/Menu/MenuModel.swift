@@ -54,9 +54,13 @@ final class MenuModel {
     }
   }
   var sessionsPage = SessionsPage.grid
+  /// Bumped on every opening; Settings is rebuilt on it, so it starts at its root.
+  private(set) var settingsGeneration = 0
+  /// Every tab but Files opens at its root page; Files resumes where he left it.
   var isOpen = false {
     didSet {
       if !isOpen { tmuxTarget = nil }
+      if isOpen, !oldValue { resetPages() }
       updateThumbnails()
       onChange?()
     }
@@ -93,6 +97,17 @@ final class MenuModel {
     if isOpen { updateAspect() }
     thumbnails.isActive = isOpen && tab == .sessions
     if !isOpen || tab != .tmux { tmuxSelecting = false }
+  }
+
+  /// Sub-pages from the last opening are gone before the panel shows, with
+  /// no slide back to the root.
+  private func resetPages() {
+    var quiet = Transaction()
+    quiet.disablesAnimations = true
+    withTransaction(quiet) {
+      sessionsPage = .grid
+      settingsGeneration += 1
+    }
   }
 
   /// The terminal resizes its session a moment after layout, so the

@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The panel's content: a row of tabs and the selected tab below it. Every
-/// tab stays alive while hidden so it keeps its place (a Files folder, a
-/// Settings page) across tab switches and close/reopen.
+/// tab stays alive while hidden so it keeps its place across tab switches;
+/// only Files also keeps it across close/reopen (MenuModel.isOpen resets the rest).
 struct MenuContent: View {
   let model: MenuModel
   @Namespace private var indicator
@@ -111,7 +111,7 @@ struct MenuContent: View {
     case .sessions: SessionsTab(model: model)
     case .tmux: TmuxTab(model: model)
     case .files: FilesTab(model: model)
-    case .settings: SettingsView().scrollContentBackground(.hidden)
+    case .settings: SettingsView().id(model.settingsGeneration).scrollContentBackground(.hidden)
     }
   }
 }
