@@ -163,24 +163,13 @@ final class TmuxTests: XCTestCase {
     XCTAssertTrue(Tmux.overviewCommand().contains("case '  ' in"))
   }
 
-  /// Seen working through the test sshd's zsh: created, duplicate refused,
-  /// missing folder refused, unnamed session named by tmux.
-  func testNewCommand() {
-    XCTAssertEqual(Tmux.newCommand(name: "web app", folder: "~/Projects"),
-                   "cd ~/Projects 2>/dev/null || { echo 'No such folder'; exit 2; }; \(Tmux.path); "
-                   + #"tmux new -d -P -F '#{session_name}' -s 'web app' -c "$PWD" 2>&1"#)
-    XCTAssertTrue(Tmux.newCommand(name: "", folder: "").hasPrefix("cd ~ 2>/dev/null"))
-    XCTAssertFalse(Tmux.newCommand(name: "", folder: "/tmp").contains(" -s "))
-    XCTAssertTrue(Tmux.newCommand(name: "x", folder: "~/my dir").hasPrefix("cd ~/'my dir' 2>"))
-    XCTAssertTrue(Tmux.newCommand(name: "x", folder: " /srv/it's ").hasPrefix(#"cd '/srv/it'\''s' 2>"#))
-    XCTAssertTrue(Tmux.newCommand(name: "a;b", folder: "~").contains("-s 'a;b' -c"))
-  }
-
   /// "$3" unquoted is an empty shell variable, and tmux then targets the
-  /// most recent session instead.
+  /// most recent session instead. Closing several runs one kill each, so one
+  /// already gone does not stop the rest.
   func testActionsTargetTheSessionIdQuoted() {
-    XCTAssertEqual(Tmux.renameCommand(id: "$3", to: "new name"), "\(Tmux.path); tmux rename-session -t '$3' 'new name' 2>&1")
-    XCTAssertEqual(Tmux.killCommand(id: "$3"), "\(Tmux.path); tmux kill-session -t '$3' 2>&1")
+    XCTAssertEqual(Tmux.killCommand(ids: ["$3"]), "\(Tmux.path); tmux kill-session -t '$3' 2>&1")
+    XCTAssertEqual(Tmux.killCommand(ids: ["$3", "$12"]),
+                   "\(Tmux.path); tmux kill-session -t '$3' 2>&1; tmux kill-session -t '$12' 2>&1")
     XCTAssertEqual(Tmux.detachOthersCommand(id: "$3", keep: []), "\(Tmux.path); tmux detach-client -s '$3' 2>&1")
   }
 
@@ -190,19 +179,6 @@ final class TmuxTests: XCTestCase {
     XCTAssertEqual(Tmux.detachOthersCommand(id: "$7", keep: ["80x24", "44x30"]),
                    "\(Tmux.path); tmux list-clients -t '$7' -F '#{client_width}x#{client_height} #{client_tty}' | "
                    + #"while read -r z t; do case ' 44x30 80x24 ' in *" $z "*) ;; *) tmux detach-client -t "$t";; esac; done"#)
-  }
-
-  func testCleanNameDoesWhatTmuxDoes() {
-    XCTAssertEqual(Tmux.cleanName("  a.b:c d "), "a_b_c d")
-    XCTAssertEqual(Tmux.cleanName("   "), "")
-  }
-
-  func testShellPathKeepsTildeExpandable() {
-    XCTAssertEqual(Tmux.shellPath("~"), "~")
-    XCTAssertEqual(Tmux.shellPath("~/a b"), "~/'a b'")
-    XCTAssertEqual(Tmux.shellPath("~user"), "'~user'")
-    XCTAssertEqual(Tmux.shellPath("/tmp"), "/tmp")
-    XCTAssertEqual(Tmux.shellPath("/tmp/$HOME"), "'/tmp/$HOME'")
   }
 
   /// A snapshot is drawn from a cleared screen, row by row with attributes
@@ -272,20 +248,17 @@ final class TmuxTests: XCTestCase {
   }
 
   /// tmux 3.6's own words (recorded from `tmux -L`), which showed raw in the
-  /// new-session page and the rename and kill alerts.
+  /// close and detach alerts.
   func testReadableErrorFromTmuxComplaints() {
-    XCTAssertEqual(Tmux.readableError("duplicate session: api\n"), "api already exists")
-    XCTAssertEqual(Tmux.readableError("duplicate session: a: b"), "a: b already exists")
     XCTAssertEqual(Tmux.readableError("can't find session: $999"), "That session has ended")
     XCTAssertEqual(Tmux.readableError("no server running on /private/tmp/tmux-501/default"), "tmux isn't running")
     XCTAssertEqual(Tmux.readableError("error connecting to /private/tmp/tmux-501/x (No such file or directory)"),
                    "tmux isn't running")
   }
 
-  /// Our own messages and anything tmux says that has no shorter form pass through.
+  /// Anything tmux or the shell says that has no shorter form passes through.
   func testReadableErrorKeepsOtherText() {
-    XCTAssertEqual(Tmux.readableError("No such folder"), "No such folder")
-    XCTAssertEqual(Tmux.readableError("zsh: command not found: tmux"), "zsh: command not found: tmux")
-    XCTAssertEqual(Tmux.readableError("session duplicate session: x"), "session duplicate session: x")
+    XCTAssertEqual(Tmux.readableError("zsh: command not found: tmux\n"), "zsh: command not found: tmux")
+    XCTAssertEqual(Tmux.readableError("lost server"), "lost server")
   }
 }

@@ -4,13 +4,14 @@ import UIKit
 /// The panel's tabs, in order. A new capability is a new case plus its view
 /// in MenuContent; the header and the dock follow this list.
 enum MenuTab: String, CaseIterable, Identifiable {
-  case sessions, files, settings
+  case sessions, tmux, files, settings
 
   var id: String { rawValue }
 
   var title: String {
     switch self {
     case .sessions: "Sessions"
+    case .tmux: "tmux"
     case .files: "Files"
     case .settings: "Settings"
     }
@@ -19,6 +20,7 @@ enum MenuTab: String, CaseIterable, Identifiable {
   var symbol: String {
     switch self {
     case .sessions: "square.grid.2x2"
+    case .tmux: "rectangle.stack"
     case .files: "folder"
     case .settings: "gearshape"
     }
@@ -29,8 +31,13 @@ enum MenuTab: String, CaseIterable, Identifiable {
 enum SessionsPage: Equatable {
   case grid
   case new
-  /// A new tmux session on the host: name and folder.
-  case newTmux(Host)
+}
+
+/// A window's sessions as the overview shows them.
+struct SessionGroup: Identifiable {
+  let space: SpaceController
+  let tabs: [Tab]
+  var id: ObjectIdentifier { ObjectIdentifier(space) }
 }
 
 /// State the panel's SwiftUI content reads; actions go to the window's
@@ -65,10 +72,13 @@ final class MenuModel {
   @ObservationIgnored let thumbnails = ThumbnailRenderer()
   /// Thumbnail frames in window coordinates, for the zoom in and out of a tile.
   @ObservationIgnored var tileFrames: [UUID: CGRect] = [:]
-  /// Snapshot tiles' frames, by server key and tmux session id: attaching grows out of them.
-  @ObservationIgnored var snapshotFrames: [String: CGRect] = [:]
-  /// The host group the overview scrolls to when it shows (`tmux host` at the prompt).
-  var scrollTarget: String?
+  /// The tmux tab's row snapshots, and the long-press preview's larger one.
+  @ObservationIgnored let tmuxThumbnails = ThumbnailRenderer()
+  @ObservationIgnored let tmuxPreviews = ThumbnailRenderer()
+  /// The host the tmux tab scrolls to when it shows (`tmux host` at the prompt).
+  var tmuxTarget: String?
+  /// The tmux tab shows checkboxes, to close several sessions at once.
+  var tmuxSelecting = false
 
   init() {
     tab = UserDefaults.standard.string(forKey: Self.lastTabKey).flatMap(MenuTab.init(rawValue:)) ?? .sessions
@@ -78,6 +88,8 @@ final class MenuModel {
   private func updateThumbnails() {
     if isOpen { updateAspect() }
     thumbnails.isActive = isOpen && tab == .sessions
+    tmuxThumbnails.isActive = isOpen && tab == .tmux
+    if !isOpen || tab != .tmux { tmuxSelecting = false }
   }
 
   /// The terminal resizes its session a moment after layout, so the
@@ -91,37 +103,23 @@ final class MenuModel {
     if abs(shape - aspect) > 0.005 { aspect = shape }
   }
 
-  /// Every open window's tabs, this window's first.
-  var tabs: [Tab] {
+  /// This window's sessions first, then other open windows'.
+  var groups: [SessionGroup] {
     _ = revision
     guard let space else { return [] }
     let others = SpaceController.live.filter { $0 !== space && $0.view.window != nil }
-    return ([space] + others).flatMap(\.tabs)
-  }
-
-  /// Open tabs and the tmux sessions on their hosts, by host.
-  var hostGroups: [SessionMap.Group] {
-    let store = TmuxStore.shared
-    let refs = tabs.map { tab in
-      let remote = tab.hostName != nil
-      return SessionMap.TabRef(id: tab.id, host: remote ? tab.target : nil, tmuxSession: remote ? tab.tmuxSession : nil,
-                               isConnected: tab.isConnected)
-    }
-    return SessionMap.groups(tabs: refs, current: currentTab?.id, hosts: ConfigStore.shared.hosts,
-                             sessions: store.sessionsByServer, expanded: store.expanded)
-  }
-
-  /// The window a tab is in, for its tile's actions.
-  func space(of tab: UUID) -> (SpaceController, Tab)? {
-    for space in SpaceController.live {
-      if let tab = space.tabs.first(where: { $0.id == tab }) { return (space, tab) }
-    }
-    return nil
+    return ([space] + others).map { SessionGroup(space: $0, tabs: $0.tabs) }
   }
 
   var currentTab: Tab? {
     _ = revision
     return space?.focusedTab
+  }
+
+  /// Every window's tabs attached to tmux session `name` on `host`'s server.
+  func tabs(on host: Host, session name: String) -> [Tab] {
+    _ = revision
+    return SpaceController.live.flatMap(\.tabs).filter { $0.target?.serverKey == host.serverKey && $0.tmuxSession == name }
   }
 
   /// Files panes opened in this window, one per host, kept for its lifetime

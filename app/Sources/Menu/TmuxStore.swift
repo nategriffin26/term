@@ -7,109 +7,47 @@ extension Host {
   var serverKey: String { "\(user)@\(hostname):\(port)" }
 }
 
-/// What the Sessions overview shows: Term's open tabs and every tmux session
-/// on their hosts, grouped by host. Pure, so the merge is tested on its own.
-enum SessionMap {
-  /// An open tab as the merge needs it.
-  struct TabRef: Equatable {
-    var id: UUID
-    /// The host it runs on; nil at the local prompt.
-    var host: Host?
-    var tmuxSession: String?
-    /// Attached right now (not still connecting).
-    var isConnected: Bool
-  }
-
-  enum Item: Equatable, Identifiable {
-    /// An open tab, with the tmux session it is attached to when the host
-    /// lists it, and how many clients besides Term's are on that session.
-    case tab(UUID, session: Tmux.Session?, others: Int)
-    /// A session no tab is attached to.
-    case session(Tmux.Session, others: Int)
-
-    var id: String {
-      switch self {
-      case .tab(let id, _, _): "tab:\(id.uuidString)"
-      case .session(let s, _): "tmux:\(s.id)"
-      }
-    }
-  }
-
-  struct Group: Equatable, Identifiable {
-    /// The server key, or "local".
-    var id: String
-    /// The host sessions attach through; nil for the local group.
-    var host: Host?
-    var items: [Item]
-    /// A host without open tabs that he has not opened in the overview.
-    var collapsed: Bool
-  }
-
-  static let localID = "local"
-
-  /// Groups in order: the current tab's, then the others' as their tabs come,
-  /// then the local group (always: it holds the +), then saved hosts without
-  /// tabs, which are mostly one-line heads.
-  /// In a host group, its tabs come first, then its other sessions, most
-  /// recently active first.
-  static func groups(tabs: [TabRef], current: UUID?, hosts: [Host], sessions: [String: [Tmux.Session]],
-                     expanded: Set<String>) -> [Group] {
-    let ordered = tabs.filter { $0.id == current } + tabs.filter { $0.id != current }
-    var order: [String] = []
-    var host: [String: Host] = [:]
-    var tabsIn: [String: [TabRef]] = [:]
-    for tab in ordered {
-      let key = tab.host?.serverKey ?? localID
-      if tabsIn[key] == nil { order.append(key) }
-      tabsIn[key, default: []].append(tab)
-      if host[key] == nil, let h = tab.host { host[key] = h }
-    }
-    // Back in tab order inside each group.
-    for key in order { tabsIn[key] = tabs.filter { ($0.host?.serverKey ?? localID) == key } }
-    if !order.contains(localID) { order.append(localID) }
-    for saved in hosts where host[saved.serverKey] == nil {
-      host[saved.serverKey] = saved
-      order.append(saved.serverKey)
-    }
-
-    return order.map { key in
-      let groupTabs = tabsIn[key] ?? []
-      let listed = sessions[key] ?? []
-      var items: [Item] = []
-      var shown = Set<String>()
-      for tab in groupTabs {
-        let session = tab.tmuxSession.flatMap { name in listed.first { $0.name == name } }
-        if let session { shown.insert(session.id) }
-        items.append(.tab(tab.id, session: session, others: session.map { others(on: $0, tabs: groupTabs) } ?? 0))
-      }
-      for session in listed where !shown.contains(session.id) {
-        items.append(.session(session, others: others(on: session, tabs: groupTabs)))
-      }
-      let isLocal = key == localID
-      return Group(id: key, host: isLocal ? nil : host[key], items: items,
-                   collapsed: !isLocal && groupTabs.isEmpty && !expanded.contains(key))
-    }
-  }
-
-  /// Clients on `session` that are not Term's tabs: the Mac, another phone.
-  static func others(on session: Tmux.Session, tabs: [TabRef]) -> Int {
-    max(0, session.attached - tabs.filter { $0.isConnected && $0.tmuxSession == session.name }.count)
-  }
-
-  /// Folders to start a new session in, as shown and typed ("~/…", "/tmp/…"):
-  /// where the host's sessions are, most recently active first, then home.
-  static func folders(_ sessions: [Tmux.Session]) -> [String] {
+/// What the tmux tab shows, pure so it is tested on its own.
+enum TmuxList {
+  /// One section per tmux server among the saved hosts, in their order:
+  /// hosts that reach the same server show once, as the first saved.
+  static func servers(_ hosts: [Host]) -> [Host] {
     var seen = Set<String>()
-    return (sessions.sorted { $0.lastActivity > $1.lastActivity }.map { shortPath($0.path) } + ["~"])
-      .filter { !$0.isEmpty && seen.insert($0).inserted }
+    return hosts.filter { seen.insert($0.serverKey).inserted }
   }
 
-  /// What runs in the session's active pane, and where, from the whole path
-  /// down to its last folder ("nvim · ~/Projects/api", "nvim · …/api"): a
+  /// Clients on `session` that are not Term's: the Mac, another phone.
+  /// `term` counts Term's tabs attached to it right now.
+  static func others(on session: Tmux.Session, term: Int) -> Int {
+    max(0, session.attached - term)
+  }
+
+  /// What runs in the session's active pane, where, and its windows when it
+  /// has more than one, from the whole path down to its last folder
+  /// ("nvim · ~/Projects/api · 3 windows", "nvim · …/api · 3 windows"): a
   /// narrow line shows the longest that fits, cut at a folder, never mid-name.
   static func details(_ session: Tmux.Session) -> [String] {
     let paths = session.path.isEmpty ? [""] : pathTails(session.path)
-    return paths.map { [session.command, $0].filter { !$0.isEmpty }.joined(separator: " · ") }
+    let windows = session.windows > 1 ? "\(session.windows) windows" : ""
+    return paths.map { [session.command, $0, windows].filter { !$0.isEmpty }.joined(separator: " · ") }
+  }
+
+  /// A session nobody has touched for more than a day reads dimmer.
+  static func isIdle(_ session: Tmux.Session, now: Date) -> Bool {
+    now.timeIntervalSince(session.lastActivity) > 86400
+  }
+
+  /// A refresh's list while sessions (ids) are being closed: they stay out
+  /// even when the refresh started before they ended. tmux never reuses an
+  /// id, so one no longer listed is done and leaves `closing`.
+  static func hide(_ closing: Set<String>, from sessions: [Tmux.Session]) -> ([Tmux.Session], Set<String>) {
+    (sessions.filter { !closing.contains($0.id) }, closing.intersection(sessions.map(\.id)))
+  }
+
+  /// Why closing failed, from the kills' output; a session already gone is closed.
+  static func closeComplaint(_ output: Data) -> String? {
+    String(decoding: output, as: UTF8.self).split(whereSeparator: \.isNewline)
+      .first { !$0.hasPrefix("can't find session") }.map { Tmux.readableError(String($0)) }
   }
 
   /// A path shown in full, then shortened from the front a folder at a time:
@@ -153,8 +91,8 @@ enum SessionMap {
   }
 }
 
-/// Every host's tmux sessions and their snapshots, refreshed while the
-/// overview shows. One store for the app: sessions belong to hosts, not windows.
+/// Every saved host's tmux sessions and their snapshots, refreshed while the
+/// tmux tab shows. One store for the app: sessions belong to hosts, not windows.
 @MainActor @Observable
 final class TmuxStore {
   static let shared = TmuxStore()
@@ -176,8 +114,6 @@ final class TmuxStore {
   }
 
   private(set) var servers: [String: Server] = [:]
-  /// Hosts without tabs he opened in the overview (server keys), kept across launches.
-  private(set) var expanded: Set<String>
 
   /// One terminal engine per snapshot, fed each new capture.
   @ObservationIgnored private var engines: [String: Session] = [:]
@@ -185,22 +121,17 @@ final class TmuxStore {
   /// The last capture of each snapshot, for the tab that attaches to it to show until it draws.
   @ObservationIgnored private var screens: [String: Data] = [:]
   @ObservationIgnored private var inFlight: Set<String> = []
+  /// Sessions being closed or closed, by server key: the list leaves them
+  /// out, even from a refresh that started before they ended.
+  @ObservationIgnored private var closing: [String: Set<String>] = [:]
 
-  static let expandedKey = "sessions.expandedHosts"
-  /// While the overview shows: often enough to follow a build scrolling by,
+  /// While the tmux tab shows: often enough to follow a build scrolling by,
   /// cheap because only sessions with new activity are captured again.
   static let interval: Duration = .seconds(3)
 
-  private init() {
-    expanded = Set(UserDefaults.standard.stringArray(forKey: Self.expandedKey) ?? [])
-  }
+  private init() {}
 
-  var sessionsByServer: [String: [Tmux.Session]] { servers.mapValues(\.sessions) }
-
-  func setExpanded(_ key: String, _ on: Bool) {
-    if on { expanded.insert(key) } else { expanded.remove(key) }
-    UserDefaults.standard.set(expanded.sorted(), forKey: Self.expandedKey)
-  }
+  var hasSessions: Bool { servers.values.contains { !$0.sessions.isEmpty } }
 
   /// The snapshot engine of a session, once it has been captured.
   func engine(_ key: String, _ id: String) -> Session? { engines[key + "\t" + id] }
@@ -208,7 +139,7 @@ final class TmuxStore {
   func screen(_ key: String, _ id: String) -> Data? { screens[key + "\t" + id] }
 
   /// Refreshes `hosts` now and every `interval` until the task is cancelled
-  /// (the overview hides). The first pass also retries unreachable hosts.
+  /// (the tmux tab hides). The first pass also retries unreachable hosts.
   func watch(_ hosts: @MainActor () -> [Host]) async {
     var first = true
     while !Task.isCancelled {
@@ -257,6 +188,7 @@ final class TmuxStore {
       }
     }
     let alive = Set(server.sessions.map { key + "\t" + $0.id })
+    (server.sessions, closing[key]) = TmuxList.hide(closing[key] ?? [], from: server.sessions)
     for id in engines.keys where id.hasPrefix(key + "\t") && !alive.contains(id) {
       engines[id] = nil
       captured[id] = nil
@@ -297,25 +229,23 @@ final class TmuxStore {
     }
   }
 
-  /// A new detached session; the name tmux gave it, or why not.
-  func create(name: String, folder: String, on host: Host) async -> Result<String, RemoteExec.Failure> {
-    let result = await RemoteExec.run(Tab.spec(for: host), Tmux.newCommand(name: Tmux.cleanName(name), folder: folder))
-    refresh(host)
+  /// Ends `sessions` on `host`. They leave the list at once and stay out of
+  /// it unless tmux could not end them; one already gone counts as closed.
+  /// Returns why the rest are still there.
+  func close(_ sessions: [Tmux.Session], on host: Host) async -> String? {
+    let key = host.serverKey
+    let ids = Set(sessions.map(\.id))
+    closing[key, default: []].formUnion(ids)
+    servers[key]?.sessions.removeAll { ids.contains($0.id) }
+    let result = await RemoteExec.run(Tab.spec(for: host), Tmux.killCommand(ids: sessions.map(\.id)))
+    let complaint: String?
     switch result {
-    case .failure(let failure): return .failure(failure)
-    case .success(let out):
-      let text = String(decoding: out.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-      if out.status == 0, !text.isEmpty { return .success(text) }
-      return .failure(.init(message: text.isEmpty ? "tmux exited with status \(out.status)" : Tmux.readableError(text)))
+    case .failure(let failure): complaint = failure.message
+    case .success(let out): complaint = TmuxList.closeComplaint(out.stdout)
     }
-  }
-
-  func rename(_ session: Tmux.Session, to name: String, on host: Host) async -> String? {
-    await run(Tmux.renameCommand(id: session.id, to: Tmux.cleanName(name)), on: host)
-  }
-
-  func kill(_ session: Tmux.Session, on host: Host) async -> String? {
-    await run(Tmux.killCommand(id: session.id), on: host)
+    if complaint != nil { closing[key]?.subtract(ids) }
+    refresh(host)
+    return complaint
   }
 
   /// `keep`: sizes of Term's own clients on the session ("COLSxROWS").

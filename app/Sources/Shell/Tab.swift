@@ -162,16 +162,6 @@ final class Tab {
     view.session = remote ?? local
   }
 
-  /// The tmux session this tab is attached to was renamed: its name, a
-  /// reconnect and history follow the new name.
-  func tmuxSessionRenamed(to name: String) {
-    if let old = tmuxSession, target?.startupCommand == Tmux.attachCommand(old) {
-      target?.startupCommand = Tmux.attachCommand(name)
-    }
-    tmuxSession = name
-    host?.tabDidChange(self)
-  }
-
   /// Ends the remote session and returns to the prompt.
   func disconnect() {
     connecting = nil

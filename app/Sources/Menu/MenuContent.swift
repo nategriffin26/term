@@ -31,34 +31,24 @@ struct MenuContent: View {
 
   private var header: some View {
     HStack(spacing: 2) {
-      ForEach(MenuTab.allCases) { tab in
-        let selected = model.tab == tab
-        Button {
-          withAnimation(Helm.spring(0.32)) { model.tab = tab }
-        } label: {
-          HStack(spacing: 6) {
-            Image(systemName: tab.symbol)
-              .font(.system(size: 14, weight: .regular))
-              .foregroundStyle(selected ? Helm.accent : Helm.muted)
-            Text(tab.title)
-              .font(Helm.sans(13, .medium))
-              .foregroundStyle(selected ? Helm.fg : Helm.muted)
-          }
-          .padding(.horizontal, 11)
-          .frame(height: 32)
-          .background {
-            if selected {
-              RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Helm.sel)
-                .matchedGeometryEffect(id: "tab", in: indicator)
-            }
-          }
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(PressScale(0.94))
-        .accessibilityAddTraits(selected ? .isSelected : [])
+      // Every tab's name when the panel is wide enough; on a phone only the
+      // open one's, the others by icon.
+      ViewThatFits(in: .horizontal) {
+        tabs(titled: { _ in true })
+        tabs(titled: { $0 == model.tab })
       }
       Spacer(minLength: 8)
+      if model.tab == .tmux, model.tmuxSelecting || TmuxStore.shared.hasSessions {
+        Button(model.tmuxSelecting ? "Done" : "Select") {
+          withAnimation(Helm.ease()) { model.tmuxSelecting.toggle() }
+        }
+        .font(Helm.sans(13, .medium))
+        .foregroundStyle(model.tmuxSelecting ? Helm.accent : Helm.fg2)
+        .padding(.horizontal, 8)
+        .frame(height: 44)
+        .contentShape(Rectangle())
+        .buttonStyle(PressScale(0.94))
+      }
       Button {
         model.space?.closeMenu()
       } label: {
@@ -78,10 +68,48 @@ struct MenuContent: View {
     .frame(height: 50)
   }
 
+  private func tabs(titled: @escaping (MenuTab) -> Bool) -> some View {
+    HStack(spacing: 2) {
+      ForEach(MenuTab.allCases) { tab in
+        let selected = model.tab == tab
+        Button {
+          withAnimation(Helm.spring(0.32)) { model.tab = tab }
+        } label: {
+          HStack(spacing: 6) {
+            Image(systemName: tab.symbol)
+              .font(.system(size: 14, weight: .regular))
+              .foregroundStyle(selected ? Helm.accent : Helm.muted)
+            if titled(tab) {
+              Text(tab.title)
+                .font(Helm.sans(13, .medium))
+                .foregroundStyle(selected ? Helm.fg : Helm.muted)
+                .fixedSize()
+            }
+          }
+          .padding(.horizontal, 11)
+          .frame(minWidth: 40)
+          .frame(height: 32)
+          .background {
+            if selected {
+              RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Helm.sel)
+                .matchedGeometryEffect(id: "tab", in: indicator)
+            }
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScale(0.94))
+        .accessibilityLabel(tab.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+      }
+    }
+  }
+
   @ViewBuilder
   private func content(for tab: MenuTab) -> some View {
     switch tab {
     case .sessions: SessionsTab(model: model)
+    case .tmux: TmuxTab(model: model)
     case .files: FilesTab(model: model)
     case .settings: SettingsView().scrollContentBackground(.hidden)
     }

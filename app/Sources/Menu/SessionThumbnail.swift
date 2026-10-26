@@ -17,6 +17,7 @@ final class ThumbnailRenderer {
     var family: String
     var cellWidth: Int
     var scale: CGFloat
+    var minimum: CGFloat
   }
 
   /// Runs on every refresh tick, before the thumbnails draw.
@@ -43,16 +44,16 @@ final class ThumbnailRenderer {
   static let legiblePointSize: CGFloat = 6
 
   /// The font whose cell is `cellWidth` device pixels wide (or the nearest
-  /// below), in the terminal's family, never under `legiblePointSize`.
-  func fonts(cellWidth: Int, scale: CGFloat, family: String) -> FontSet {
-    let key = FontKey(family: family, cellWidth: max(cellWidth, 2), scale: scale)
+  /// below), in the terminal's family, never under `minimum` points.
+  func fonts(cellWidth: Int, scale: CGFloat, family: String, minimum: CGFloat = legiblePointSize) -> FontSet {
+    let key = FontKey(family: family, cellWidth: max(cellWidth, 1), scale: scale, minimum: minimum)
     if let cached = fontCache, cached.key == key { return cached.fonts }
     let reference = FontSet(family: family, pointSize: 10, scale: scale)
-    var size = max(10 * CGFloat(key.cellWidth) / CGFloat(reference.metrics.width), Self.legiblePointSize)
+    var size = max(10 * CGFloat(key.cellWidth) / CGFloat(reference.metrics.width), minimum)
     var fonts = FontSet(family: family, pointSize: size, scale: scale)
     // Cell widths are rounded to whole pixels; step down until it fits.
-    while fonts.metrics.width > key.cellWidth, size > Self.legiblePointSize {
-      size = max(size - 0.1, Self.legiblePointSize)
+    while fonts.metrics.width > key.cellWidth, size > minimum {
+      size = max(size - 0.1, minimum)
       fonts = FontSet(family: family, pointSize: size, scale: scale)
     }
     fontCache = (key, fonts)
@@ -105,8 +106,9 @@ final class SessionThumbnailView: UIView {
   /// The screen to draw: a tab's session, or a tmux session's snapshot
   /// (nil until its first capture).
   let source: @MainActor () -> Session?
-  /// Margin around the miniature, so the tile's rounded corners clip no text.
+  /// Default margin around the miniature, so a tile's rounded corners clip no text.
   static let inset: CGFloat = 5
+  let inset: CGFloat
   /// Set by the overview; all thumbnails share one size.
   var fonts: FontSet? {
     didSet { if fonts !== oldValue { needsDraw = true; refreshSoon() } }
@@ -121,8 +123,9 @@ final class SessionThumbnailView: UIView {
   override class var layerClass: AnyClass { CAMetalLayer.self }
   private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
-  init(source: @escaping @MainActor () -> Session?) {
+  init(source: @escaping @MainActor () -> Session?, inset: CGFloat = SessionThumbnailView.inset) {
     self.source = source
+    self.inset = inset
     super.init(frame: .zero)
     isOpaque = true
     isUserInteractionEnabled = false
@@ -190,7 +193,7 @@ final class SessionThumbnailView: UIView {
     overlay.focused = false
     renderer.build(snapshot, overlay: overlay)
     let cell = fonts.metrics
-    let pad = Int((Self.inset * metalLayer.contentsScale).rounded())
+    let pad = Int((inset * metalLayer.contentsScale).rounded())
     let firstRow = MenuLayout.thumbnailFirst(count: snapshot.rows, cursor: snapshot.cursorRow,
                                              visible: (Int(size.height) - pad) / max(cell.height, 1))
     let firstCol = MenuLayout.thumbnailFirst(count: snapshot.cols, cursor: snapshot.cursorCol,

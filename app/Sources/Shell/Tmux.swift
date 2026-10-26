@@ -1,8 +1,8 @@
 import Foundation
 
 /// tmux is the session store shared with the Mac; the phone lists its
-/// sessions with a snapshot of each, attaches, manages them and reads
-/// history over SSH exec.
+/// sessions with a snapshot of each, attaches, closes and detaches them, and
+/// reads history over SSH exec.
 enum Tmux {
   struct Session: Identifiable, Equatable, Sendable {
     /// tmux's own id ("$3"): exact as a target and stable across renames.
@@ -126,21 +126,9 @@ enum Tmux {
     "tmux new -A -s \(Command.shellQuote(name))"
   }
 
-  /// A detached session in `folder` (a missing folder fails instead of
-  /// falling back to home); prints the name tmux gave it, which attach uses.
-  static func newCommand(name: String, folder: String) -> String {
-    let dir = folder.trimmingCharacters(in: .whitespaces)
-    let named = name.isEmpty ? "" : " -s \(Command.shellQuote(name))"
-    return "cd \(shellPath(dir.isEmpty ? "~" : dir)) 2>/dev/null || { echo 'No such folder'; exit 2; }; \(path); "
-      + #"tmux new -d -P -F '#{session_name}'\#(named) -c "$PWD" 2>&1"#
-  }
-
-  static func renameCommand(id: String, to name: String) -> String {
-    "\(path); tmux rename-session -t \(Command.shellQuote(id)) \(Command.shellQuote(name)) 2>&1"
-  }
-
-  static func killCommand(id: String) -> String {
-    "\(path); tmux kill-session -t \(Command.shellQuote(id)) 2>&1"
+  /// Ends each session; one that fails says why on its own line.
+  static func killCommand(ids: [String]) -> String {
+    ([path] + ids.map { "tmux kill-session -t \(Command.shellQuote($0)) 2>&1" }).joined(separator: "; ")
   }
 
   /// Detaches the session's clients except Term's own, told apart by size
@@ -159,23 +147,9 @@ enum Tmux {
   /// name ids ("$3") and sockets he never sees.
   static func readableError(_ output: String) -> String {
     let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
-    if text.hasPrefix("duplicate session: ") { return "\(text.dropFirst("duplicate session: ".count)) already exists" }
     if text.hasPrefix("can't find session") { return "That session has ended" }
     if text.hasPrefix("no server running") || text.hasPrefix("error connecting to") { return "tmux isn't running" }
     return text
-  }
-
-  /// tmux turns "." and ":" in session names into "_"; the phone does the
-  /// same up front so the name it attaches to is the name tmux keeps.
-  static func cleanName(_ name: String) -> String {
-    name.trimmingCharacters(in: .whitespaces).replacing(/[.:]/, with: "_")
-  }
-
-  /// A folder for a remote shell: "~" and "~/…" stay expandable, the rest is quoted.
-  static func shellPath(_ dir: String) -> String {
-    if dir == "~" { return "~" }
-    if dir.hasPrefix("~/") { return "~/" + Command.shellQuote(String(dir.dropFirst(2))) }
-    return Command.shellQuote(dir)
   }
 
   /// Scrollback plus screen of the session's active pane, with colors, wrapped
