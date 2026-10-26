@@ -105,6 +105,10 @@ private struct SessionTile: View {
   let fonts: FontSet?
 
   var body: some View {
+    // Tab is not observable and a lazy grid keeps its tiles while the
+    // overview is hidden: reading the revision here redraws a tile whose tab
+    // has since connected, which otherwise stays labelled "shell".
+    let _ = model.revision
     VStack(alignment: .leading, spacing: 8) {
       ZStack(alignment: .topTrailing) {
         ThumbnailView(source: { tab.current }, renderer: model.thumbnails, fonts: fonts)
