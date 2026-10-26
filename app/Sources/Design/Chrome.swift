@@ -190,7 +190,9 @@ enum Chrome {
 
   /// How much of the theme's ground tints glass. Tinted: enough that text on
   /// it reads over a busy terminal, little enough that the terminal still
-  /// shows (c-glass). Clear: the terminal shows through, text still reads.
+  /// shows (c-glass). Clear: lighter, the terminal's colours show through.
+  /// Both are regular glass: UIGlassEffect's own clear style does not blur, so
+  /// a terminal's text stays sharp behind the labels (seen over an `ls` loop).
   static func glassTint(_ style: GlassStyle) -> CGFloat {
     switch style {
     case .clear: 0.35
@@ -200,8 +202,7 @@ enum Chrome {
 
   /// Liquid Glass tinted with the theme's ground, for SwiftUI's `glassEffect`.
   @MainActor static var glass: Glass {
-    let style = AppSettings.shared.glassStyle
-    return (style == .clear ? Glass.clear : .regular).tint(theme.bg.color.opacity(glassTint(style)))
+    Glass.regular.tint(theme.bg.color.opacity(glassTint(AppSettings.shared.glassStyle)))
   }
 
   // MARK: Motion
@@ -238,7 +239,7 @@ final class GlassView: UIVisualEffectView {
   private func glass() -> UIGlassEffect {
     let theme = traitCollection[AppThemeTrait.self]
     let style = traitCollection[ChromeStyleTrait.self].glass
-    let effect = UIGlassEffect(style: style == .clear ? .clear : .regular)
+    let effect = UIGlassEffect(style: .regular)
     effect.tintColor = theme.bg.uiColor.withAlphaComponent(Chrome.glassTint(style))
     return effect
   }
