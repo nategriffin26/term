@@ -66,6 +66,8 @@ Cancelled or unfinished runs report **aborted**, not done. Stops and acknowledge
 
 Set omp to repaint only the screen when its terminal changes size: `omp config set tui.resizeScrollback preserve`. With `rebuild`, a resize (the keyboard rising, a rotation) makes omp erase tmux's history and write its whole transcript again, which on a long session takes seconds and scrolls past on the phone. Term keeps tabs that are off screen at the size of the one in front and hands keyboard focus directly between terminals, so switching tabs keeps the keyboard in place and resizes nothing.
 
+Mermaid drawings use the sources published by the omp extension. While tmux scrolls, Term keeps each identified drawing's row bounds and clips the same image at the screen edges; it does not resize the image to the visible fragment. Source matching and image rendering run off the display thread. An unidentified fragment or a drawing still rendering remains text until it can be identified.
+
 ### Connecting
 
 <p align="center">
@@ -164,6 +166,14 @@ cd mac/ScreenHost && swift test            # host input, framing, clipboard, pri
 ```
 
 `KeyboardSwipeTests` and `KeyboardHandoffTests` check focus, input, compact-phone rotation and per-frame keyboard geometry. `KeyboardSwipeRemoteTests` also counts tmux resizes during slow, fast and cancelled swipes in both directions, with two and three tabs. It uses the optional private SSH fixture `local/e2e/reconnect.json` (`user` and `port`) and `local/e2e/client_key`, on the isolated `tmux -L termtest` server. The tests drive the controller's gesture states; they require a foreground simulator with the software keyboard visible. Remote counters are positively controlled by hiding and showing the keyboard before each swipe matrix. `-collect-test-diagnostics never` avoids Xcode's post-test simulator diagnostic collection.
+
+To record diagram scrolling, configure a private SSH fixture in `local/e2e`: `reconnect.json` contains `{"user":"<test account>","port":<test sshd port>}`, and `client_key` authenticates it. The opt-in test creates and removes only its own session on `tmux -L termtest`; it publishes seven diagram sources, then drives Term's wheel and momentum paths through copy-mode. Build the app and tests with `build-for-testing`, then run:
+
+```sh
+python3 scripts/verify-diagram-scroll.py <simulator-udid> <label> --derived-data <build-directory>
+```
+
+Recordings go to `local/diagram-scroll`. The command selects display 1 (the Duo's outer display); `--display` selects another active display. `--profile` separately measures synchronous main-thread frame handling, including the terminal renderer. It bypasses display-link coalescing, so its recording is a benchmark, not visual acceptance evidence; the numbers are not device frame rates and exclude asynchronous completion callbacks.
 
 `mosh-resume.py` runs two TLA+ models with TLC. The first checks that suspend, save, kill and restore, run twice with lost, duplicated and reordered packets within small bounds, never reuses an encryption nonce or loses the state needed to apply the server's next update. The second checks that a reconnect racing a suspend never leaves a checkpoint pointing at a server it ended. Before TLC runs, the script executes a probe against the real mosh crate and checks fingerprints of the Rust functions the models describe, so a model can't quietly drift from the code. It needs Java 21 and downloads a checksum-pinned TLC.
 

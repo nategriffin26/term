@@ -29,50 +29,56 @@ final class DiagramEngine {
     var style: Style
   }
 
+  struct CacheKey: Hashable {
+    var request: Request
+    var source: String
+  }
+
   /// Images kept, least recently used dropped first (a phone diagram is ~3 MB).
   static let capacity = 12
 
   private let worker = Worker()
-  private var images: [Request: UIImage] = [:]
-  private var order: [Request] = []
-  private var waiting: [Request: [() -> Void]] = [:]
+  private var images: [CacheKey: UIImage] = [:]
+  private var order: [CacheKey] = []
+  private var waiting: [CacheKey: [() -> Void]] = [:]
   /// Pele or resvg could not draw these; their ASCII stays.
-  private var failed: Set<Request> = []
+  private var failed: Set<CacheKey> = []
 
   /// The image when drawn, else nil; a request not yet drawn starts drawing
   /// and calls `ready` when its image (or its failure) is known.
   func image(_ request: Request, source: String, ready: @escaping () -> Void) -> UIImage? {
-    if let image = images[request] {
-      order.removeAll { $0 == request }
-      order.append(request)
+    let key = CacheKey(request: request, source: source)
+    if let image = images[key] {
+      order.removeAll { $0 == key }
+      order.append(key)
       return image
     }
-    guard !failed.contains(request) else { return nil }
-    if waiting[request] != nil {
-      waiting[request]!.append(ready)
+    guard !failed.contains(key) else { return nil }
+    if waiting[key] != nil {
+      waiting[key]!.append(ready)
       return nil
     }
-    waiting[request] = [ready]
+    waiting[key] = [ready]
     FontSet.registerFonts()
     let worker = worker
     worker.queue.async {
       let image = worker.render(source, request)
       DispatchQueue.main.async {
-        MainActor.assumeIsolated { self.finish(request, image) }
+        MainActor.assumeIsolated { self.finish(key, image) }
       }
     }
     return nil
   }
 
-  private func finish(_ request: Request, _ image: UIImage?) {
+  private func finish(_ key: CacheKey, _ image: UIImage?) {
     if let image {
-      images[request] = image
-      order.append(request)
+      images[key] = image
+      order.append(key)
       while order.count > Self.capacity { images[order.removeFirst()] = nil }
     } else {
-      failed.insert(request)
+      failed.insert(key)
     }
-    for ready in waiting.removeValue(forKey: request) ?? [] { ready() }
+    for ready in waiting.removeValue(forKey: key) ?? [] { ready() }
   }
 
   /// Draws without caching: a zoomed or shared image is used once.

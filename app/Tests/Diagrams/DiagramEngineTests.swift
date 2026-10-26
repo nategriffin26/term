@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import Term
 
@@ -41,5 +42,39 @@ final class DiagramEngineTests: XCTestCase {
     let image = await DiagramEngine.shared.draw(request, source: "flowchart TD\n  A -->")
     XCTAssertNil(image)
   }
+
+  func testCacheSeparatesSourceWidthAndEveryStyleField() async throws {
+    let engine = DiagramEngine()
+    let request = DiagramEngine.Request(hash: "same-published-id", maxWidth: 400, style: style)
+    let first = "flowchart TD\n A[alpha] --> B[beta]"
+    let second = "flowchart TD\n A[alpha] --> B[beta] --> C[gamma] --> D[delta]"
+    func cached(_ request: DiagramEngine.Request, _ source: String) async throws -> UIImage {
+      for _ in 0..<100 {
+        if let image = engine.image(request, source: source, ready: {}) { return image }
+        try await Task.sleep(for: .milliseconds(20))
+      }
+      throw XCTUnwrapError()
+    }
+    let a = try await cached(request, first)
+    let b = try await cached(request, second)
+    XCTAssertFalse(a === b, "The cache must not reuse pixels from a different source")
+    let same = try await cached(request, first)
+    XCTAssertTrue(a === same)
+    var requests: [DiagramEngine.Request] = []
+    var narrow = request; narrow.maxWidth = 200; requests.append(narrow)
+    var font = request; font.style.fontSize += 1; requests.append(font)
+    var family = request; family.style.family = "Menlo"; requests.append(family)
+    var fg = request; fg.style.foreground ^= 0xFFFFFF; requests.append(fg)
+    var bg = request; bg.style.background ^= 0xFFFFFF; requests.append(bg)
+    var cursor = request; cursor.style.cursor ^= 0xFFFFFF; requests.append(cursor)
+    var palette = request; palette.style.palette[4] ^= 0xFFFFFF; requests.append(palette)
+    var scale = request; scale.style.scale = 3; requests.append(scale)
+    for other in requests {
+      let image = try await cached(other, first)
+      XCTAssertFalse(a === image, "Width and every rendering style field belong in the cache key")
+    }
+  }
+
+  private struct XCTUnwrapError: Error {}
 }
 

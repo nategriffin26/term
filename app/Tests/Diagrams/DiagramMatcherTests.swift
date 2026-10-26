@@ -157,7 +157,7 @@ final class DiagramMatcherTests: XCTestCase {
   }
 }
 
-/// Sticky placement (design §3): 45 rows, 51 columns of 7.5 × 17 pt.
+/// Retained slice placement: 45 rows, 51 columns of 7.5 × 17 pt.
 final class DiagramPlacementTests: XCTestCase {
   let cell = CGSize(width: 7.5, height: 17)
 
@@ -214,13 +214,16 @@ final class DiagramPlacementTests: XCTestCase {
     XCTAssertEqual(try XCTUnwrap(place(top: 0, bottom: 44, height: 2000)).image.minY, 0)
   }
 
-  /// Scrolling off the top: pinned while the rest of the block is taller than
-  /// the image (−1, equal), then it leaves with the block's last row (+1).
-  func testScrollingOutLeavesWithTheLastRow() throws {
-    let region: CGFloat = 10 * 17
-    XCTAssertEqual(try XCTUnwrap(place(top: 0, bottom: 9, height: region - 1)).image.minY, 0)
-    XCTAssertEqual(try XCTUnwrap(place(top: 0, bottom: 9, height: region)).image.minY, 0)
-    XCTAssertEqual(try XCTUnwrap(place(top: 0, bottom: 9, height: region + 1)).image.minY, -1)
+  /// Even before both ends are known, the image follows the retained first
+  /// row rather than sticking to the viewport or following the last row.
+  func testOpenDrawingUsesItsRetainedOriginAtEveryImageHeight() throws {
+    for height: CGFloat in [169, 170, 171] {
+      let match = DiagramMatcher.Match(top: -3, bottom: 9, hash: "", openTop: true)
+      let p = try XCTUnwrap(DiagramPlacement.place(match, cols: 51, rows: 45, cell: cell,
+                                                  size: CGSize(width: 300, height: height)))
+      XCTAssertEqual(p.image.minY, -51)
+      XCTAssertEqual(p.image.height, height)
+    }
   }
 
   /// A whole block on screen shrinks its diagram to fit, down to 0.75, then clips.

@@ -1,10 +1,7 @@
 import UIKit
 
-/// Where a diagram goes over its ASCII drawing, in points from the grid's top
-/// left. The tile covers exactly the drawing's visible rows, so it never hides
-/// real text. The image is centered and starts at the drawing's first row; a
-/// drawing that goes on above the screen keeps it pinned at the top until its
-/// remaining rows are shorter than it, then it leaves with the last row.
+/// The visible slice of a diagram, in points from the grid's top left.
+/// Image geometry uses the retained block bounds, never its visible height.
 struct DiagramPlacement: Equatable {
   /// The drawing's visible rows, full width.
   var tile: CGRect
@@ -21,7 +18,7 @@ struct DiagramPlacement: Equatable {
   /// (a page scrolled part way through it). `cell`: one cell in points.
   /// `size`: the image in points.
   static func place(_ drawing: DiagramMatcher.Match, cols: Int, rows: Int, cell: CGSize, size: CGSize) -> DiagramPlacement? {
-    let first = max(drawing.top, 0), last = min(drawing.bottom, rows - 1)
+    let first = max(drawing.top, drawing.clipTop ?? 0), last = min(drawing.bottom, drawing.clipBottom ?? rows - 1)
     guard last >= first, size.width > 0, size.height > 0 else { return nil }
     let width = CGFloat(cols) * cell.width
     let block = CGFloat(drawing.bottom - drawing.top + 1) * cell.height
@@ -32,9 +29,7 @@ struct DiagramPlacement: Equatable {
       scale = min(scale, max(block / size.height, drawing.isText ? 0 : minScale))
     }
     let shown = CGSize(width: size.width * scale, height: size.height * scale)
-    let y = drawing.openTop && !drawing.openBottom
-      ? min(0, tile.height - shown.height)
-      : CGFloat(drawing.top - first) * cell.height
+    let y = CGFloat(drawing.top - first) * cell.height
     let image = CGRect(x: (width - shown.width) / 2, y: y, width: shown.width, height: shown.height)
     return DiagramPlacement(tile: tile, image: image, clipsBottom: !drawing.openBottom && drawing.bottom <= rows - 1 && image.maxY > tile.height + 0.5)
   }
@@ -98,9 +93,13 @@ final class DiagramOverlay: UIView {
   /// The page's size when `rows` was read from it: cols, rows, scrollback rows.
   private var pageKey: [Int] = []
   private var matches: [DiagramMatcher.Match] = []
-  /// Blocks by their text: what each draws, or nil. Cleared when sources change.
-  private var known: [String: DiagramMatcher.Drawn?] = [:]
-  private var tiles: [UIView] = []
+  private var scroll = DiagramScrollState()
+  private let matcher = DiagramMatching()
+  private var revision = 0
+  private var matching = false
+  private var gridColumns = 0
+  private var pendingImages: Set<DiagramEngine.CacheKey> = []
+  private var tiles: [DiagramTile] = []
   private(set) var shown: [Shown] = []
   /// The diagram the long-press menu is for.
   var menuTarget: Shown?
@@ -118,7 +117,11 @@ final class DiagramOverlay: UIView {
   /// Matched drawings with their sources, rows from the top of scrollback.
   var drawings: [Drawing] {
     matches.compactMap { m in
-      source?.source(m.hash).map { Drawing(top: m.top + rowsTop, bottom: m.bottom + rowsTop, hash: m.hash, source: $0) }
+      let (m, _) = clipping(m)
+      return source?.source(m.hash).map {
+        Drawing(top: max(m.top, m.clipTop ?? m.top) + rowsTop,
+                bottom: min(m.bottom, m.clipBottom ?? m.bottom) + rowsTop, hash: m.hash, source: $0)
+      }
     }
   }
 
@@ -132,19 +135,24 @@ final class DiagramOverlay: UIView {
     shown.first { $0.drawing.hash == hash }?.tile
   }
 
-  /// A new frame: read the screen (or a page's buffer) and match its drawings.
+  /// Move known drawings in the same frame as the text. Vocabulary matching
+  /// runs separately; a new drawing alone stays ASCII until it is ready.
   func frameChanged() {
     let session = terminal.session.diagrams
     if session !== source {
+      source?.onChange = nil
       source = session
-      known = [:]
+      scroll.reset()
+      matches = []
       pageKey = []
       source?.onChange = { [weak self] in self?.sourcesChanged() }
     }
     let s = terminal.snapshot
     guard source != nil else {
       rows = []
-      rematch()
+      matches = []
+      revision += 1
+      layoutTiles()
       return
     }
     if terminal.isReadOnly {
@@ -154,65 +162,59 @@ final class DiagramOverlay: UIView {
         return
       }
       pageKey = key
+      scroll.reset()
+      matches = []
       rows = Self.pageRows(terminal.session, cols: s.cols, rows: s.historyRows + s.rows)
       rowsTop = 0
     } else {
+      if gridColumns != s.cols {
+        scroll.reset()
+        gridColumns = s.cols
+      }
       rows = Self.screenRows(s)
       rowsTop = s.historyRows - s.viewportOffset
+      scroll.update(rows)
+      matches = scroll.visible
     }
+    revision += 1
+    layoutTiles()
     rematch()
   }
 
   private func sourcesChanged() {
-    known = [:]
+    revision += 1
     rematch()
   }
 
   private func rematch() {
-    guard let source, !rows.isEmpty else {
-      matches = []
-      layoutTiles()
-      return
-    }
-    if known.count > 256 { known = [:] }
-    let screen = terminal.isReadOnly ? nil : rows.count
-    var found: [DiagramMatcher.Match] = []
-    var unmatched: Set<String> = []
-    func memo(_ lines: ArraySlice<String>) -> DiagramMatcher.Drawn? {
-      let text = lines.joined(separator: "\n")
-      if let drawn = known[text] { return drawn }
-      let drawn = DiagramMatcher.drawn(lines, in: source.candidates)
-      known[text] = drawn
-      return drawn
-    }
-    func miss(_ block: DiagramMatcher.Block) {
-      // Named without the screen's first and last rows: a status line's
-      // clock there would make it a new drawing every minute.
-      let inner = rows[max(block.top, 1)...max(min(block.bottom, rows.count - 2), 1)]
-      let words = Set(DiagramMatcher.words(inner.joined(separator: "\n")))
-      if words.count >= 2 { unmatched.insert(words.sorted().joined(separator: " ")) }
-    }
-    for block in DiagramMatcher.blocks(rows) where block.glyphRows >= DiagramMatcher.minGlyphRows {
-      if let drawn = memo(rows[block.top...block.bottom]) {
-        found.append(block.match(drawn, screenRows: screen))
-      } else {
-        miss(block)
+    guard !matching, let source, !rows.isEmpty else { return }
+    matching = true
+    let revision = revision, rows = rows, origin = scroll.origin, epoch = scroll.epoch
+    let page = terminal.isReadOnly
+    let candidates = source.candidates
+    Task { [weak self, matcher] in
+      let result = await matcher.scan(rows, candidates: candidates, screen: !page)
+      guard let self else { return }
+      matching = false
+      if source === self.source, epoch == scroll.epoch {
+        if page {
+          matches = result.matches
+        } else {
+          scroll.merge(result.matches, origin: origin, epoch: epoch)
+          matches = scroll.visible
+        }
+        layoutTiles()
+        if !result.unmatched.isEmpty { source.unmatched(result.unmatched) }
       }
+      if revision != self.revision { rematch() }
     }
-    for block in DiagramMatcher.sourceBlocks(rows) {
-      if let drawn = memo(rows[block.top + 1...block.bottom]) {
-        found.append(block.sourceMatch(drawn.hash, screenRows: screen))
-      } else {
-        miss(block)
-      }
-    }
-    matches = found
-    layoutTiles()
-    if !unmatched.isEmpty { source.unmatched(unmatched) }
   }
 
   /// Places one tile per matched block on screen whose image is ready.
   func layoutTiles() {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    defer { CATransaction.commit() }
     let t = terminal
     let cell = t.cellSizePoints
     let snapshot = t.snapshot
@@ -220,7 +222,8 @@ final class DiagramOverlay: UIView {
     let style = style(snapshot)
     var used = 0
     var shown: [Shown] = []
-    for m in matches {
+    for original in matches {
+      let (m, cutouts) = clipping(original)
       guard let src = source?.source(m.hash) else { continue }
       let drawing = Drawing(top: m.top + rowsTop, bottom: m.bottom + rowsTop, hash: m.hash, source: src)
       // In grid rows: on a page, a drawing scrolled part way out lies past the grid.
@@ -229,13 +232,24 @@ final class DiagramOverlay: UIView {
       onGrid.bottom = drawing.bottom - viewTop
       let request = DiagramEngine.Request(
         hash: m.hash, maxWidth: Int(CGFloat(max(snapshot.cols - 2, 1)) * cell.width), style: style)
-      guard let image = DiagramEngine.shared.image(request, source: src, ready: { [weak self] in self?.layoutTiles() }),
+      let key = DiagramEngine.CacheKey(request: request, source: src)
+      guard !pendingImages.contains(key) else { continue }
+      pendingImages.insert(key)
+      let image = DiagramEngine.shared.image(request, source: src, ready: { [weak self] in
+        guard let self else { return }
+        pendingImages.remove(key)
+        layoutTiles()
+      })
+      if image != nil { pendingImages.remove(key) }
+      guard let image,
+            (!m.isText || (!m.openTop && !m.openBottom)),
             let place = DiagramPlacement.place(onGrid, cols: snapshot.cols, rows: snapshot.rows, cell: cell, size: image.size)
       else { continue }
       let tile = used < tiles.count ? tiles[used] : makeTile()
       used += 1
       tile.frame = place.tile.offsetBy(dx: t.gridOrigin.x / t.scale, dy: t.gridOrigin.y / t.scale)
       tile.backgroundColor = UIColor(argb: snapshot.bg)
+      tile.setCutouts(cutouts.map { $0.offsetBy(dx: -place.tile.minX, dy: -place.tile.minY) })
       let view = tile.subviews[0] as! UIImageView
       view.image = image
       view.frame = place.image
@@ -252,8 +266,8 @@ final class DiagramOverlay: UIView {
     self.shown = shown
   }
 
-  private func makeTile() -> UIView {
-    let tile = UIView()
+  private func makeTile() -> DiagramTile {
+    let tile = DiagramTile()
     tile.clipsToBounds = true
     let image = UIImageView()
     image.contentMode = .scaleToFill
@@ -264,6 +278,36 @@ final class DiagramOverlay: UIView {
     return tile
   }
 
+  /// A copy-mode position is a colored suffix, not a whole status row.
+  /// Preserve its actual cells without exposing the source beside it.
+  private func clipping(_ original: DiagramMatcher.Match) -> (DiagramMatcher.Match, [CGRect]) {
+    let s = terminal.snapshot, cell = terminal.cellSizePoints
+    var match = original
+    var cutouts: [CGRect] = []
+    func suffix(_ row: Int) -> CGRect? {
+      guard row >= 0, row < s.rows, s.cols > 0 else { return nil }
+      let start = row * s.cols
+      var last = s.cols - 1
+      while last > 0, s.cells[start + last].ch <= 32 { last -= 1 }
+      let background = s.cells[start + last].bg
+      guard background != s.bg else { return nil }
+      var first = last
+      while first > 0, s.cells[start + first - 1].bg == background { first -= 1 }
+      guard first > 0 else { return nil }
+      return CGRect(x: CGFloat(first) * cell.width, y: CGFloat(row) * cell.height,
+                    width: CGFloat(s.cols - first) * cell.width, height: cell.height)
+    }
+    if let top = match.clipTop, let rect = suffix(top - 1) {
+      match.clipTop = top - 1
+      cutouts.append(rect)
+    }
+    if let bottom = match.clipBottom, let rect = suffix(bottom + 1) {
+      match.clipBottom = bottom + 1
+      cutouts.append(rect)
+    }
+    return (match, cutouts)
+  }
+
   private func style(_ s: FrameSnapshot) -> DiagramEngine.Style {
     let theme = AppSettings.shared.termTheme
     let palette = withUnsafeBytes(of: theme.palette) { Array($0.bindMemory(to: UInt32.self)).map { $0 & 0xFF_FFFF } }
@@ -272,15 +316,21 @@ final class DiagramOverlay: UIView {
                  palette: palette, scale: Double(terminal.scale))
   }
 
-  /// Each row of the frame as text; empty when nothing on screen is a drawing.
+  /// Keep plain rows too: a source fragment can have neither a fence nor a glyph.
   static func screenRows(_ s: FrameSnapshot) -> [String] {
-    guard s.cols > 0, s.cells.contains(where: { DiagramMatcher.isGlyph($0.ch) || $0.ch == 0x60 }) else { return [] }
+    guard s.cols > 0, s.rows > 0 else { return [] }
     return (0..<s.rows).map { r in
       var row = String.UnicodeScalarView()
       for i in r * s.cols..<(r + 1) * s.cols {
-        let scalars = s.scalars(at: i)
-        if scalars.isEmpty { row.append(" ") }
-        for v in scalars { if let u = Unicode.Scalar(v) { row.append(u) } }
+        let cell = s.cells[i]
+        if cell.grapheme == 0 {
+          row.append(Unicode.Scalar(cell.ch == 0 ? 32 : cell.ch) ?? " ")
+        } else {
+          let g = s.graphemes[Int(cell.grapheme) - 1]
+          for value in s.codepoints[Int(g.offset)..<Int(g.offset + g.len)] {
+            if let scalar = Unicode.Scalar(value) { row.append(scalar) }
+          }
+        }
       }
       return String(row)
     }
@@ -290,6 +340,27 @@ final class DiagramOverlay: UIView {
   static func pageRows(_ session: Session, cols: Int, rows: Int) -> [String] {
     guard cols > 0 else { return [] }
     return (0..<rows).map { session.text(fromCol: 0, row: $0, toCol: cols - 1, row: $0) }
+  }
+}
+
+private final class DiagramTile: UIView {
+  private let cutoutMask = CAShapeLayer()
+  private var maskedBounds = CGRect.null
+  private var cutouts: [CGRect] = []
+
+  func setCutouts(_ rectangles: [CGRect]) {
+    guard rectangles != cutouts || bounds != maskedBounds else { return }
+    cutouts = rectangles
+    maskedBounds = bounds
+    guard !rectangles.isEmpty else { layer.mask = nil; return }
+    let path = UIBezierPath(rect: bounds)
+    for rect in rectangles {
+      let clipped = rect.intersection(bounds)
+      if !clipped.isNull { path.append(UIBezierPath(rect: clipped)) }
+    }
+    cutoutMask.fillRule = .evenOdd
+    cutoutMask.path = path.cgPath
+    layer.mask = cutoutMask
   }
 }
 

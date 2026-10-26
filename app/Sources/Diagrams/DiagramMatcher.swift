@@ -33,7 +33,7 @@ enum DiagramMatcher {
 
   /// A source's drawing on screen, and whether it may go on past either edge
   /// (off screen, or behind a status line).
-  struct Match: Equatable {
+  struct Match: Equatable, Sendable {
     var top: Int
     var bottom: Int
     var hash: String
@@ -42,6 +42,9 @@ enum DiagramMatcher {
     /// The rows are Mermaid source text, not an ASCII drawing: the diagram has
     /// no natural height here, so it is fitted whole into them.
     var isText = false
+    /// Fixed terminal chrome excluded without changing the drawing's geometry.
+    var clipTop: Int?
+    var clipBottom: Int?
   }
 
   /// The source a block draws, and the rows at its edges that aren't part of it.
@@ -52,7 +55,7 @@ enum DiagramMatcher {
   }
 
   /// A published source, its words ready for matching.
-  struct Candidate {
+  struct Candidate: Sendable {
     var hash: String
     var time: Double
     var vocab: Set<String>
