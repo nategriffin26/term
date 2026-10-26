@@ -222,8 +222,16 @@ final class VoiceStripView: UIView {
     fade.frame = trace.bounds
     let mid = status.bounds.midY
     count.sizeToFit()
+    // A narrow strip (iPhone portrait, between the mic and the arrows) drops the icon before the
+    // words run into the key beside it, and shrinks them slightly if they still do not fit.
+    let iconFits = 29 + count.bounds.width + 4 <= status.bounds.width
+    icon.isHidden = !iconFits
+    let left: CGFloat = iconFits ? 29 : 6
+    count.adjustsFontSizeToFitWidth = true
+    count.minimumScaleFactor = 0.7
+    count.frame = CGRect(x: left, y: mid - count.bounds.height / 2,
+                         width: min(count.bounds.width, max(0, status.bounds.width - left - 2)), height: count.bounds.height)
     icon.frame = CGRect(x: 8, y: mid - 9, width: 18, height: 18)
-    count.frame.origin = CGPoint(x: 29, y: mid - count.bounds.height / 2)
     discard.frame = CGRect(x: bounds.maxX - 32, y: mid - 16, width: 32, height: 32)
     draw(dt: 0)
   }
