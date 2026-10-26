@@ -13,6 +13,7 @@ final class TmuxReconnectTests: XCTestCase {
   private var host: Host?
   private var keyName = ""
   private var sessionName = ""
+  private var reconnectFailure: String?
   private let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
     .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     .appending(path: "local/e2e")
@@ -56,13 +57,26 @@ final class TmuxReconnectTests: XCTestCase {
     self.tab = tab
     tab.connect(host)
     try await until("plain login shell") { tab.remote != nil }
+    let reconnect = tab.current.onReconnect
+    tab.current.onReconnect = { [weak self] failure in
+      self?.reconnectFailure = failure
+      reconnect?(failure)
+    }
     return tab
   }
 
   private func until(_ description: String, _ condition: () -> Bool) async throws {
     let deadline = Date.now.addingTimeInterval(20)
     while !condition() {
-      if Date.now > deadline { XCTFail("Timed out waiting for \(description)"); throw WaitFailure() }
+      if Date.now > deadline {
+        let registry = Mirror(reflecting: SessionRegistry.shared)
+        let scenes = registry.children.first { $0.label == "tabsByScene" }?.value as? [String: [Tab]] ?? [:]
+        let states = scenes.values.flatMap { $0 }.map {
+          "\($0.target?.alias ?? "local"): pid=\($0.current.processID), unreachable=\($0.unreachable), polling=\($0.pollsTmuxAttachment)"
+        }
+        XCTFail("Timed out waiting for \(description); reconnect=\(reconnectFailure ?? "none"); tabs=\(states)")
+        throw WaitFailure()
+      }
       try await Task.sleep(for: .milliseconds(50))
     }
   }
@@ -152,7 +166,8 @@ final class TmuxReconnectTests: XCTestCase {
   }
 
   func testRepeatedAttachOpensOnlyOneAdditionalTab() async throws {
-    _ = try await connect(.ssh)
+    let original = try await connect(.ssh)
+    try await drop(original)
     let space = try XCTUnwrap(space)
     let host = try XCTUnwrap(host)
     let name = sessionName

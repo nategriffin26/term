@@ -325,7 +325,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let candidates = Self.live.flatMap(\.tabs).filter {
       $0.target.map { TmuxStore.shared.sameServer($0, host) } == true
     }
-    await TmuxAttachment.refresh(candidates, timeout: .seconds(1))
+    await TmuxAttachment.refresh(candidates, timeout: .seconds(3))
     if let open = Self.live.flatMap(\.tabs).first(where: { $0.tmuxSession == name && $0.target.map { TmuxStore.shared.sameServer($0, host) } == true }) {
       zoom(into: open, fromTile: false)
       return

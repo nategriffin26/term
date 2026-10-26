@@ -90,6 +90,8 @@ final class MenuModel {
   }
   /// Rows checked while selecting, by `TmuxTab.rowID`.
   var tmuxSelection = Set<String>()
+  /// Rows opening a session while its existing terminals are being checked.
+  var tmuxOpening = Set<String>()
 
   init() {
     tab = UserDefaults.standard.string(forKey: Self.lastTabKey).flatMap(MenuTab.init(rawValue:)) ?? .sessions

@@ -102,8 +102,12 @@ struct TmuxTab: View {
     let unread = agent?.unread == true
     let clear: () -> Void = { store.markSeen([session.id], on: host) }
     let open: () -> Void = {
+      guard model.tmuxOpening.insert(id).inserted else { return }
       store.markSeen([session.id], on: host)
-      Task { await model.space?.attach(host, session: session.name, preview: store.screen(host.serverKey, session.id)) }
+      Task {
+        defer { model.tmuxOpening.remove(id) }
+        await model.space?.attach(host, session: session.name, preview: store.screen(host.serverKey, session.id))
+      }
     }
     let close: () -> Void = { self.close([session], on: host) }
     let detach: (() -> Void)? = others > 0 ? { detachOthers(session, on: host, keeping: mine) } : nil
@@ -118,7 +122,8 @@ struct TmuxTab: View {
     } label: {
       TmuxRow(session: session, agent: agent, nameWidth: nameWidth,
               dot: !mine.isEmpty ? .term : session.attached > 0 ? .elsewhere : nil,
-              checked: model.tmuxSelecting ? model.tmuxSelection.contains(id) : nil)
+              checked: model.tmuxSelecting ? model.tmuxSelection.contains(id) : nil,
+              opening: model.tmuxOpening.contains(id))
     }
     .buttonStyle(RowStyle())
     .clipShape(ends.shape)
@@ -256,6 +261,7 @@ private struct TmuxRow: View {
   let dot: Dot?
   /// Select mode's checkbox; nil outside it.
   let checked: Bool?
+  let opening: Bool
 
   /// The first line's height: with the padding, a row is 50 tall at Text Size Default.
   private static var lineHeight: CGFloat { Chrome.TextStep.body.size(in: AppSettings.shared.textSize) + 5 }
@@ -309,15 +315,20 @@ private struct TmuxRow: View {
   }
 
   @ViewBuilder private var dotView: some View {
-    switch dot {
-    case .term:
-      Circle().fill(Chrome.fg).frame(width: 7, height: 7)
-        .accessibilityLabel("open in Term")
-    case .elsewhere:
-      Circle().strokeBorder(Chrome.fg2, lineWidth: 1.4).frame(width: 7, height: 7)
-        .accessibilityLabel("attached")
-    case nil:
-      Color.clear
+    if opening {
+      ProgressView().controlSize(.mini).tint(Chrome.fg)
+        .accessibilityLabel("Opening session")
+    } else {
+      switch dot {
+      case .term:
+        Circle().fill(Chrome.fg).frame(width: 7, height: 7)
+          .accessibilityLabel("open in Term")
+      case .elsewhere:
+        Circle().strokeBorder(Chrome.fg2, lineWidth: 1.4).frame(width: 7, height: 7)
+          .accessibilityLabel("attached")
+      case nil:
+        Color.clear
+      }
     }
   }
 

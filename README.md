@@ -49,7 +49,7 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 
 tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads a tab's history with `tmux capture-pane` (a tab outside tmux shows its own scrollback), and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
 
-Term learns a tab's tmux client through process ancestry over SSH, without changing the host's configuration or terminal output. It checks while the app is active, before reconnecting, and before opening a session from the tmux tab. The learned name labels the existing terminal, so selecting that session switches to it rather than opening a duplicate. A manually attached session returns to a login shell when it ends. SSH retains its last observation after a lost connection: an attach or detach between the last successful check and the drop cannot be recovered; mosh can usually inspect its surviving server before replacing it.
+Term learns a tab's client on the host's default tmux server through process ancestry over SSH, without changing the host's configuration or terminal output. It checks while the app is active, before reconnecting, and before opening a session from the tmux tab. The learned name labels the existing terminal, so selecting that session switches to it rather than opening a duplicate. A manually attached session returns to a login shell when it ends. SSH retains its last observation after a lost connection: an attach or detach between the last successful check and the drop cannot be recovered; mosh can usually inspect its surviving server before replacing it.
 
 ### omp agents
 
