@@ -358,11 +358,16 @@ typedef struct {
   uint32_t fg, bg, cursor;      // defaults, 0xAARRGGBB
   uint32_t palette[16];         // ANSI 0-15; 16-255 stay xterm defaults
   uint8_t bold_is_bright;       // bold text in colors 0-7 uses 8-15
-  uint8_t _pad[3];
+  uint8_t cursor_style;         // TermCursorStyle the user picked (not BLOCK_HOLLOW)
+  uint8_t cursor_blink;         // the user's cursor blinks
+  uint8_t _pad;
 } TermTheme;
 
 // Frames after this call resolve colors with t; OSC 4/10/11 overrides from
-// the remote still win.
+// the remote still win. cursor_style/cursor_blink are the terminal's default
+// cursor: frames carry them until the program sends DECSCUSR (`CSI Ps SP q`,
+// e.g. vim's insert-mode bar); its choice then stands, through later calls
+// here, until it asks for the default again (`CSI 0 SP q`), RIS or DECSTR.
 void term_session_set_theme(TermSession *s, const TermTheme *t);
 
 // Fills *out with the current frame. Returns false and leaves *out untouched

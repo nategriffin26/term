@@ -185,7 +185,9 @@ fn theme_replaces_the_16_colors_and_leaves_the_rest() {
     }
     palette[1] = 0xFF11_2233;
     palette[9] = 0xFF44_5566;
-    let theme = TermTheme { fg: 0xFFAA_BBCC, bg: 0xFF01_0203, cursor: 0, palette, bold_is_bright: 1, _pad: [0; 3] };
+    let theme = TermTheme {
+        fg: 0xFFAA_BBCC, bg: 0xFF01_0203, cursor: 0, palette, bold_is_bright: 1, cursor_style: 0, cursor_blink: 0, _pad: 0,
+    };
     unsafe { term_session_set_theme(s, &theme) };
     feed(s, b"\x1b[31mA\x1b[1;31mB\x1b[0;38;5;196mC");
     let f = frame(s, 0).unwrap();
@@ -197,6 +199,36 @@ fn theme_replaces_the_16_colors_and_leaves_the_rest() {
     let theme = TermTheme { cursor: 0xFF12_3456, ..theme };
     unsafe { term_session_set_theme(s, &theme) };
     assert_eq!(frame(s, 0).unwrap().cursor_color, 0xFF12_3456);
+    unsafe { term_session_free(s) };
+}
+
+#[test]
+fn theme_cursor_is_the_default_until_the_program_sets_one() {
+    // Bugs caught: the user's cursor shape or blink never reaching frames; a
+    // settings change overriding the program's DECSCUSR (vim's insert bar
+    // turning back into the user's shape); CSI 0 q not restoring the user's.
+    let rec = Recorder::new();
+    let s = local(&rec, 20, 5);
+    let mut theme = TermTheme {
+        fg: 0xFFFF_FFFF, bg: 0xFF00_0000, cursor: 0, palette: [0xFF00_0000; 16], bold_is_bright: 0,
+        cursor_style: vt::cursor_style::BAR, cursor_blink: 1, _pad: 0,
+    };
+    unsafe { term_session_set_theme(s, &theme) };
+    let f = frame(s, 0).unwrap();
+    assert_eq!((f.cursor_style, f.cursor_blink), (vt::cursor_style::BAR, 1));
+
+    feed(s, b"\x1b[2 q");
+    let f = frame(s, 0).unwrap();
+    assert_eq!((f.cursor_style, f.cursor_blink), (vt::cursor_style::BLOCK, 0), "steady block from the program");
+
+    theme.cursor_style = vt::cursor_style::UNDERLINE;
+    unsafe { term_session_set_theme(s, &theme) };
+    let f = frame(s, 0).unwrap();
+    assert_eq!((f.cursor_style, f.cursor_blink), (vt::cursor_style::BLOCK, 0), "the program's choice stands");
+
+    feed(s, b"\x1b[0 q");
+    let f = frame(s, 0).unwrap();
+    assert_eq!((f.cursor_style, f.cursor_blink), (vt::cursor_style::UNDERLINE, 1), "CSI 0 q brings the user's back");
     unsafe { term_session_free(s) };
 }
 

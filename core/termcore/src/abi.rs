@@ -164,5 +164,7 @@ pub struct TermTheme {
     pub cursor: u32,
     pub palette: [u32; 16],
     pub bold_is_bright: u8,
-    pub _pad: [u8; 3],
+    pub cursor_style: u8,
+    pub cursor_blink: u8,
+    pub _pad: u8,
 }

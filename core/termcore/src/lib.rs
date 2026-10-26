@@ -286,6 +286,7 @@ pub unsafe extern "C" fn term_session_scroll(s: *const Session, delta_rows: i32)
 
 /// term.h `term_session_set_theme`. Palette 0-15 replace the defaults; a
 /// cursor color with alpha 0 means "draw the cursor in the foreground color".
+/// The cursor shape and blink become the terminal's default cursor.
 ///
 /// # Safety
 /// `s` is NULL or live; `t` is NULL or valid.
@@ -302,6 +303,8 @@ pub unsafe extern "C" fn term_session_set_theme(s: *const Session, t: *const Ter
         cursor: (t.cursor >> 24 != 0).then_some(t.cursor & 0xFF_FFFF),
         palette,
         bold_is_bright: t.bold_is_bright != 0,
+        cursor_style: t.cursor_style,
+        cursor_blink: t.cursor_blink != 0,
     };
     s.update(|st, ev| {
         if st.term.set_theme(theme).is_ok() {

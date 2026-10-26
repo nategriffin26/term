@@ -63,6 +63,11 @@ pub struct Theme {
     pub palette: [u32; 256],
     /// Bold text in palette colors 0-7 uses 8-15.
     pub bold_is_bright: bool,
+    /// Default cursor ([`cursor_style`]; BLOCK_HOLLOW reads as BLOCK) and
+    /// blink. A program's DECSCUSR overrides both until it selects the
+    /// default again (`CSI 0 SP q`), RIS or DECSTR.
+    pub cursor_style: u8,
+    pub cursor_blink: bool,
 }
 
 impl Theme {
@@ -82,6 +87,8 @@ impl Default for Theme {
             cursor: None,
             palette: Theme::default_palette(),
             bold_is_bright: false,
+            cursor_style: cursor_style::BLOCK,
+            cursor_blink: false,
         }
     }
 }
@@ -359,6 +366,13 @@ impl Terminal {
                 }
                 None => set(sys::GHOSTTY_TERMINAL_OPT_COLOR_CURSOR, ptr::null())?,
             }
+            let style = match t.cursor_style {
+                cursor_style::BAR => sys::GHOSTTY_TERMINAL_CURSOR_STYLE_BAR,
+                cursor_style::UNDERLINE => sys::GHOSTTY_TERMINAL_CURSOR_STYLE_UNDERLINE,
+                _ => sys::GHOSTTY_TERMINAL_CURSOR_STYLE_BLOCK,
+            };
+            set(sys::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE, &style as *const _ as *const c_void)?;
+            set(sys::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK, &t.cursor_blink as *const bool as *const c_void)?;
             set(sys::GHOSTTY_TERMINAL_OPT_COLOR_PALETTE, palette.as_ptr() as *const c_void)?;
             self.fx.dark = sys::ghostty_color_perceived_luminance(&bg) < 0.5;
         }

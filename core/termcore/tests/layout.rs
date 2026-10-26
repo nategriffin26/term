@@ -25,7 +25,7 @@ fn expected() -> Vec<(String, u64)> {
         grapheme_count, graphemes, codepoints,
     ]);
     layout!(TermKeyEvent, "TermKeyEvent", [key, mods, text]);
-    layout!(TermTheme, "TermTheme", [fg, bg, cursor, palette, bold_is_bright, _pad]);
+    layout!(TermTheme, "TermTheme", [fg, bg, cursor, palette, bold_is_bright, cursor_style, cursor_blink, _pad]);
     layout!(TermConnect, "TermConnect", [
         transport, host, port, cols, rows, user, private_key, password, host_key, command,
         mosh_server, predict, idle_timeout,
