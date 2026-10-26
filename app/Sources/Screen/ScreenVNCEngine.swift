@@ -129,7 +129,9 @@ private final class VNCClient: @unchecked Sendable {
   // Queue-confined.
   private var handle: OpaquePointer?
   private var sink: Sink?
-  private var buffer: CVPixelBuffer?
+  /// Fresh buffers for each frame: the renderer may still read the last one it was given.
+  private var pool: CVPixelBufferPool?
+  private var poolSize = (width: 0, height: 0)
   private let framePending = Atomic<Bool>(false)
   private var paused = false
 
@@ -222,30 +224,44 @@ private final class VNCClient: @unchecked Sendable {
 
   // MARK: Queue
 
+  /// Copies the whole framebuffer into a buffer the renderer does not hold,
+  /// then shows it; a buffer already enqueued is never written again.
   private func copyFrame() {
     guard let handle, !paused else { return }
     var frame = TermVncFrame()
     guard term_vnc_lock(handle, &frame) else { return }
     let width = Int(frame.width), height = Int(frame.height)
-    var resized = false
-    if buffer.map({ CVPixelBufferGetWidth($0) != width || CVPixelBufferGetHeight($0) != height }) ?? true {
-      buffer = Self.makeBuffer(width: width, height: height)
-      resized = true
+    let resized = poolSize != (width, height)
+    if resized {
+      pool = Self.makePool(width: width, height: height)
+      poolSize = (width, height)
     }
-    if let buffer, frame.dirty_w > 0, let pixels = frame.pixels {
-      CVPixelBufferLockBaseAddress(buffer, [])
-      if let base = CVPixelBufferGetBaseAddress(buffer) {
-        let stride = CVPixelBufferGetBytesPerRow(buffer)
-        let x = Int(frame.dirty_x), w = Int(frame.dirty_w)
-        for y in Int(frame.dirty_y)..<min(height, Int(frame.dirty_y + frame.dirty_h)) {
-          memcpy(base + y * stride + x * 4, pixels + y * Int(frame.stride) + x * 4, w * 4)
+    var image: CVPixelBuffer?
+    let status = pool.map { CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, $0, Self.poolLimit, &image) }
+    if let image, let pixels = frame.pixels {
+      CVPixelBufferLockBaseAddress(image, [])
+      if let base = CVPixelBufferGetBaseAddress(image) {
+        let stride = CVPixelBufferGetBytesPerRow(image), source = Int(frame.stride)
+        if stride == source {
+          memcpy(base, pixels, stride * height)
+        } else {
+          for y in 0..<height { memcpy(base + y * stride, pixels + y * source, width * 4) }
         }
       }
-      CVPixelBufferUnlockBaseAddress(buffer, [])
+      CVPixelBufferUnlockBaseAddress(image, [])
     }
     term_vnc_unlock(handle)
     if resized { post(.size(width, height)) }
-    if let buffer { show(buffer) }
+    if let image {
+      show(image)
+    } else if status == kCVReturnWouldExceedAllocationThreshold {
+      // Every buffer is still on screen or queued: copy again once one comes back.
+      guard !framePending.exchange(true, ordering: .acquiringAndReleasing) else { return }
+      queue.asyncAfter(deadline: .now() + 0.016) { [self] in
+        framePending.store(false, ordering: .releasing)
+        copyFrame()
+      }
+    }
   }
 
   private func show(_ image: CVPixelBuffer) {
@@ -262,11 +278,19 @@ private final class VNCClient: @unchecked Sendable {
     renderer.enqueue(sample)
   }
 
-  private static func makeBuffer(width: Int, height: Int) -> CVPixelBuffer? {
-    var buffer: CVPixelBuffer?
-    let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
-    CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer)
-    return buffer
+  /// Buffers in flight at most: one on screen, one queued, one being filled, one spare.
+  private static var poolLimit: CFDictionary { [kCVPixelBufferPoolAllocationThresholdKey: 4] as CFDictionary }
+
+  private static func makePool(width: Int, height: Int) -> CVPixelBufferPool? {
+    var pool: CVPixelBufferPool?
+    let attributes: [CFString: Any] = [
+      kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+      kCVPixelBufferWidthKey: width,
+      kCVPixelBufferHeightKey: height,
+      kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+    ]
+    CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, attributes as CFDictionary, &pool)
+    return pool
   }
 
   private func readCursor() {
