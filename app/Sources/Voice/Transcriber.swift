@@ -1,11 +1,11 @@
 import AVFoundation
 import Foundation
 
-/// Turns one spoken segment into text.
+/// Turns one part of a recording into text.
 protocol Transcriber: Sendable {
-  /// `audio` is an m4a file; `prompt` is what was typed just before it, for
-  /// spelling and context. `waiting` runs if the request is held until the
-  /// network returns.
+  /// `audio` is an m4a file; `prompt` is the terminal it was said into
+  /// (`DictationPrompt`), for spelling and context. `waiting` runs if the
+  /// request is held until the network returns.
   func transcribe(_ audio: URL, prompt: String,
                   waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> String
 }
@@ -98,11 +98,46 @@ struct OpenRouterTranscriber: Transcriber {
   }
 }
 
+/// What the transcriber is told a recording is about: the end of what its
+/// terminal shows, then the text last dictated into it. Paths, flags and
+/// names on the screen are then spelled the way they are written (measured:
+/// 2 of 6 invented names right without it, 5 to 6 with it, at the same speed).
+enum DictationPrompt {
+  /// 8,000 characters of screen: a full phone screen and then some (4,000
+  /// and 16,000 character prompts were measured to cost no time).
+  static let screenLength = 8_000
+  static let typedLength = 200
+
+  /// The screen's last lines that fit in `screenLength`, without trailing
+  /// spaces or blank lines at the end, then `typed`'s last `typedLength` characters.
+  static func text(screen: String, typed: String) -> String {
+    var lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map { line -> Substring in
+      guard let end = line.lastIndex(where: { !$0.isWhitespace }) else { return "" }
+      return line[...end]
+    }
+    while lines.last?.isEmpty == true { lines.removeLast() }
+    var kept: [String] = []
+    var length = 0
+    for line in lines.reversed() {
+      let added = line.count + (kept.isEmpty ? 0 : 1)
+      guard length + added <= screenLength else {
+        // A last line longer than all of it keeps its end.
+        if kept.isEmpty { kept.append(String(line.suffix(screenLength))) }
+        break
+      }
+      kept.append(String(line))
+      length += added
+    }
+    let shown = kept.reversed().joined(separator: "\n")
+    return [shown, String(typed.suffix(typedLength))].filter { !$0.isEmpty }.joined(separator: "\n")
+  }
+}
+
 /// Speech as OpenRouter takes it: AAC in an m4a, 16 kHz mono, 32 kbps (about 4 KB a second).
 enum SpeechAudio {
-  static func m4a(_ samples: [Float]) throws -> Data {
+  static func m4a(_ samples: ArraySlice<Float>) throws -> Data {
     guard !samples.isEmpty else { throw CocoaError(.fileWriteUnknown) }
-    let rate = Double(SpeechSegmenter.sampleRate)
+    let rate = Double(Recording.sampleRate)
     let url = FileManager.default.temporaryDirectory.appending(path: "speech-\(UUID().uuidString).m4a")
     defer { try? FileManager.default.removeItem(at: url) }
     let settings: [String: Any] = [
@@ -121,7 +156,7 @@ enum SpeechAudio {
   }
 
   /// Drops the ~24 KB 'free' atom AVAudioFile pads an m4a with (more than
-  /// a short segment's audio), moving the sample offsets ('stco') back to match.
+  /// a short part's audio), moving the sample offsets ('stco') back to match.
   static func compact(_ m4a: Data) -> Data {
     var bytes = [UInt8](m4a)
     func u32(_ at: Int) -> Int { bytes[at..<at + 4].reduce(0) { $0 << 8 | Int($1) } }

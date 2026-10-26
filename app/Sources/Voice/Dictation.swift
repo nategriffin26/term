@@ -3,7 +3,7 @@ import Network
 import UIKit
 
 extension Notification.Name {
-  /// Posted on the main thread when `Dictation.shared.state` or `showsCopied` changes.
+  /// Posted on the main thread when `Dictation.shared.state` or `note` changes.
   static let voiceStateChanged = Notification.Name("VoiceStateChanged")
 }
 
@@ -12,7 +12,9 @@ extension Notification.Name {
 protocol DictationTarget: AnyObject {
   /// Where input typed here goes now; nil at the local prompt.
   var dictationDestination: DictationDestination? { get }
-  /// Types a transcript at the cursor.
+  /// The prompt for what is said here (`DictationPrompt`): the end of the screen and the text last dictated.
+  var dictationPrompt: String { get }
+  /// Types a recording's text at the cursor.
   func typeDictation(_ text: String)
   /// Says what went wrong (the microphone refused, the key rejected).
   func dictationNotice(_ text: String)
@@ -37,10 +39,13 @@ struct DictationDestination {
   }
 }
 
-/// Voice to text for the Smart Keys mic key. Listens, cuts speech into
-/// segments at pauses, sends each the moment it ends and types its text
-/// in spoken order, so words appear while the user is still talking.
-/// Speech is never dropped for a slow or missing network: segments wait on
+/// Voice to text for the Smart Keys mic key. Records from the tap that
+/// starts listening to the tap that stops it, sending nothing meanwhile; then
+/// trims the room off both ends, cuts the recording at pauses into parts of a
+/// minute at most, drops parts the speech classifier hears no speech in,
+/// transcribes the rest two at a time and types the recording's text once,
+/// joined in order. A recording with no speech types nothing and says so.
+/// Speech is never dropped for a slow or missing network: parts wait on
 /// disk, failed ones keep their place and go again on their own schedule,
 /// when the network returns, on coming back to the app, or on a tap. Text
 /// whose terminal now shows another session goes to the clipboard instead.
@@ -51,9 +56,9 @@ final class Dictation {
   private(set) var state = VoiceState.idle {
     didSet { if state != oldValue { NotificationCenter.default.post(name: .voiceStateChanged, object: self) } }
   }
-  /// Text just went to the clipboard instead of its terminal; the strip says so for a moment.
-  private(set) var showsCopied = false {
-    didSet { if showsCopied != oldValue { NotificationCenter.default.post(name: .voiceStateChanged, object: self) } }
+  /// What the strip says for a moment: text went to the clipboard, or a recording held no speech.
+  private(set) var note: VoiceNote? {
+    didSet { if note != oldValue { NotificationCenter.default.post(name: .voiceStateChanged, object: self) } }
   }
   var isListening: Bool { capture != nil }
   /// The microphone did not start; tapping the strip or the mic tries again.
@@ -65,31 +70,31 @@ final class Dictation {
   private let spool: SpeechSpool
   private let pasteboard: UIPasteboard
   private weak var target: DictationTarget?
+  /// Where the recording's text goes: the target's input when listening started.
+  private var destination = Destination(view: nil, place: nil)
   private var capture: Microphone?
   private var startTimer: Task<Void, Never>?
-  private var segmenter = SpeechSegmenter()
+  private var recording = Recording()
+  private var heard = HeardLevels()
   private let gate = SpeechGate()
   private var queue = TranscriptQueue<Destination>()
+  /// Stopped recordings the speech classifier is still judging.
+  private var judging = 0
+  /// Counts listenings, so a microphone's late answer reaches only its own.
   private var run = 0
-  private var levels: [Float] = []
   private var path: NWPathMonitor?
   private var backgroundTask = UIBackgroundTaskIdentifier.invalid
   private var retryTimer: Task<Void, Never>?
-  private var copiedTimer: Task<Void, Never>?
+  private var noteTimer: Task<Void, Never>?
   /// What dictation last put on the clipboard, while nothing else replaced
   /// it: text copied next is added to it rather than replacing it.
   private var copied: (text: String, changeCount: Int)?
-
-  /// Levels the strip gets: the last 2 s.
-  private static let levelCount = 40
-  /// The run of segments said before the app last quit.
-  private static let leftoverRun = -1
 
   /// Makes the microphone: samples arrive on the audio thread; the failure, on the main actor.
   typealias MicrophoneFactory = @MainActor (_ onSamples: @escaping @Sendable ([Float]) -> Void,
                                             _ onFailure: @escaping @MainActor @Sendable () -> Void) -> Microphone
 
-  /// A segment's terminal, and where that terminal's input went when the segment was said.
+  /// A recording's terminal, and where that terminal's input went when listening started.
   struct Destination {
     weak var view: DictationTarget?
     let place: DictationDestination?
@@ -169,17 +174,18 @@ final class Dictation {
     }
   }
 
-  /// Stops listening; what was said last is still sent.
+  /// Stops listening; what was said is transcribed and typed.
   func stop() {
     guard let capture else { return }
     capture.stop()
     self.capture = nil
     startTimer?.cancel()
     startTimer = nil
-    if let last = segmenter.finish(), let target { segmentEnded(last, in: target) }
+    transcribe(recording, into: destination, prompt: target?.dictationPrompt ?? "")
+    recording = Recording()
     gate.release()
     target = nil
-    levels = []
+    heard = HeardLevels()
     update()
   }
 
@@ -214,8 +220,9 @@ final class Dictation {
     microphoneFailed = false
     self.capture = capture
     self.target = target
-    segmenter = SpeechSegmenter()
-    levels = []
+    destination = Destination(view: target, place: target.dictationDestination)
+    recording = Recording()
+    heard = HeardLevels()
     gate.prepare { [weak self, weak target] loaded in
       guard !loaded, let self, let target, self.target === target else { return }
       target.dictationNotice("Speech detection isn't available")
@@ -239,31 +246,35 @@ final class Dictation {
   }
 
   private func heard(_ samples: [Float], run: Int) {
-    guard run == self.run, isListening, let target else { return }
-    let out = segmenter.append(samples)
-    levels.append(contentsOf: out.levels)
-    if levels.count > Self.levelCount { levels.removeFirst(levels.count - Self.levelCount) }
-    for segment in out.segments { segmentEnded(segment, in: target) }
+    guard run == self.run, isListening else { return }
+    heard.add(recording.append(samples))
     update()
   }
 
   // MARK: - Transcribing
 
-  /// A segment the loudness detector cut: sent only if the gate hears speech in it.
-  func segmentEnded(_ samples: [Float], in target: DictationTarget) {
-    let destination = Destination(view: target, place: target.dictationDestination)
-    gate.judge(samples) { [weak self] speech in
-      guard speech, let self else { return }
-      submit(samples, to: destination)
-    }
-  }
-
-  /// A finished segment: its place in spoken order now, its audio once encoded.
-  private func submit(_ samples: [Float], to destination: Destination) {
-    let id = reserve(destination, run: run)
-    Task.detached(priority: .userInitiated) { [weak self] in
-      let audio = try? SpeechAudio.m4a(samples)
-      await self?.encoded(id, audio)
+  /// A stopped recording: the parts the speech classifier hears speech in are
+  /// queued for transcription; with none, the strip says there was no speech.
+  private func transcribe(_ recording: Recording, into destination: Destination, prompt: String) {
+    let parts = recording.parts()
+    guard !parts.isEmpty else { return show(.noSpeech) }
+    judging += 1
+    gate.judge(parts) { [weak self] speech in
+      guard let self else { return }
+      judging -= 1
+      let spoken = zip(parts, speech).filter { $0.1 }.map { $0.0 }
+      if spoken.isEmpty {
+        show(.noSpeech)
+      } else {
+        let ids = reserve(parts: spoken.count, destination, prompt: prompt)
+        for (id, part) in zip(ids, spoken) {
+          Task.detached(priority: .userInitiated) { [weak self] in
+            let audio = try? SpeechAudio.m4a(part)
+            await self?.encoded(id, audio)
+          }
+        }
+      }
+      update()
     }
   }
 
@@ -271,19 +282,19 @@ final class Dictation {
     if let audio { send(audio, for: id) } else { spooled(id, nil) }
   }
 
-  /// Holds a place in spoken order for a segment said into `target` now.
-  func reserve(for target: DictationTarget) -> Int {
-    reserve(Destination(view: target, place: target.dictationDestination), run: run)
+  /// Holds a place in order for a recording of `parts` parts said into `target` now; returns the parts' ids.
+  func reserve(parts: Int, for target: DictationTarget) -> [Int] {
+    reserve(parts: parts, Destination(view: target, place: target.dictationDestination), prompt: target.dictationPrompt)
   }
 
-  private func reserve(_ destination: Destination, run: Int) -> Int {
+  private func reserve(parts: Int, _ destination: Destination, prompt: String) -> [Int] {
     watchNetwork()
-    let id = queue.reserve(run: run, target: destination)
+    let ids = queue.reserve(parts: parts, target: destination, prompt: prompt)
     update()
-    return id
+    return ids
   }
 
-  /// Spools a segment's audio (m4a) to disk; it is sent once a request slot is free.
+  /// Spools a part's audio (m4a) to disk; it is sent once a request slot is free.
   func send(_ audio: Data, for id: Int) {
     let spool = spool
     Task.detached(priority: .userInitiated) { [weak self] in
@@ -302,18 +313,18 @@ final class Dictation {
     update()
   }
 
-  /// Speech said before the app last quit: transcribed in order and copied
-  /// to the clipboard, never typed (where it was said is gone).
+  /// Speech said before the app last quit: each file transcribed in order
+  /// and copied to the clipboard, never typed (where it was said is gone).
   func transcribeLeftovers() {
     let files = spool.leftovers()
     guard !files.isEmpty else { return }
     for file in files {
-      queue.setAudio(file, for: reserve(Destination(view: nil, place: nil), run: Self.leftoverRun))
+      for id in reserve(parts: 1, Destination(view: nil, place: nil), prompt: "") { queue.setAudio(file, for: id) }
     }
     resend()
   }
 
-  /// Sends spooled segments, earliest first, while a request slot is free.
+  /// Sends spooled parts, earliest first, while a request slot is free.
   private func sendReady() {
     guard let transcriber = transcriber() else {
       while case let requests = queue.send(), !requests.isEmpty {
@@ -355,7 +366,7 @@ final class Dictation {
     if failure.retriesByItself {
       scheduleRetry()
     } else if !wasStuck {
-      // Once, for the first segment held up; the strip shows the rest.
+      // Once, for the first part held up; the strip shows the rest.
       let notice = switch failure.problem {
       case .offline: "Offline"
       case .badKey: "OpenRouter refused the key in Settings › Voice"
@@ -369,8 +380,8 @@ final class Dictation {
     update()
   }
 
-  /// Types each transcript into its terminal while that terminal's input
-  /// still goes where it went when the words were said; copies it otherwise.
+  /// Types each recording's text into its terminal while that terminal's
+  /// input still goes where it went when listening started; copies it otherwise.
   private func output(_ ready: [TranscriptQueue<Destination>.Typed]) {
     for typed in ready {
       if let view = typed.target.view, let place = typed.target.place, place.admits(view.dictationDestination) {
@@ -385,13 +396,18 @@ final class Dictation {
     let joined = copied.flatMap { $0.changeCount == pasteboard.changeCount ? $0.text + " " + text : nil } ?? text
     pasteboard.string = joined
     copied = (joined, pasteboard.changeCount)
-    showsCopied = true
-    UIAccessibility.post(notification: .announcement, argument: "Dictated text copied")
-    copiedTimer?.cancel()
-    copiedTimer = Task { [weak self] in
+    show(.copied)
+  }
+
+  /// Shows `note` in the strip for 3 seconds, and says it to VoiceOver.
+  private func show(_ note: VoiceNote) {
+    self.note = note
+    UIAccessibility.post(notification: .announcement, argument: note == .copied ? "Dictated text copied" : "No speech heard")
+    noteTimer?.cancel()
+    noteTimer = Task { [weak self] in
       try? await Task.sleep(for: .seconds(3))
       guard !Task.isCancelled else { return }
-      self?.showsCopied = false
+      self?.note = nil
     }
   }
 
@@ -426,7 +442,7 @@ final class Dictation {
     update()
   }
 
-  /// Wakes at the earliest failed segment's own time to go again.
+  /// Wakes at the earliest failed part's own time to go again.
   private func scheduleRetry() {
     retryTimer?.cancel()
     retryTimer = nil
@@ -455,22 +471,23 @@ final class Dictation {
 
   private func update() {
     for file in queue.takeReleasedAudio() { spool.remove(file) }
+    let busy = !queue.isEmpty || judging > 0
     if isListening {
-      state = .listening(levels: levels)
+      state = .listening(heard)
     } else if let problem = queue.problem {
       state = .failed(queued: queue.count, problem: problem)
     } else if microphoneFailed {
       state = .microphoneUnavailable
-    } else if !queue.isEmpty {
-      state = .transcribing(pending: queue.count)
+    } else if busy {
+      state = .transcribing(pending: queue.count + judging)
     } else {
       state = .idle
     }
-    // Segments still on their way finish after the app leaves the screen.
-    if queue.isEmpty, backgroundTask != .invalid {
+    // Recordings still on their way finish after the app leaves the screen.
+    if !busy, backgroundTask != .invalid {
       UIApplication.shared.endBackgroundTask(backgroundTask)
       backgroundTask = .invalid
-    } else if !queue.isEmpty, backgroundTask == .invalid {
+    } else if busy, backgroundTask == .invalid {
       backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Transcribe speech") { [weak self] in
         MainActor.assumeIsolated {
           guard let self else { return }

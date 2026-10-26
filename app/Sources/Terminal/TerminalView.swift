@@ -85,6 +85,8 @@ final class TerminalView: UIView {
     var isReadOnly = false
     /// The last input here was dictated text, so the next transcript starts with a space.
     var continuesDictation = false
+    /// The text last dictated here, for the next recording's prompt.
+    var lastDictation = ""
 
     /// Current grid size in cells.
     var gridSize: (cols: Int, rows: Int) { (session.cols, session.rows) }

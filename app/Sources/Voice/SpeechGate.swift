@@ -1,25 +1,25 @@
 import AVFoundation
 import SoundAnalysis
 
-/// Whether a segment the loudness detector cut is someone speaking, as
-/// Apple's on-device sound classifier hears it. Room noise, typing, knocks
-/// and music are loud enough to make segments, and the transcriber answers
-/// those with invented text ("Zdravo, kako si?"), so a segment is sent only
-/// when the classifier hears speech or whispering in it.
+/// Whether a part of a recording is someone speaking, as Apple's on-device
+/// sound classifier hears it. Room noise, typing, knocks and music rise over
+/// the room as speech does, and the transcriber answers them with invented
+/// text ("Zdravo, kako si?"), so a part is sent only when the classifier
+/// hears speech or whispering in it.
 ///
-/// Segments are judged in order on the gate's own queue. The classifier is
-/// loaded when listening starts and let go when it stops; each segment's
-/// analyzer is made while the one before it is being transcribed, so
-/// judging speech adds a few milliseconds to it.
+/// Recordings are judged in the order they stopped, on the gate's own queue.
+/// The classifier is loaded when listening starts and let go once the
+/// recording is judged; judging stops at the first window of speech, so a
+/// spoken part takes a few milliseconds.
 final class SpeechGate: @unchecked Sendable {
   /// The classifier scores 1 s windows every 0.5 s.
-  static let window = SpeechSegmenter.sampleRate
+  static let window = Recording.sampleRate
   static let hop = window / 2
   /// A window this sure of speech or whispering is speech. Room noise,
   /// typing and music score under 0.1; soft, noisy and whispered speech over 0.7.
   static let threshold = 0.5
   private static let labels = ["speech", "whispering"]
-  private static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(SpeechSegmenter.sampleRate),
+  private static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(Recording.sampleRate),
                                             channels: 1, interleaved: false)!
 
   private let queue = DispatchQueue(label: "SpeechGate", qos: .userInitiated)
@@ -36,7 +36,7 @@ final class SpeechGate: @unchecked Sendable {
     }
   }
 
-  /// Lets the classifier go once every segment already handed in is judged.
+  /// Lets the classifier go once every recording already handed in is judged.
   func release() {
     queue.async {
       self.next = nil
@@ -44,11 +44,11 @@ final class SpeechGate: @unchecked Sendable {
     }
   }
 
-  /// Judges a segment of 16 kHz mono samples; `heard` runs on the main
-  /// queue with the verdict, in the order segments were handed in.
-  func judge(_ samples: [Float], then heard: @escaping @MainActor @Sendable (Bool) -> Void) {
+  /// Judges each part of a recording (16 kHz mono); `heard` runs on the main
+  /// queue with a verdict per part, in the order recordings were handed in.
+  func judge(_ parts: [ArraySlice<Float>], then heard: @escaping @MainActor @Sendable ([Bool]) -> Void) {
     queue.async {
-      let speech = self.hearsSpeech(samples)
+      let speech = parts.map { self.hearsSpeech($0) }
       DispatchQueue.main.async { MainActor.assumeIsolated { heard(speech) } }
       if self.request != nil { self.next = self.makeAnalysis() }
     }
@@ -57,7 +57,7 @@ final class SpeechGate: @unchecked Sendable {
   /// The verdict, worked out on the calling thread: window by window, stopping
   /// at the first that holds speech. The analyzer reports each window before
   /// `analyze` returns. Runs on the gate's queue (and in tests).
-  func hearsSpeech(_ samples: [Float]) -> Bool {
+  func hearsSpeech(_ samples: some Collection<Float>) -> Bool {
     guard let analysis = next ?? makeAnalysis() else { return false }
     next = nil
     let padded = Self.padded(samples)
@@ -76,12 +76,14 @@ final class SpeechGate: @unchecked Sendable {
     labels.contains { (confidence($0) ?? 0) >= threshold }
   }
 
-  /// The segment with silence after it up to whole hops and at least one
+  /// The part with silence after it up to whole hops and at least one
   /// window: the classifier only scores full windows, so without it the end
-  /// of a segment, or all of a word shorter than a window, goes unheard.
-  static func padded(_ samples: [Float]) -> [Float] {
+  /// of a part, or all of a word shorter than a window, goes unheard.
+  static func padded(_ samples: some Collection<Float>) -> [Float] {
     let length = max(window, (samples.count + hop - 1) / hop * hop)
-    return samples + [Float](repeating: 0, count: length - samples.count)
+    var padded = Array(samples)
+    padded.append(contentsOf: repeatElement(0, count: length - samples.count))
+    return padded
   }
 
   private struct Analysis {
@@ -92,7 +94,7 @@ final class SpeechGate: @unchecked Sendable {
   private func makeAnalysis() -> Analysis? {
     do {
       let request = try request ?? SNClassifySoundRequest(classifierIdentifier: .version1)
-      request.windowDuration = CMTime(value: CMTimeValue(Self.window), timescale: CMTimeScale(SpeechSegmenter.sampleRate))
+      request.windowDuration = CMTime(value: CMTimeValue(Self.window), timescale: CMTimeScale(Recording.sampleRate))
       request.overlapFactor = 0.5
       self.request = request
       let analyzer = SNAudioStreamAnalyzer(format: Self.format)
@@ -111,7 +113,7 @@ final class SpeechGate: @unchecked Sendable {
     return buffer
   }
 
-  /// Collects the classifier's windows for one segment.
+  /// Collects the classifier's windows for one part.
   private final class Listener: NSObject, SNResultsObserving {
     private(set) var heardSpeech = false
 

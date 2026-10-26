@@ -17,20 +17,21 @@ enum VoiceProblem: Equatable, Sendable {
   var needsSettings: Bool { self == .badKey || self == .noCredit || self == .modelNotFound }
 }
 
-/// Why a segment did not come back as text.
+/// Why a part did not come back as text.
 struct TranscriptionFailure: Error, Equatable {
   var problem: VoiceProblem
   /// The network dropping, rate limits and upstream errors clear up by
-  /// themselves: the segment goes again without a tap. The rest wait for the user.
+  /// themselves: the part goes again without a tap. The rest wait for the user.
   var retriesByItself: Bool
 }
 
-/// Dictated segments in spoken order. Each is transcribed on its own, two at
-/// a time, and its text is typed only after every earlier segment's, so
-/// replies that return out of order still type in order. A failed segment
-/// keeps its audio and its place until it succeeds or is discarded; one that
-/// fails by itself goes again on its own schedule (2 s, then 4, 8 … up to a
-/// minute), which no other segment's answer moves.
+/// Recordings in the order they were stopped, each sent as one or more
+/// parts. Parts are transcribed two at a time; a recording's text is typed
+/// once, joined in order, when all its parts are back and every earlier
+/// recording's text is out, so replies that return out of order still type
+/// in order. A failed part keeps its audio and its place until it succeeds
+/// or is discarded; one that fails by itself goes again on its own schedule
+/// (2 s, then 4, 8 … up to a minute), which no other part's answer moves.
 struct TranscriptQueue<Target> {
   enum Status: Equatable {
     /// Waiting for its audio to be encoded and spooled.
@@ -46,10 +47,12 @@ struct TranscriptQueue<Target> {
 
   struct Entry {
     let id: Int
-    /// One listening session: context carries over within it, not across.
-    let run: Int
+    /// The recording the part is from.
+    let recording: Int
     let target: Target
-    /// The m4a file the segment is spooled to.
+    /// What the transcriber is told the part is about (`DictationPrompt`).
+    let prompt: String
+    /// The m4a file the part is spooled to.
     var audio: URL?
     var status = Status.encoding
     /// Failures in a row that cleared up by themselves.
@@ -58,37 +61,40 @@ struct TranscriptQueue<Target> {
     var retryAt: ContinuousClock.Instant?
   }
 
-  /// A segment to send now.
+  /// A part to send now.
   struct Request {
     let id: Int
     let audio: URL
-    /// What the run typed just before it, for spelling and context.
     let prompt: String
   }
 
-  /// A transcript ready to type, in spoken order.
+  /// A recording's text, ready to type.
   struct Typed {
     let target: Target
     let text: String
   }
 
-  /// Requests in flight at once; the rest wait their turn in spoken order.
+  /// Requests in flight at once; the rest wait their turn in order.
   static var slots: Int { 2 }
-  /// The context sent with a request: the run's last 200 typed characters.
-  static var contextLength: Int { 200 }
 
   private(set) var entries: [Entry] = []
   private var nextID = 0
-  /// What each run has typed so far, the tail of it.
-  private var typedByRun: [Int: String] = [:]
-  /// Spool files of segments no longer queued, for the owner to delete.
+  private var nextRecording = 0
+  /// Spool files of parts no longer queued, for the owner to delete.
   private var released: [URL] = []
 
   var isEmpty: Bool { entries.isEmpty }
-  /// Segments not typed yet.
-  var count: Int { entries.count }
+  /// Recordings not typed yet.
+  var count: Int {
+    var count = 0, last: Int?
+    for entry in entries where entry.recording != last {
+      count += 1
+      last = entry.recording
+    }
+    return count
+  }
 
-  /// Why the queue is stuck, if it is: the first failed or offline segment's problem.
+  /// Why the queue is stuck, if it is: the first failed or offline part's problem.
   var problem: VoiceProblem? {
     for entry in entries {
       switch entry.status {
@@ -100,19 +106,22 @@ struct TranscriptQueue<Target> {
     return nil
   }
 
-  /// The earliest time a failed segment goes again by itself.
+  /// The earliest time a failed part goes again by itself.
   var nextRetry: ContinuousClock.Instant? {
     entries.lazy.filter { if case .failed = $0.status { true } else { false } }.compactMap(\.retryAt).min()
   }
 
-  /// Holds a segment's place in spoken order before its audio is ready.
-  mutating func reserve(run: Int, target: Target) -> Int {
-    defer { nextID += 1 }
-    entries.append(Entry(id: nextID, run: run, target: target))
-    return nextID
+  /// Holds a recording's place in order before its parts' audio is ready; returns the parts' ids.
+  mutating func reserve(parts: Int, target: Target, prompt: String) -> [Int] {
+    defer { nextRecording += 1 }
+    return (0..<parts).map { _ in
+      defer { nextID += 1 }
+      entries.append(Entry(id: nextID, recording: nextRecording, target: target, prompt: prompt))
+      return nextID
+    }
   }
 
-  /// The spooled audio: the segment waits for a request slot.
+  /// The spooled audio: the part waits for a request slot.
   mutating func setAudio(_ audio: URL, for id: Int) {
     guard let i = index(id), entries[i].status == .encoding else {
       released.append(audio)
@@ -122,15 +131,14 @@ struct TranscriptQueue<Target> {
     entries[i].status = .ready
   }
 
-  /// Marks segments sent, earliest first, while a slot is free; returns their requests.
+  /// Marks parts sent, earliest first, while a slot is free; returns their requests.
   mutating func send() -> [Request] {
     var free = Self.slots - entries.count { $0.status == .sending || $0.status == .waiting }
     var requests: [Request] = []
     for i in entries.indices where free > 0 && entries[i].status == .ready {
       guard let audio = entries[i].audio else { continue }
       entries[i].status = .sending
-      requests.append(Request(id: entries[i].id, audio: audio,
-                              prompt: String((typedByRun[entries[i].run] ?? "").suffix(Self.contextLength))))
+      requests.append(Request(id: entries[i].id, audio: audio, prompt: entries[i].prompt))
       free -= 1
     }
     return requests
@@ -147,7 +155,7 @@ struct TranscriptQueue<Target> {
     for i in entries.indices where entries[i].status == .waiting { entries[i].status = .sending }
   }
 
-  /// A reply: returns everything now ready to type, in order.
+  /// A reply: returns every recording now ready to type, in order.
   mutating func complete(_ id: Int, reply: String) -> [Typed] {
     guard let i = index(id) else { return [] }
     let text = DictatedText.clean(reply)
@@ -172,7 +180,7 @@ struct TranscriptQueue<Target> {
     min(.seconds(2) * (1 << min(max(failures - 1, 0), 5)), .seconds(60))
   }
 
-  /// Failed segments go again, ignoring their schedule: only those that clear
+  /// Failed parts go again, ignoring their schedule: only those that clear
   /// up by themselves, unless the user asked, whose retry also starts the schedule over.
   mutating func retry(all: Bool) {
     for i in entries.indices {
@@ -182,7 +190,7 @@ struct TranscriptQueue<Target> {
     }
   }
 
-  /// Failed segments whose time to go again has come by `now`.
+  /// Failed parts whose time to go again has come by `now`.
   mutating func retryDue(at now: ContinuousClock.Instant) {
     for i in entries.indices {
       guard case .failed = entries[i].status, let at = entries[i].retryAt, at <= now else { continue }
@@ -190,13 +198,13 @@ struct TranscriptQueue<Target> {
     }
   }
 
-  /// Forgets every segment not typed yet; replies still on their way are ignored.
+  /// Forgets every recording not typed yet; replies still on their way are ignored.
   mutating func discard() {
     released += entries.compactMap(\.audio)
     entries.removeAll()
   }
 
-  /// Gives up one segment (its audio could not be encoded); returns what can now be typed.
+  /// Gives up one part (its audio could not be encoded); returns what can now be typed.
   mutating func drop(_ id: Int) -> [Typed] {
     guard let i = index(id) else { return [] }
     if let audio = entries[i].audio { released.append(audio) }
@@ -204,21 +212,25 @@ struct TranscriptQueue<Target> {
     return popReady()
   }
 
-  /// Spool files no segment needs any more; each is returned once.
+  /// Spool files no part needs any more; each is returned once.
   mutating func takeReleasedAudio() -> [URL] {
     defer { released = [] }
     return released
   }
 
+  /// The first recordings whose parts are all back, as one text each.
   private mutating func popReady() -> [Typed] {
     var ready: [Typed] = []
-    while let first = entries.first, case .done(let text) = first.status {
-      entries.removeFirst()
-      if let audio = first.audio { released.append(audio) }
-      guard !text.isEmpty else { continue }
-      let before = typedByRun[first.run].map { $0 + " " } ?? ""
-      typedByRun[first.run] = String((before + text).suffix(Self.contextLength))
-      ready.append(Typed(target: first.target, text: text))
+    while let first = entries.first {
+      let parts = entries.prefix { $0.recording == first.recording }
+      var text = ""
+      for part in parts {
+        guard case .done(let said) = part.status else { return ready }
+        if !said.isEmpty { text += DictatedText.typed(said, continuing: !text.isEmpty) }
+      }
+      released += parts.compactMap(\.audio)
+      entries.removeFirst(parts.count)
+      if !text.isEmpty { ready.append(Typed(target: first.target, text: text)) }
     }
     return ready
   }
@@ -255,8 +267,8 @@ enum DictatedText {
     return other > reply.matches(of: /\p{Script=Latin}/).count
   }
 
-  /// What goes to the terminal: a space first when it continues dictated
-  /// text, unless it opens with punctuation that closes onto the word before.
+  /// What goes after dictated text: a space first when it continues it,
+  /// unless it opens with punctuation that closes onto the word before.
   static func typed(_ text: String, continuing: Bool) -> String {
     guard continuing, let first = text.first, !",.;:!?)]}%…".contains(first) else { return text }
     return " " + text

@@ -274,7 +274,7 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     /// The strip (and its mic key) follows dictation.
     @objc private func voiceChanged() {
         strip.state = Dictation.shared.state
-        strip.copied = Dictation.shared.showsCopied
+        strip.note = Dictation.shared.note
     }
 
     private func refresh() {

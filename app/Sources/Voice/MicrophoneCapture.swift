@@ -88,7 +88,7 @@ final class MicrophoneCapture: Microphone, @unchecked Sendable {
 
 /// What `Dictation` hears: 16 kHz mono float samples.
 extension MicrophoneCapture {
-  static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(SpeechSegmenter.sampleRate),
+  static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(Recording.sampleRate),
                                     channels: 1, interleaved: false)!
 
   /// Converts each buffer to `format` and delivers its samples. Made outside

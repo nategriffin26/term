@@ -29,6 +29,7 @@ final class MicrophoneStartTests: XCTestCase {
 
   private final class Terminal: DictationTarget {
     var dictationDestination: DictationDestination? { nil }
+    var dictationPrompt: String { "" }
     func typeDictation(_ text: String) {}
     func dictationNotice(_ text: String) {}
     func dictationNeedsSettings() {}
@@ -51,7 +52,7 @@ final class MicrophoneStartTests: XCTestCase {
   func testFailedStartShowsMicrophoneUnavailableAndListensAgainOnRetry() throws {
     let dictation = dictation()
     dictation.listen(into: terminal)
-    XCTAssertEqual(dictation.state, .listening(levels: []))
+    XCTAssertEqual(dictation.state, .listening(HeardLevels()))
     microphones[0].finish(CocoaError(.featureUnsupported))
     XCTAssertEqual(dictation.state, .microphoneUnavailable)
     XCTAssertFalse(dictation.isListening)
@@ -59,7 +60,7 @@ final class MicrophoneStartTests: XCTestCase {
     dictation.listen(into: terminal)
     let retried = try XCTUnwrap(microphones.dropFirst().first, "listening did not start again")
     retried.finish(nil)
-    XCTAssertEqual(dictation.state, .listening(levels: []))
+    XCTAssertEqual(dictation.state, .listening(HeardLevels()))
     XCTAssertTrue(retried.on)
   }
 
@@ -68,7 +69,7 @@ final class MicrophoneStartTests: XCTestCase {
     let dictation = dictation(deadline: .milliseconds(100))
     dictation.listen(into: terminal)
     try await Task.sleep(for: .milliseconds(50))
-    XCTAssertEqual(dictation.state, .listening(levels: []), "failed before the deadline")
+    XCTAssertEqual(dictation.state, .listening(HeardLevels()), "failed before the deadline")
     try await Task.sleep(for: .milliseconds(400))
     XCTAssertEqual(dictation.state, .microphoneUnavailable)
   }
@@ -102,7 +103,7 @@ final class MicrophoneStartTests: XCTestCase {
     dictation.listen(into: terminal)
     microphones[1].finish(nil)
     microphones[0].onFailure?()
-    XCTAssertEqual(dictation.state, .listening(levels: []))
+    XCTAssertEqual(dictation.state, .listening(HeardLevels()))
   }
 
   /// Bug: an abandoned start answering late called off the new listening's deadline, leaving it lit forever.
@@ -187,6 +188,7 @@ final class MicrophoneCaptureTests: XCTestCase {
 
   private final class Terminal: DictationTarget {
     var dictationDestination: DictationDestination? { nil }
+    var dictationPrompt: String { "" }
     func typeDictation(_ text: String) {}
     func dictationNotice(_ text: String) {}
     func dictationNeedsSettings() {}
@@ -236,7 +238,7 @@ final class MicrophoneCaptureTests: XCTestCase {
     let dictation = Dictation(transcriber: { nil }, microphone: { _, _ in MicrophoneCapture(input: input) },
                               startDeadline: .milliseconds(100))
     dictation.listen(into: Terminal())
-    XCTAssertEqual(dictation.state, .listening(levels: []))
+    XCTAssertEqual(dictation.state, .listening(HeardLevels()))
     try await Task.sleep(for: .milliseconds(400))
     XCTAssertEqual(dictation.state, .microphoneUnavailable)
     input.resume.signal()

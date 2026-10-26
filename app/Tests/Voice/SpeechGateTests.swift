@@ -2,13 +2,13 @@ import AVFoundation
 import XCTest
 @testable import Term
 
-/// Segments as the microphone delivers them (16 kHz mono): spoken English
-/// from the system voice, and the sounds that cut segments without speech.
+/// Audio as the microphone delivers it (16 kHz mono): spoken English from
+/// the system voice, and sounds that rise over the room without speech.
 enum TestAudio {
-  static let rate = SpeechSegmenter.sampleRate
+  static let rate = Recording.sampleRate
 
   /// `text` spoken by the system's English voice at `dB` RMS, over a quiet
-  /// room, with the 0.3 s before and 0.2 s after a segment keeps.
+  /// room, with 0.3 s of room before and 0.2 s after.
   static func speech(_ text: String, dB: Float = -24) async throws -> [Float] {
     let spoken = try await voice(text, dB: dB)
     var rng = Seeded(1)
@@ -22,7 +22,7 @@ enum TestAudio {
   static func voice(_ text: String, dB: Float = -24, voicedFrames: Int? = nil) async throws -> [Float] {
     let voice = try await say(text)
     let first = voice.firstIndex { abs($0) > 1e-3 } ?? 0, last = voice.lastIndex { abs($0) > 1e-3 } ?? 0
-    let end = voicedFrames.map { min(last, first + $0 * SpeechSegmenter.frameLength - 1) } ?? last
+    let end = voicedFrames.map { min(last, first + $0 * Recording.frameLength - 1) } ?? last
     return scaled(Array(voice[first...end]), to: dB)
   }
 
