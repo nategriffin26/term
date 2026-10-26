@@ -16,7 +16,7 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **Agents that tell you when they stop.** With the omp extension below, the tmux tab shows what each [omp](https://github.com/can1357/oh-my-pi) agent is working on and how far through its todo list it is. A session whose agent finished, failed or asks you something shows the answer or question under its name, and the tab's icon counts them; a long press shows the whole answer with its model, context, cost and branch. Entering the session or clearing it there quiets it on every device.
 - **Reconnect in place.** Term remembers tmux sessions entered from a shell as well as those opened from its tmux tab. Mosh reconnects automatically when contact is lost; Reconnect also works on SSH. Both attach to the same session, never recreating a missing session empty.
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
-- **Your Mac's screen**, the way [Screens](https://edovia.com/screens) does it: a Screen tab streams each of the Mac's displays as hardware video through a small app on the Mac. Drag anywhere to move the pointer, tap to click, two fingers to scroll with momentum, pinch to zoom, press and hold to drag; Screens' toolbar with its modifier keys, arrows and edit keys. Both displays show in their arrangement, and one tap shows just one. The clipboard follows both ways, text and images. When the Mac is locked, Term signs in to its Screen Sharing so you can unlock it.
+- **Your Mac's screen**, the way [Screens](https://edovia.com/screens) does it: a Screen tab streams each of the Mac's displays as hardware video through a small app on the Mac. Drag anywhere to move the pointer, tap to click, two fingers to scroll with momentum, pinch to zoom while moving the picture anywhere (even past its edges, above the keyboard), press and hold to drag; Screens' toolbar with its modifier keys, arrows and edit keys. Both displays show in their arrangement, and the strip above the picture shows just one in one tap. The picture's quality adapts to the connection, or you pick it. The clipboard follows both ways, text and images. When the Mac is locked, Term signs in to its Screen Sharing so you can unlock it.
 - **A floating menu** for Sessions, tmux, Files, Screen and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
 - **Smart Keys** for Esc, Ctrl, Alt, symbols and arrows, with configurable key repeat.
 - **Pinch to resize.** JetBrains Mono and Iosevka Nerd Fonts are built in.
@@ -96,7 +96,9 @@ The other path handles a server that's gone. Once a session has been silent for 
 
 ### Screen
 
-The Screen tab talks to Term Screen Host ([`mac/ScreenHost`](mac/ScreenHost)), a small app that runs on the Mac as a LaunchAgent. It captures each display with ScreenCaptureKit, encodes HEVC on the media engine, posts the phone's pointer, scroll and key events, and reads and writes the clipboard. The phone draws the pointer itself, so moving it never waits for the network. A still screen gets one sharper frame about 0.4 s after it stops changing, so text is crisp.
+The Screen tab talks to Term Screen Host ([`mac/ScreenHost`](mac/ScreenHost)), a small app that runs on the Mac as a LaunchAgent. It captures each display with ScreenCaptureKit, encodes HEVC on the media engine, posts the phone's pointer, scroll and key events, and reads and writes the clipboard. The phone draws the pointer itself, at least as large as on the Mac, so moving it never waits for the network; it sends the Mac one move per display frame. A still screen gets one sharper frame about 0.4 s after it stops changing, so text is crisp.
+
+Actions › Quality sets how the host trades picture for speed. High streams native pixels at the full bitrate, Medium three quarters of the pixels on each axis at half the bitrate, Low half on each axis at a quarter (sizes rounded down to even pixels). Adaptive, the default, starts at High, drops a level after two one-second samples in which the phone fell behind, changes at most every 5 s, and climbs back a level after 15 quiet seconds.
 
 The host listens on a Unix socket in `~/.term` and accepts only connections that arrive through sshd. Term reaches it over its SSH connection to the Mac (a streamlocal channel), so nothing new listens on the network. Both ends compile one Swift file, [`ScreenProtocol.swift`](mac/ScreenHost/Sources/ScreenProtocol/ScreenProtocol.swift), as the wire format.
 
@@ -158,7 +160,7 @@ cd app && xcodebuild test -project Term.xcodeproj -scheme Term \
 python3 formal/mosh-resume.py              # TLA+ models, about 20 s
 python3 formal/mosh-fragment.py fallback   # property tests, about 2 s (25 s on a cold build)
 bun test integrations/omp/term-agent.test.ts # extension lifecycle; needs tmux and python3
-cd mac/ScreenHost && swift test            # host input, framing, clipboard and privacy checks
+cd mac/ScreenHost && swift test            # host input, framing, clipboard, privacy and adaptive quality checks
 ```
 
 `mosh-resume.py` runs two TLA+ models with TLC. The first checks that suspend, save, kill and restore, run twice with lost, duplicated and reordered packets within small bounds, never reuses an encryption nonce or loses the state needed to apply the server's next update. The second checks that a reconnect racing a suspend never leaves a checkpoint pointing at a server it ended. Before TLC runs, the script executes a probe against the real mosh crate and checks fingerprints of the Rust functions the models describe, so a model can't quietly drift from the code. It needs Java 21 and downloads a checksum-pinned TLC.
@@ -166,6 +168,8 @@ cd mac/ScreenHost && swift test            # host input, framing, clipboard and 
 `mosh-fragment.py fallback` runs property tests on the real fragment reassembly code: arbitrary bytes never panic, and fragments in any order, duplicated, reassemble to exactly the original. These are sampled checks, not an exhaustive proof. An attempt with Kani timed out.
 
 Both checks were seen to fail on deliberate bugs planted in a scratch copy of the code. The details, bounds and assumptions are in [`.omp/skills`](.omp/skills).
+
+`ScreenHostProbe` checks a running host end to end. It only connects through sshd, so forward the host's socket first (`ssh -L /tmp/screen.sock:<home>/.term/screen.sock <mac>`). Then `swift run -c release ScreenHostProbe --socket /tmp/screen.sock --output <folder>` saves a decoded frame of each display. With `--quality` it instead covers both displays with its own full-screen window for about a minute and checks each fixed level's pixel size and bitrate, adaptive stepping down and back up, the pointer's first image and its echo.
 
 ## Status
 
@@ -175,7 +179,7 @@ Term is installed and tested end to end on an iPhone 11. A few things are not pr
 - iPhone Duo layouts are verified in the simulator, not on Duo hardware.
 - Roaming between networks is covered by the formal model and the interop tests, not by long field use on cellular.
 - Composed input (CJK, dead-key accents) is untested.
-- The Screen tab is measured in the simulator against a real Mac with two displays, not yet on a phone over Wi-Fi or cellular.
+- The Screen tab has been used on an iPhone Duo over cellular. Its adaptive quality is measured against a client throttled on the Mac, not on a cellular link.
 
 ## Layout
 
