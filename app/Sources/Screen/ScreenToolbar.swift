@@ -2,7 +2,7 @@ import UIKit
 
 /// Screens' iPhone toolbar (spec §7) in Term's glass: one row of buttons
 /// floating over the bottom of the picture in portrait, a column along the
-/// left edge in landscape (Keyboard at the bottom). The Displays, Modifiers,
+/// left edge in landscape (Keyboard at the bottom). The Modifiers,
 /// Navigation and Edit buttons open a second row above the buttons (right
 /// of them in landscape).
 @MainActor
@@ -11,18 +11,13 @@ final class ScreenToolbar: UIView {
 
   /// A column on the left edge rather than a row at the bottom.
   var vertical = false {
-    didSet {
-      guard vertical != oldValue else { return }
-      // The Displays row's pictures are drawn for the toolbar's side.
-      shownRow = nil
-      update()
-    }
+    didSet { if vertical != oldValue { setNeedsLayout() } }
   }
   /// A swipe inward that starts on the toolbar: the pointer to that edge of the Mac.
   var onEdgeSwipe: ((ScreenArrangement.Edges) -> Void)?
 
   private enum Item: CaseIterable {
-    case keyboard, displays, escape, modifiers, navigation, edit, commands, password, actions
+    case keyboard, escape, modifiers, navigation, edit, commands, password, actions
   }
 
   private let session: ScreenSession
@@ -33,8 +28,6 @@ final class ScreenToolbar: UIView {
   /// The open row's controls in order; nil leaves a gap.
   private var rowItems: [UIView?] = []
   private var shownRow: ScreenRow?
-  private var shownDisplays: [ScreenWire.Display] = []
-  private var shownDisplay: UInt32?
   private var modifierButtons: [(ScreenWire.Modifiers, UIButton, UIView)] = []
   private let repeater = KeyRepeater()
   private var swipeFired = false
@@ -69,7 +62,6 @@ final class ScreenToolbar: UIView {
       return button
     }
     _ = button(.keyboard, "keyboard", "Keyboard") { [weak self] in self?.session.keyboardUp.toggle() }
-    _ = button(.displays, "display.2", "Displays") { [weak self] in self?.toggle(.displays) }
     _ = button(.escape, "escape", "Escape") { [weak self] in
       Haptics.keyDown()
       self?.session.press(MacKey.escape)
@@ -106,17 +98,11 @@ final class ScreenToolbar: UIView {
     session.openRow = session.openRow == row ? nil : row
   }
 
-  /// The items on the main row, leading (bottom in landscape) first.
-  private var mainItems: [Item] {
-    Item.allCases.filter { $0 != .displays || session.displays.count > 1 }
-  }
-
-  /// Follows the session: the open row, the modifiers' states, the displays.
+  /// Follows the session: the open row, the modifiers' states.
   func update() {
     let open = session.openRow
     for (item, button) in buttons {
       let rowItem: ScreenRow? = switch item {
-      case .displays: .displays
       case .modifiers: .modifiers
       case .navigation: .navigation
       case .edit: .edit
@@ -124,8 +110,7 @@ final class ScreenToolbar: UIView {
       }
       button.configuration?.baseForegroundColor = rowItem != nil && rowItem == open ? Chrome.UI.accent : Chrome.UI.fg
     }
-    buttons[.displays]?.isHidden = session.displays.count < 2
-    if open != shownRow || (open == .displays && (session.displays != shownDisplays || session.settings.display != shownDisplay)) {
+    if open != shownRow {
       buildRow(open)
     }
     for (key, button, underline) in modifierButtons {
@@ -154,8 +139,6 @@ final class ScreenToolbar: UIView {
     for item in rowItems { item?.removeFromSuperview() }
     modifierButtons = []
     shownRow = which
-    shownDisplays = session.displays
-    shownDisplay = session.settings.display
     rowItems = switch which {
     case nil: []
     case .modifiers:
@@ -185,8 +168,6 @@ final class ScreenToolbar: UIView {
        pasteControl(),
        nil,
        shortcut(MacKey.a, [.command], "character.textbox", "Select All")]
-    case .displays:
-      [displayOption(nil)] + session.displays.map { displayOption($0.id) }
     }
     for item in rowItems.compactMap({ $0 }) { row.addSubview(item) }
   }
@@ -249,54 +230,6 @@ final class ScreenToolbar: UIView {
     return control
   }
 
-  private func displayOption(_ id: UInt32?) -> UIView {
-    let chosen = session.settings.display == id
-      || (id == nil && !session.displays.contains { $0.id == session.settings.display })
-    let display = id.flatMap { id in session.displays.first { $0.id == id } }
-    let box = vertical ? CGSize(width: 42, height: 18) : CGSize(width: 64, height: 26)
-    let option = DisplayOption(picture: arrangementImage(showing: id, in: box),
-                               name: display.map(Self.shortName) ?? "All", chosen: chosen)
-    option.addAction(UIAction { [weak self] _ in
-      Haptics.selection()
-      self?.session.showDisplay(id)
-    }, for: .touchUpInside)
-    option.accessibilityLabel = display?.name ?? "All Displays"
-    return option
-  }
-
-  /// "Built-in" for the Mac's own screen ("Built-in Retina Display"), else the name System Settings gives it.
-  private static func shortName(_ display: ScreenWire.Display) -> String {
-    display.name.hasPrefix("Built-in") ? "Built-in" : display.name
-  }
-
-  /// The Mac's displays in their real arrangement and proportions, fitted
-  /// to `box`: the ones this option shows filled in the accent, the others outlined.
-  private func arrangementImage(showing id: UInt32?, in box: CGSize) -> UIImage {
-    let frames = session.displays.map { ($0.id, $0.frame.cg) }
-    let union = frames.map(\.1).reduce(CGRect.null) { $0.union($1) }
-    let scale = min(box.width / max(union.width, 1), box.height / max(union.height, 1))
-    let size = CGSize(width: (union.width * scale).rounded(.up), height: (union.height * scale).rounded(.up))
-    let fill = Chrome.UI.accent.resolvedColor(with: traitCollection)
-    let outline = Chrome.UI.fg2.resolvedColor(with: traitCollection)
-    return UIGraphicsImageRenderer(size: size).image { _ in
-      for (display, frame) in frames {
-        // Inset so neighbouring displays keep a gap between them.
-        let r = CGRect(x: (frame.minX - union.minX) * scale, y: (frame.minY - union.minY) * scale,
-                       width: frame.width * scale, height: frame.height * scale).insetBy(dx: 1, dy: 1)
-        if id == nil || id == display {
-          fill.setFill()
-          UIBezierPath(roundedRect: r, cornerRadius: 2.5).fill()
-        } else {
-          // Stroked inside its outline, so a shown and a hidden display read the same size.
-          let path = UIBezierPath(roundedRect: r.insetBy(dx: 0.75, dy: 0.75), cornerRadius: 2)
-          path.lineWidth = 1.5
-          outline.setStroke()
-          path.stroke()
-        }
-      }
-    }.withRenderingMode(.alwaysOriginal)
-  }
-
   // MARK: Menus
 
   private func commandsMenu() -> UIMenu {
@@ -337,17 +270,11 @@ final class ScreenToolbar: UIView {
         }
       }),
     ])
-    var elements: [UIMenuElement] = [clipboard]
-    if session.displays.count > 1 {
-      let current = session.shownDisplays.count == 1 ? session.shownDisplays.first?.id : nil
-      elements.append(UIMenu(title: "Display", image: UIImage(systemName: "display.2"), children:
-        [UIAction(title: "All Displays", state: current == nil ? .on : .off) { [weak self] _ in self?.session.showDisplay(nil) }]
-        + session.displays.map { display in
-          UIAction(title: display.name, state: current == display.id ? .on : .off) { [weak self] _ in
-            self?.session.showDisplay(display.id)
-          }
-        }))
+    var elements: [UIMenuElement] = []
+    if session.sharing != .live, session.phase == .live {
+      elements.append(qualityMenu())
     }
+    elements.append(clipboard)
     elements += [
       cursor,
       UIAction(title: "Type User Password", image: UIImage(systemName: "key.radiowaves.forward")) { [weak self] _ in
@@ -362,13 +289,31 @@ final class ScreenToolbar: UIView {
     return elements
   }
 
+  /// The host's picture quality: Adaptive follows the connection; the
+  /// others hold. Adaptive says which level is in force now.
+  private func qualityMenu() -> UIMenu {
+    let chosen = session.settings.quality
+    let now = session.quality.flatMap { $0.mode == .adaptive ? $0.level.rawValue.capitalized : nil }
+    let modes: [(ScreenWire.QualityMode, String)] = [(.adaptive, "Adaptive"), (.high, "High"), (.medium, "Medium"), (.low, "Low")]
+    let summary = chosen == .adaptive ? ["Adaptive", now.map { "now \($0)" }].compactMap { $0 }.joined(separator: " · ")
+      : modes.first { $0.0 == chosen }?.1
+    let menu = UIMenu(title: "Quality", image: UIImage(systemName: "dial.medium"), children: modes.map { mode, title in
+      UIAction(title: title, subtitle: mode == .adaptive ? now.map { "Now \($0)" } : nil,
+               state: chosen == mode ? .on : .off) { [weak self] _ in
+        self?.session.setQuality(mode)
+      }
+    })
+    menu.subtitle = summary
+    return menu
+  }
+
   // MARK: Layout
 
   override func layoutSubviews() {
     super.layoutSubviews()
     glass.frame = bounds
     let t = Self.thickness
-    let items = mainItems
+    let items = Item.allCases
     let target = Chrome.Size.target
     if vertical {
       let slot = bounds.height / CGFloat(max(items.count, 1))
@@ -379,7 +324,7 @@ final class ScreenToolbar: UIView {
       row.frame = CGRect(x: t, y: 0, width: max(0, bounds.width - t), height: bounds.height)
       let rowSlot = row.bounds.height / CGFloat(max(rowItems.count, 1))
       for (i, item) in rowItems.enumerated() {
-        let size = item.map { slotSize($0) } ?? .zero
+        let size = item == nil ? .zero : CGSize(width: target, height: target)
         item?.frame = CGRect(x: (t - size.width) / 2, y: (CGFloat(i) + 0.5) * rowSlot - size.height / 2,
                              width: size.width, height: size.height)
       }
@@ -392,18 +337,11 @@ final class ScreenToolbar: UIView {
       row.frame = CGRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - t))
       let rowSlot = row.bounds.width / CGFloat(max(rowItems.count, 1))
       for (i, item) in rowItems.enumerated() {
-        let size = item.map { slotSize($0) } ?? .zero
+        let size = item == nil ? .zero : CGSize(width: target, height: target)
         item?.frame = CGRect(x: (CGFloat(i) + 0.5) * rowSlot - size.width / 2, y: (t - size.height) / 2,
                              width: size.width, height: size.height)
       }
     }
-  }
-
-  private func slotSize(_ view: UIView) -> CGSize {
-    guard shownRow == .displays else { return CGSize(width: Chrome.Size.target, height: Chrome.Size.target) }
-    if vertical { return CGSize(width: Self.thickness - 2, height: Self.thickness - 2) }
-    let slot = row.bounds.width / CGFloat(max(rowItems.count, 1))
-    return CGSize(width: min(84, slot - Chrome.Space.xs), height: Self.thickness - 2)
   }
 
   @objc private func swiped(_ g: UIPanGestureRecognizer) {
@@ -432,52 +370,5 @@ final class ScreenToolbar: UIView {
       button.transform = button.isHighlighted ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
     }
     return button
-  }
-}
-
-/// One choice in the Displays row: the arrangement in miniature with the
-/// choice's displays filled, its short name under it. The current choice sits on a fill.
-@MainActor
-private final class DisplayOption: UIControl {
-  private let picture = UIImageView()
-  private let label = UILabel()
-
-  init(picture image: UIImage, name: String, chosen: Bool) {
-    super.init(frame: .zero)
-    backgroundColor = chosen ? Chrome.UI.fill2 : nil
-    layer.cornerRadius = 12
-    layer.cornerCurve = .continuous
-    picture.image = image
-    picture.contentMode = .center
-    label.text = name
-    // Pinned like the toolbar's symbols: the row's height does not follow Text Size.
-    label.font = Chrome.uiFont(.caption, chosen ? .semibold : .medium, size: .standard)
-    label.textColor = chosen ? Chrome.UI.fg : Chrome.UI.fg2
-    label.textAlignment = .center
-    label.adjustsFontSizeToFitWidth = true
-    label.minimumScaleFactor = 0.7
-    label.lineBreakMode = .byTruncatingTail
-    for view in [picture, label] as [UIView] {
-      view.isUserInteractionEnabled = false
-      addSubview(view)
-    }
-    isAccessibilityElement = true
-    accessibilityTraits = chosen ? [.button, .selected] : .button
-  }
-
-  required init?(coder: NSCoder) { fatalError("not used") }
-
-  override var isHighlighted: Bool {
-    didSet { transform = isHighlighted ? CGAffineTransform(scaleX: 0.92, y: 0.92) : .identity }
-  }
-
-  override func layoutSubviews() {
-    super.layoutSubviews()
-    let gap: CGFloat = 3
-    let pictureHeight = picture.image?.size.height ?? 0
-    let labelHeight = label.font.lineHeight.rounded(.up)
-    let top = ((bounds.height - pictureHeight - gap - labelHeight) / 2).rounded()
-    picture.frame = CGRect(x: 0, y: top, width: bounds.width, height: pictureHeight)
-    label.frame = CGRect(x: 3, y: top + pictureHeight + gap, width: bounds.width - 6, height: labelHeight)
   }
 }

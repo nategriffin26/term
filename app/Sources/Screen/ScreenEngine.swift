@@ -10,6 +10,8 @@ protocol ScreenEngine: AnyObject {
   func watch(_ displays: [UInt32])
   func send(_ input: ScreenInput)
   func setClipboard(_ clipboard: ScreenWire.Clipboard)
+  /// The picture quality to stream at; it holds for the connection.
+  func setQuality(_ mode: ScreenWire.QualityMode)
   /// The layer a display's picture draws in, once the engine knows the display.
   func layer(for display: UInt32) -> CALayer?
   /// Ends the connection; no event follows.
@@ -35,6 +37,7 @@ enum ScreenEvent {
   case clipboard(ScreenWire.Clipboard)
   case lock(Bool)
   case access(ScreenWire.Access)
+  case quality(ScreenWire.QualityState)
   case failure(String)
   case closed(ScreenClosure)
 }
@@ -94,6 +97,10 @@ final class ScreenHostEngine: ScreenEngine {
 
   func setClipboard(_ clipboard: ScreenWire.Clipboard) {
     write(.setClipboard, clipboard)
+  }
+
+  func setQuality(_ mode: ScreenWire.QualityMode) {
+    write(.quality, ScreenWire.QualityRequest(mode: mode))
   }
 
   func layer(for display: UInt32) -> CALayer? { layers[display] }
@@ -215,6 +222,7 @@ final class ScreenReceiver: @unchecked Sendable {
       post(.event(.pointerMoved(CGPoint(x: p.x, y: p.y))))
     case .clipboard: post(.event(.clipboard(try ScreenWire.decode(ScreenWire.Clipboard.self, from: payload))))
     case .lock: post(.event(.lock(try ScreenWire.decode(ScreenWire.LockState.self, from: payload).locked)))
+    case .qualityState: post(.event(.quality(try ScreenWire.decode(ScreenWire.QualityState.self, from: payload))))
     case .access: post(.event(.access(try ScreenWire.decode(ScreenWire.Access.self, from: payload))))
     case .failure: post(.event(.failure(try ScreenWire.decode(ScreenWire.Failure.self, from: payload).message)))
     default: break

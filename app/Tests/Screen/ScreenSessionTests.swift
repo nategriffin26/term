@@ -38,6 +38,8 @@ final class ScreenSessionTests: XCTestCase {
       sent.append(entry)
     }
     func setClipboard(_ clipboard: ScreenWire.Clipboard) {}
+    var qualities: [ScreenWire.QualityMode] = []
+    func setQuality(_ mode: ScreenWire.QualityMode) { qualities.append(mode) }
     func layer(for display: UInt32) -> CALayer? { nil }
     func close() { closed = true }
   }
@@ -209,5 +211,111 @@ final class ScreenSessionTests: XCTestCase {
     XCTAssertEqual(session.sharing, .held)
     XCTAssertEqual(sharing.sent.last, .modifiers([]))
     XCTAssertFalse(host.sent.contains(.modifiers(.command)))
+  }
+
+  // MARK: Pointer
+
+  // Bug: every touch update sent as its own message, a backlog the Mac
+  // replays late on a slow link; or a click sent ahead of the move before
+  // it, landing where the pointer was a frame ago.
+  func testPointerMovesGoOncePerFrameLatestFirstAndBeforeAClick() async throws {
+    continueAfterFailure = true  // a failure that throws inside an async test hangs the runner
+    welcome()
+    let before = host.sent.count
+    session.movePointer(to: CGPoint(x: 100, y: 100))
+    session.movePointer(to: CGPoint(x: 110, y: 105))
+    session.movePointer(to: CGPoint(x: 120, y: 110))
+    XCTAssertEqual(session.pointer, CGPoint(x: 120, y: 110), "drawn at once")
+    session.click(.left, at: CGPoint(x: 120, y: 110))
+    XCTAssertEqual(Array(host.sent[before...]), [
+      .pointer(120, 110),
+      .button(.left, down: true, x: 120, y: 110),
+      .button(.left, down: false, x: 120, y: 110),
+    ])
+
+    let afterClick = host.sent.count
+    session.movePointer(to: CGPoint(x: 200, y: 150))
+    session.movePointer(to: CGPoint(x: 210, y: 160))
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(Array(host.sent[afterClick...]), [.pointer(210, 160)], "one message, the latest position")
+  }
+
+  // Bug (the user's report): the pointer invisible, drawn to the picture's
+  // scale (a 32 pt pointer is 3 pt on a phone showing both displays), or
+  // not drawn at all until the Mac sends a shape or when it sends none.
+  func testThePointerIsDrawnAtLeastItsMacSizeAndNeverMissing() {
+    welcome()
+    XCTAssertEqual(session.cursor.size, CGSize(width: 16, height: 23), "the arrow before any shape")
+    // As Term Screen Host sends this Mac's arrow: 64 px at 2 px per pt, hot spot 12,8 pt.
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64), format: {
+      let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f
+    }()).pngData { _ in UIColor.black.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 4, height: 4)) }
+    host.onEvent(.cursor(ScreenWire.CursorImage(png: image, scale: 2, hotX: 12, hotY: 8)))
+    XCTAssertEqual(session.cursor.drawnSize(at: 0.1), CGSize(width: 32, height: 32), "both displays fitted to a phone")
+    XCTAssertEqual(session.cursor.drawnSize(at: 3), CGSize(width: 96, height: 96), "zoomed in, it grows with the picture")
+    XCTAssertEqual(session.cursor.hotSpot, CGPoint(x: 12, y: 8))
+    host.onEvent(.cursor(ScreenWire.CursorImage(png: Data(), scale: 1, hotX: 0, hotY: 0)))
+    XCTAssertEqual(session.cursor.size, CGSize(width: 16, height: 23), "no shape: the arrow again")
+  }
+
+  // MARK: Displays
+
+  // Bug: Built-in or the external display chosen under Screen Sharing still
+  // showing the whole framebuffer (both displays), or the pointer left on
+  // the one that no longer shows.
+  func testOneDisplayUnderScreenSharingIsItsPartOfTheFramebuffer() {
+    welcome(access: .init(screen: false, input: false))
+    sharingSignsIn()
+    session.showDisplay(Self.builtIn.id)
+    // The built-in display at native pixels 687 px down, the external to its right at the top.
+    XCTAssertEqual(session.shownDisplays.map(\.frame), [.init(x: 0, y: 687, width: 3456, height: 2234)])
+    session.showDisplay(Self.external.id)
+    XCTAssertEqual(session.shownDisplays.map(\.frame), [.init(x: 3456, y: 0, width: 3440, height: 1440)])
+    XCTAssertTrue(CGRect(x: 3456, y: 0, width: 3440, height: 1440).contains(session.pointer), "the pointer moves onto it")
+    session.flushPointer()
+    guard case .pointer(let x, let y) = sharing.sent.last else { return XCTFail("the Mac's pointer was not moved") }
+    XCTAssertTrue(CGRect(x: 3456, y: 0, width: 3440, height: 1440).contains(CGPoint(x: x, y: y)))
+    session.showDisplay(nil)
+    XCTAssertEqual(session.shownDisplays.map(\.frame), [Self.framebuffer.frame])
+  }
+
+  // Bug: Screen Sharing starting with its pointer drawn at the framebuffer's
+  // middle while the Mac's is elsewhere, so the first drag jumps.
+  func testScreenSharingStartsWithThePointerWhereTheHostSawIt() {
+    welcome(access: .init(screen: false, input: false))  // the pointer at 864,558 pt: the built-in display's middle
+    sharingSignsIn()
+    XCTAssertEqual(session.pointer.x, 1728, accuracy: 0.01)
+    XCTAssertEqual(session.pointer.y, 687 + 1116, accuracy: 0.01)
+  }
+
+  // MARK: Quality
+
+  // Bug: the picked quality forgotten on the next connection, or never asked
+  // of the host after its Welcome, so it streams at its default.
+  func testQualityIsRememberedAndAskedOfEveryConnection() {
+    welcome()
+    XCTAssertEqual(host.qualities, [.adaptive])
+    session.setQuality(.low)
+    XCTAssertEqual(host.qualities.last, .low)
+    host.onEvent(.quality(.init(mode: .low, level: .low)))
+    XCTAssertEqual(session.quality, .init(mode: .low, level: .low))
+
+    session.reconnect()
+    XCTAssertNil(session.quality, "a new connection says its own")
+    welcome()
+    XCTAssertEqual(host.qualities, [.low])
+    XCTAssertEqual(ScreenSettings.load(for: mac.id).quality, .low)
+  }
+
+  // Bug: settings saved before Quality existed failing to decode, resetting
+  // the user's cursor mode, tracking speed, display and clipboard choice.
+  func testSettingsSavedBeforeQualityKeepTheirValues() throws {
+    let saved = #"{"cursorMode":"touch","trackingSpeed":1.5,"display":2,"sharedClipboard":false}"#
+    let settings = try JSONDecoder().decode(ScreenSettings.self, from: Data(saved.utf8))
+    XCTAssertEqual(settings.cursorMode, .touch)
+    XCTAssertEqual(settings.trackingSpeed, 1.5)
+    XCTAssertEqual(settings.display, 2)
+    XCTAssertFalse(settings.sharedClipboard)
+    XCTAssertEqual(settings.quality, .adaptive)
   }
 }

@@ -51,11 +51,58 @@ final class ScreenViewportTests: XCTestCase {
     XCTAssertEqual(one.scale, 2, accuracy: 0.0001, "the external display has 1 px per pt")
 
     v = all()
-    v.pinch(by: 0.1, anchor: CGPoint(x: 400, y: 300), to: CGPoint(x: 400, y: 300))
+    v.pinch(by: 0.1, anchor: CGPoint(x: 400, y: 300), to: CGPoint(x: 300, y: 200))
     XCTAssertEqual(v.zoom, ScreenViewport.rubberZoom, accuracy: 0.0001)
-    v.layout(fit: v.fit, visible: v.visible)
+    v.endPinch()
     XCTAssertEqual(v.zoom, 1)
     XCTAssertEqual(v, all(), "back to Fit, centred")
+  }
+
+  // Bug (the user's report): moving the fingers during a pinch at Fit doing
+  // nothing (the picture pinned centred), so the bottom of the Mac could
+  // never be brought above the keyboard; or the picture going back once the
+  // fingers lift or the keyboard goes down.
+  func testAPinchCarriesThePictureAtFitAndItStaysWhereItIsLeft() {
+    var v = all()
+    let fitted = v.origin
+    let keyboardUp = CGRect(x: 0, y: 0, width: 800, height: 300)
+    v.layout(fit: stage, visible: keyboardUp)
+    v.pinch(by: 1, anchor: CGPoint(x: 400, y: 300), to: CGPoint(x: 420, y: 100))
+    v.endPinch()
+    XCTAssertEqual(v.origin.x, fitted.x + 20, accuracy: 0.001)
+    XCTAssertEqual(v.origin.y, fitted.y - 200, accuracy: 0.001)
+    let bottom = v.stage(CGPoint(x: 0, y: 1117)).y
+    XCTAssertLessThan(bottom, 300, "the Mac's bottom edge sits above the keyboard")
+    v.layout(fit: stage, visible: stage)
+    XCTAssertEqual(v.origin.y, fitted.y - 200, accuracy: 0.001, "it stays when the keyboard goes down")
+  }
+
+  // Bug: a picture flung past its edge lost off the stage for good.
+  func testAPlacedPictureKeepsAPartInView() {
+    var v = all()
+    v.pinch(by: 1, anchor: CGPoint(x: 400, y: 300), to: CGPoint(x: -10_000, y: -10_000))
+    XCTAssertEqual(v.stage(CGPoint(x: 5168, y: 1117)).x, ScreenViewport.keptVisible, accuracy: 0.001)
+    XCTAssertEqual(v.stage(CGPoint(x: 5168, y: 1117)).y, ScreenViewport.keptVisible, accuracy: 0.001)
+    v.pinch(by: 1, anchor: CGPoint(x: 0, y: 0), to: CGPoint(x: 10_000, y: 10_000))
+    XCTAssertEqual(v.stage(CGPoint(x: 0, y: -687)).x, 800 - ScreenViewport.keptVisible, accuracy: 0.001)
+    XCTAssertEqual(v.stage(CGPoint(x: 0, y: -687)).y, 600 - ScreenViewport.keptVisible, accuracy: 0.001)
+  }
+
+  // Bug: Trackpad Mode's picture-follows-pointer undoing the user's
+  // placement whenever the Mac moves its pointer or the stage lays out again.
+  func testFollowingLeavesAPlacementAloneUnlessTheUserMovesThePointerOutOfView() {
+    var v = all()
+    v.pinch(by: 1, anchor: CGPoint(x: 400, y: 300), to: CGPoint(x: 400, y: 100))
+    v.endPinch()
+    let placed = v.origin
+    v.follow(CGPoint(x: 0, y: -687), margin: 32)  // the Mac put it at its top-left corner, above the stage
+    XCTAssertEqual(v.origin, placed)
+    v.layout(fit: stage, visible: stage)
+    XCTAssertEqual(v.origin, placed)
+
+    // The user drags the pointer from in view up past the stage's top: the picture comes down with it.
+    v.follow(CGPoint(x: 800, y: -500), from: CGPoint(x: 800, y: 0), margin: 32)
+    XCTAssertEqual(v.stage(CGPoint(x: 800, y: -500)).y, 32, accuracy: 0.001)
   }
 
   // Bug: pinching zooms around the stage's corner instead of the fingers.

@@ -30,9 +30,12 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
   let session: ScreenSession
   let input = ScreenKeyInput()
   private lazy var toolbar = ScreenToolbar(session: session, input: input)
+  private lazy var displayPicker = ScreenDisplayPicker(session: session)
   private let stage = CALayer()
   private var placeholders: [UInt32: CALayer] = [:]
   private var videos: [UInt32: CALayer] = [:]
+  /// Screen Sharing's one picture cut to the display shown alone.
+  private var videoMasks: [UInt32: CALayer] = [:]
   private let cursorLayer = CALayer()
   private let indicator = CAShapeLayer()
   private let keyboardSpacer = UIView()
@@ -80,6 +83,7 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     input.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
     addSubview(input)
     addSubview(toolbar)
+    addSubview(displayPicker)
     toolbar.onEdgeSwipe = { [weak self] edges in self?.jump(to: edges) }
 
     keyboardSpacer.isHidden = true
@@ -152,7 +156,8 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
   }
 
   private func isOnToolbar(_ g: UIGestureRecognizer) -> Bool {
-    !toolbar.isHidden && toolbar.frame.contains(g.location(in: self))
+    let location = g.location(in: self)
+    return [toolbar, displayPicker].contains { !$0.isHidden && $0.frame.contains(location) }
   }
 
   override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -259,10 +264,11 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
       placeLayers()
     default:
       guard twoFinger == .pinch, var viewport = session.viewport else { return }
-      // Below Fit springs back to Fit.
-      viewport.layout(fit: viewport.fit, visible: viewport.visible)
+      // Below Fit springs back to Fit, centred; anywhere else the picture stays where the fingers left it.
+      let springs = viewport.zoom < 1
+      viewport.endPinch()
       session.viewport = viewport
-      placeLayers(animated: true)
+      placeLayers(animated: springs)
     }
   }
 
@@ -365,15 +371,17 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
   }
 
   private func movePointer(to point: CGPoint, follow: Bool = true) {
+    let previous = session.pointer
     session.movePointer(to: clampToDisplays(point))
-    pointerChanged(follow: follow)
+    pointerChanged(follow: follow, from: previous)
   }
 
   /// Draws the pointer where the session has it, first moving the picture
-  /// to keep it in view.
-  private func pointerChanged(follow: Bool) {
+  /// to keep it in view. `previous` is where a move the user made started;
+  /// without one (the Mac moved it) a picture the user placed stays put.
+  private func pointerChanged(follow: Bool, from previous: CGPoint? = nil) {
     if follow, var viewport = session.viewport {
-      viewport.follow(session.pointer, margin: Tune.followMargin)
+      viewport.follow(session.pointer, from: previous, margin: Tune.followMargin)
       if viewport != session.viewport {
         session.viewport = viewport
         placeLayers()
@@ -385,10 +393,7 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
 
   func pointerMoved() { pointerChanged(follow: true) }
 
-  func cursorChanged() {
-    cursorLayer.contents = session.cursor?.image
-    placeCursor()
-  }
+  func cursorChanged() { placeCursor() }
 
   func releaseKeys() { input.releaseHardwareKeys() }
 
@@ -492,6 +497,7 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     _ = session.displays
     _ = session.settings.display
     let hidden = session.fullscreen || !session.drivable
+    displayPicker.update()
     if toolbar.isHidden != hidden {
       toolbar.isHidden = hidden
       if hidden { session.openRow = nil }
@@ -548,6 +554,19 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
         visible.size.height = toolbar.frame.minY
       }
     }
+    // The Displays picker across the top of the stage: the picture fits below it.
+    displayPicker.isHidden = !toolbarShown || session.hostDisplays.count < 2
+    if !displayPicker.isHidden {
+      let across = (min: toolbarShown && landscape ? bar + 2 * inset : inset, max: bounds.width - inset)
+      let width = min(displayPicker.width, across.max - across.min)
+      displayPicker.frame = CGRect(x: ((across.min + across.max - width) / 2).rounded(), y: inset,
+                                   width: width, height: ScreenDisplayPicker.height)
+      let top = displayPicker.frame.maxY + inset
+      fit.size.height -= top
+      fit.origin.y = top
+      visible.size.height -= top
+      visible.origin.y = top
+    }
 
     let ids = session.shownDisplays.map(\.id)
     var animated = false
@@ -574,6 +593,7 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     let ids = Set(session.displays.map(\.id))
     for (id, layer) in placeholders where !ids.contains(id) { layer.removeFromSuperlayer(); placeholders[id] = nil }
     for (id, layer) in videos where !ids.contains(id) { layer.removeFromSuperlayer(); videos[id] = nil }
+    videoMasks = videoMasks.filter { ids.contains($0.key) }
     for display in session.displays {
       if placeholders[display.id] == nil {
         let placeholder = CALayer()
@@ -594,9 +614,12 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     for layer in placeholders.values { layer.backgroundColor = Chrome.UI.fill2.resolvedColor(with: traitCollection).cgColor }
   }
 
+  /// Each display where the viewport puts it; one shown as part of a
+  /// larger picture (a display of Screen Sharing's framebuffer) is cut to its part.
   private func placeLayers(animated: Bool = false) {
     guard let viewport = session.viewport else { return }
-    let shown = Set(shownIDs)
+    var shownFrames: [UInt32: CGRect] = [:]
+    for display in session.shownDisplays { shownFrames[display.id] = viewport.stage(display.frame.cg) }
     CATransaction.begin()
     if animated {
       CATransaction.setAnimationDuration(0.35)
@@ -605,25 +628,40 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
       CATransaction.setDisableActions(true)
     }
     for display in session.displays {
-      let frame = viewport.stage(display.frame.cg)
-      for layer in [placeholders[display.id], videos[display.id]].compactMap({ $0 }) {
-        layer.frame = frame
-        layer.opacity = shown.contains(display.id) ? 1 : 0
+      let whole = viewport.stage(display.frame.cg)
+      let shown = shownFrames[display.id]
+      let part = shown ?? whole
+      placeholders[display.id]?.frame = part
+      placeholders[display.id]?.opacity = shown == nil ? 0 : 1
+      guard let video = videos[display.id] else { continue }
+      video.frame = whole
+      video.opacity = shown == nil ? 0 : 1
+      if part.size.width < whole.size.width - 0.5 || part.size.height < whole.size.height - 0.5 {
+        let mask = videoMasks[display.id] ?? CALayer()
+        mask.backgroundColor = UIColor.black.cgColor
+        mask.frame = part.offsetBy(dx: -whole.minX, dy: -whole.minY)
+        videoMasks[display.id] = mask
+        video.mask = mask
+      } else {
+        video.mask = nil
+        videoMasks[display.id] = nil
       }
     }
     CATransaction.commit()
     placeCursor()
   }
 
+  /// The Mac's pointer at the pointer's place, never smaller than it looks
+  /// on the Mac (the picture shrinks a Mac many times over to fit a phone).
   private func placeCursor() {
-    guard let viewport = session.viewport, let cursor = session.cursor, session.drivable else {
+    guard let viewport = session.viewport, session.drivable else {
       cursorLayer.isHidden = true
       return
     }
-    let scale = viewport.scale
+    let cursor = session.cursor
     cursorLayer.isHidden = false
-    cursorLayer.contents = cursor.image
-    cursorLayer.bounds = CGRect(x: 0, y: 0, width: cursor.size.width * scale, height: cursor.size.height * scale)
+    if (cursorLayer.contents as AnyObject?) !== cursor.image { cursorLayer.contents = cursor.image }
+    cursorLayer.bounds = CGRect(origin: .zero, size: cursor.drawnSize(at: viewport.scale))
     cursorLayer.anchorPoint = CGPoint(x: cursor.hotSpot.x / max(cursor.size.width, 1), y: cursor.hotSpot.y / max(cursor.size.height, 1))
     cursorLayer.position = viewport.stage(session.pointer)
   }

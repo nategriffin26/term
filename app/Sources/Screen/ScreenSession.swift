@@ -11,6 +11,21 @@ struct ScreenSettings: Codable, Equatable {
   /// The display shown alone; nil shows them all.
   var display: UInt32?
   var sharedClipboard = true
+  var quality = ScreenWire.QualityMode.adaptive
+
+  init() {}
+
+  /// Each setting read on its own: one added later, or one an older Term
+  /// did not know, keeps its default instead of resetting the others.
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = ScreenSettings()
+    cursorMode = (try? c.decodeIfPresent(CursorMode.self, forKey: .cursorMode)) ?? defaults.cursorMode
+    trackingSpeed = (try? c.decodeIfPresent(Double.self, forKey: .trackingSpeed)) ?? defaults.trackingSpeed
+    display = try? c.decodeIfPresent(UInt32.self, forKey: .display)
+    sharedClipboard = (try? c.decodeIfPresent(Bool.self, forKey: .sharedClipboard)) ?? defaults.sharedClipboard
+    quality = (try? c.decodeIfPresent(ScreenWire.QualityMode.self, forKey: .quality)) ?? defaults.quality
+  }
 
   static let speeds = [0.5, 0.75, 1.0, 1.5, 2.0]
 
@@ -28,14 +43,48 @@ struct ScreenSettings: Codable, Equatable {
 
 /// The toolbar's second rows.
 enum ScreenRow: Equatable {
-  case displays, modifiers, navigation, edit
+  case modifiers, navigation, edit
 }
 
-/// The Mac's pointer as drawn: its picture at its size in Mac points.
+/// The Mac's pointer as drawn: its picture with its size and hot spot in
+/// the Mac's space (points for the host, framebuffer pixels for Screen Sharing).
 struct ScreenCursor {
   let image: CGImage
   let size: CGSize
   let hotSpot: CGPoint
+  /// Phone points per unit of that space it is drawn at, at least: never
+  /// smaller than on the Mac's own screen, however far the picture is shrunk.
+  let legibleScale: CGFloat
+
+  /// Its size on the phone where the picture is drawn at `scale` phone points per unit.
+  func drawnSize(at scale: CGFloat) -> CGSize {
+    let s = max(scale, legibleScale)
+    return CGSize(width: size.width * s, height: size.height * s)
+  }
+
+  /// Drawn while the Mac has sent no shape, or a hidden one: the pointer is never invisible.
+  static let arrow: ScreenCursor = {
+    let size = CGSize(width: 16, height: 23)
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 3
+    let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      let outline: [CGPoint] = [.init(x: 0, y: 0), .init(x: 0, y: 16), .init(x: 4, y: 12.5), .init(x: 6.8, y: 18.6),
+                                .init(x: 9.3, y: 17.5), .init(x: 6.6, y: 11.6), .init(x: 11.5, y: 11.6)]
+      let path = UIBezierPath()
+      for (i, p) in outline.enumerated() {
+        let point = CGPoint(x: 2 + p.x, y: 2 + p.y)
+        if i == 0 { path.move(to: point) } else { path.addLine(to: point) }
+      }
+      path.close()
+      path.lineJoinStyle = .round
+      path.lineWidth = 1.5
+      UIColor.black.setFill()
+      UIColor.white.setStroke()
+      path.stroke()
+      path.fill()
+    }
+    return ScreenCursor(image: image.cgImage!, size: size, hotSpot: CGPoint(x: 2, y: 2), legibleScale: 1)
+  }()
 }
 
 /// What the Screen's view does for the session.
@@ -116,6 +165,8 @@ final class ScreenSession {
   private(set) var modifiers = ModifierLatch()
   /// The Mac's clipboard as last copied there (Get Clipboard).
   private(set) var macClipboard: ScreenWire.Clipboard?
+  /// The picture quality the host streams at, as it last said.
+  private(set) var quality: ScreenWire.QualityState?
   /// The Screen's tab is open in the open panel.
   private(set) var isShown = false
   var openRow: ScreenRow?
@@ -129,9 +180,13 @@ final class ScreenSession {
   /// The pointer in the Mac's space, drawn locally at once.
   @ObservationIgnored var pointer = CGPoint.zero
   @ObservationIgnored var viewport: ScreenViewport?
-  var cursor: ScreenCursor? { sharing == .live ? sharingCursor : hostCursor }
+  /// The Mac's pointer shape, or the standard arrow while it has sent none.
+  var cursor: ScreenCursor { (sharing == .live ? sharingCursor : hostCursor) ?? .arrow }
   @ObservationIgnored private var hostCursor: ScreenCursor?
   @ObservationIgnored private var sharingCursor: ScreenCursor?
+  /// The latest pointer position not yet sent: one goes per display frame.
+  @ObservationIgnored private var pendingPointer: CGPoint?
+  @ObservationIgnored private var pointerFrame: CADisplayLink?
   /// Where the host last put the pointer while Screen Sharing drove it.
   @ObservationIgnored private var hostPointer = CGPoint.zero
   @ObservationIgnored weak var surface: ScreenSurface?
@@ -204,6 +259,7 @@ final class ScreenSession {
     stopPasteboardWatch()
     guard let host else { return }
     phase = .connecting
+    quality = nil
     modifiers.reset()
     engine = engines.host(host) { [weak self] event in self?.handle(event) }
   }
@@ -252,18 +308,34 @@ final class ScreenSession {
   /// locked Mac, the host's displays otherwise.
   var displays: [ScreenWire.Display] { sharing == .live ? sharingDisplays : hostDisplays }
 
-  /// The displays on show: the chosen one alone, else all of them.
+  /// The displays on show: the chosen one alone, else all of them. Under
+  /// Screen Sharing the chosen one is its part of the one framebuffer.
   var shownDisplays: [ScreenWire.Display] {
-    if sharing != .live, let id = settings.display, let one = hostDisplays.first(where: { $0.id == id }) { return [one] }
-    return displays
+    guard let id = displayChoice else { return displays }
+    guard sharing == .live else { return hostDisplays.filter { $0.id == id } }
+    guard var framebuffer = sharingDisplays.first, let region = sharingRegion(id) else { return displays }
+    framebuffer.frame = ScreenWire.Rect(x: region.minX, y: region.minY, width: region.width, height: region.height)
+    framebuffer.pixelWidth = Int(region.width.rounded())
+    framebuffer.pixelHeight = Int(region.height.rounded())
+    return [framebuffer]
   }
 
-  /// One tap in the Displays row or Actions › Display; nil is All.
+  /// The display shown alone, if the Mac still has it; nil is All.
+  var displayChoice: UInt32? {
+    guard let id = settings.display, hostDisplays.count > 1, hostDisplays.contains(where: { $0.id == id }) else { return nil }
+    return id
+  }
+
+  /// One tap in the Displays picker; nil is All. The pointer stays on what shows.
   func showDisplay(_ id: UInt32?) {
-    guard id != settings.display else { return }
+    guard id != displayChoice else { return }
     updateSettings { $0.display = id }
     viewport = nil
     watchShown()
+    let frames = shownDisplays.map(\.frame.cg)
+    if let first = frames.first, ScreenArrangement.clamp(pointer, to: frames) != pointer {
+      movePointer(to: CGPoint(x: first.midX, y: first.midY))
+    }
   }
 
   /// The host streams the shown displays, or nothing while Screen Sharing shows the locked Mac.
@@ -352,13 +424,17 @@ final class ScreenSession {
     leaveSharing()
   }
 
-  /// Screen Sharing's picture and input take over from the host's.
+  /// Screen Sharing's picture and input take over from the host's, the
+  /// pointer drawn where the host last saw it.
   private func enterSharing() {
     releaseInput()
     hostPointer = pointer
     sharing = .live
     viewport = nil
-    if let frame = sharingDisplays.first?.frame { pointer = CGPoint(x: frame.width / 2, y: frame.height / 2) }
+    let shown = shownDisplays.map(\.frame.cg)
+    if let point = sharingPoint(hostPointer) ?? shown.first.map({ CGPoint(x: $0.midX, y: $0.midY) }) {
+      pointer = ScreenArrangement.clamp(point, to: shown)
+    }
     watchShown()
     surface?.cursorChanged()
     surface?.pointerMoved()
@@ -397,6 +473,12 @@ final class ScreenSession {
     if on { checkPasteboard() }
   }
 
+  /// Actions › Quality: remembered for this Mac and asked of its host at once.
+  func setQuality(_ mode: ScreenWire.QualityMode) {
+    updateSettings { $0.quality = mode }
+    engine?.setQuality(mode)
+  }
+
   private func updateSettings(_ change: (inout ScreenSettings) -> Void) {
     change(&settings)
     if let host { settings.save(for: host.id) }
@@ -414,6 +496,7 @@ final class ScreenSession {
       pointer = CGPoint(x: welcome.pointer.x, y: welcome.pointer.y)
       hostPointer = pointer
       phase = .live
+      engine?.setQuality(settings.quality)
       watchShown()
       updateSharing()
       surface?.pointerMoved()
@@ -442,6 +525,8 @@ final class ScreenSession {
     case .access(let granted):
       access = granted
       updateSharing()
+    case .quality(let state):
+      quality = state
     case .failure(let message):
       show(notice: message)
     case .closed(let closure):
@@ -472,23 +557,44 @@ final class ScreenSession {
     }
   }
 
+  /// The host's shape: a PNG at `scale` pixels per point, sized and placed in points.
+  /// No picture (the Mac hides its pointer, or has none to give) leaves the arrow.
   private static func cursor(from image: ScreenWire.CursorImage) -> ScreenCursor? {
     guard let ui = UIImage(data: image.png), let cg = ui.cgImage, image.scale > 0 else { return nil }
     return ScreenCursor(image: cg,
                         size: CGSize(width: CGFloat(cg.width) / image.scale, height: CGFloat(cg.height) / image.scale),
-                        hotSpot: CGPoint(x: image.hotX, y: image.hotY))
+                        hotSpot: CGPoint(x: image.hotX, y: image.hotY), legibleScale: 1)
   }
 
   // MARK: - Pointer
 
+  /// Anything but a move first sends the move pending before it, so a click never lands where the pointer was.
   private func send(_ input: ScreenInput) {
     guard drivable else { return }
+    if case .pointer = input {} else { flushPointer() }
     activeEngine?.send(input)
   }
 
-  /// The pointer to `point` (a drag while a button is held).
+  /// The pointer to `point` (a drag while a button is held), drawn at once
+  /// and sent with the next display frame: the latest position of the frame wins.
   func movePointer(to point: CGPoint) {
     pointer = point
+    guard drivable else { return }
+    pendingPointer = point
+    if pointerFrame == nil {
+      let link = CADisplayLink(target: PointerFrameTarget(self), selector: #selector(PointerFrameTarget.fire(_:)))
+      link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+      link.add(to: .main, forMode: .common)
+      pointerFrame = link
+    }
+    pointerFrame?.isPaused = false
+  }
+
+  /// Sends the pending pointer position, if any.
+  func flushPointer() {
+    pointerFrame?.isPaused = true
+    guard let point = pendingPointer else { return }
+    pendingPointer = nil
     send(.pointer(point))
   }
 
@@ -506,8 +612,10 @@ final class ScreenSession {
     send(.button(button, down: true, at: point, clicks: 1))
   }
 
-  /// Ends a held drag at the pointer's last place.
+  /// Ends a held drag at the pointer's last place. The pending move goes
+  /// first, also with no button held: the engine it belongs to may be closing.
   func releaseHeldButton() {
+    flushPointer()
     guard let button = heldButton else { return }
     heldButton = nil
     send(.button(button, down: false, at: pointer, clicks: 1))
@@ -654,15 +762,31 @@ final class ScreenSession {
   /// login window's password field takes a click; the framebuffer's middle
   /// when the host never said.
   private var sharingFocusPoint: CGPoint {
-    let framebuffer = sharingDisplays.first?.frame.cg ?? .zero
-    let layout = Self.sharingLayout(hostDisplays)
-    let bounds = layout.values.reduce(CGRect.null) { $0.union($1) }
-    guard let main = (hostDisplays.first(where: \.isMain) ?? hostDisplays.first).flatMap({ layout[$0.id] }),
-          !bounds.isEmpty else {
+    guard let main = (hostDisplays.first(where: \.isMain) ?? hostDisplays.first).flatMap({ sharingRegion($0.id) }) else {
+      let framebuffer = sharingDisplays.first?.frame.cg ?? .zero
       return CGPoint(x: framebuffer.midX, y: framebuffer.midY)
     }
-    return CGPoint(x: (main.midX - bounds.minX) * (framebuffer.width / bounds.width),
-                   y: (main.midY - bounds.minY) * (framebuffer.height / bounds.height))
+    return CGPoint(x: main.midX, y: main.midY)
+  }
+
+  /// A host display's part of Screen Sharing's framebuffer, in its pixels.
+  private func sharingRegion(_ id: UInt32) -> CGRect? {
+    guard let framebuffer = sharingDisplays.first?.frame.cg else { return nil }
+    let layout = Self.sharingLayout(hostDisplays)
+    let bounds = layout.values.reduce(CGRect.null) { $0.union($1) }
+    guard let rect = layout[id], !bounds.isEmpty else { return nil }
+    let sx = framebuffer.width / bounds.width, sy = framebuffer.height / bounds.height
+    return CGRect(x: (rect.minX - bounds.minX) * sx, y: (rect.minY - bounds.minY) * sy,
+                  width: rect.width * sx, height: rect.height * sy)
+  }
+
+  /// A point in the host's space (points) as Screen Sharing's framebuffer has it.
+  private func sharingPoint(_ point: CGPoint) -> CGPoint? {
+    guard let display = hostDisplays.first(where: { $0.frame.cg.contains(point) }),
+          let region = sharingRegion(display.id) else { return nil }
+    let frame = display.frame.cg
+    return CGPoint(x: region.minX + (point.x - frame.minX) * region.width / frame.width,
+                   y: region.minY + (point.y - frame.minY) * region.height / frame.height)
   }
 
   /// Where Screen Sharing draws each display in its framebuffer: at native
@@ -758,5 +882,15 @@ final class ScreenSession {
 
   private func rememberSynced() {
     if let synced = echo.synced { UserDefaults.standard.set(synced, forKey: Self.syncedKey) }
+  }
+}
+
+/// The pointer's display link target: sends the pending move each frame, without keeping the session alive.
+private final class PointerFrameTarget: NSObject {
+  weak var session: ScreenSession?
+  init(_ session: ScreenSession) { self.session = session }
+  @MainActor @objc func fire(_ link: CADisplayLink) {
+    guard let session else { link.invalidate(); return }
+    session.flushPointer()
   }
 }

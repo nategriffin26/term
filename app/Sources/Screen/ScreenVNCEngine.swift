@@ -88,6 +88,9 @@ final class ScreenVNCEngine: ScreenEngine {
   /// RFB's clipboard carries Latin-1 only: the clipboard waits for Term Screen Host.
   func setClipboard(_ clipboard: ScreenWire.Clipboard) {}
 
+  /// Screen Sharing sends its framebuffer as it is: no quality to choose.
+  func setQuality(_ mode: ScreenWire.QualityMode) {}
+
   func layer(for display: UInt32) -> CALayer? { display == Self.display ? video : nil }
 
   func close() {

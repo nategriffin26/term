@@ -17,9 +17,14 @@ struct ScreenViewport: Equatable {
   private(set) var zoom: CGFloat = 1
   /// Stage position of the region's top-left corner.
   private(set) var origin: CGPoint = .zero
+  /// A pinch put the picture where it is: it stays there, past its edges if
+  /// the user left it so, until a pinch below Fit lets go and brings Fit back.
+  private(set) var placed = false
 
   /// Zoom a pinch may reach below Fit before it lets go and springs back.
   static let rubberZoom: CGFloat = 0.8
+  /// How much of a placed picture stays inside the visible area per axis, so it can't be lost.
+  static let keptVisible: CGFloat = 96
 
   init(region: CGRect, fit: CGRect, visible: CGRect, maxScale: CGFloat) {
     self.region = region
@@ -72,38 +77,51 @@ struct ScreenViewport: Equatable {
 
   /// The stage, the toolbar, the keyboard or the shown displays changed.
   /// Fit stays Fit and a zoomed view keeps its place; covering part of the
-  /// stage never moves the picture, uncovering brings it back.
+  /// stage never moves the picture, uncovering brings it back. A placed
+  /// picture stays where the user left it.
   mutating func layout(fit: CGRect, visible: CGRect) {
     self.fit = fit
     self.visible = visible
     zoom = min(max(zoom, 1), maxZoom)
-    origin = clamped(origin)
+    origin = placed ? kept(origin) : clamped(origin)
   }
 
   /// Fit, centred.
   mutating func fitNow() {
     zoom = 1
+    placed = false
     origin = clamped(.zero)
   }
 
   /// A pinch step: zoom by `factor`, the Mac point that was under `anchor`
-  /// lands under `location` (pinching zooms around the fingers, moving them pans).
+  /// lands under `location`. Pinching zooms around the fingers; moving them
+  /// carries the picture, at any zoom and past its edges.
   mutating func pinch(by factor: CGFloat, anchor: CGPoint, to location: CGPoint) {
     let held = mac(anchor)
     zoom = min(max(zoom * factor, Self.rubberZoom), maxZoom)
-    origin = CGPoint(x: location.x - (held.x - region.minX) * scale, y: location.y - (held.y - region.minY) * scale)
-    origin = clamped(origin)
+    placed = true
+    origin = kept(CGPoint(x: location.x - (held.x - region.minX) * scale, y: location.y - (held.y - region.minY) * scale))
+  }
+
+  /// The fingers lifted: below Fit springs back to Fit, centred; otherwise the picture stays.
+  mutating func endPinch() {
+    if zoom < 1 { fitNow() }
   }
 
   /// Touch Mode's one-finger pan of a zoomed view.
   mutating func pan(by delta: CGVector) {
-    origin = clamped(CGPoint(x: origin.x + delta.dx, y: origin.y + delta.dy))
+    origin = movable(CGPoint(x: origin.x + delta.dx, y: origin.y + delta.dy))
   }
 
   /// Moves the picture with the pointer when its drawn position comes
   /// closer than `margin` to an edge of the visible area: by exactly the
-  /// overshoot, as far as the region reaches.
-  mutating func follow(_ pointer: CGPoint, margin: CGFloat = 32) {
+  /// overshoot, as far as the region reaches. A picture the user placed
+  /// past its edges follows only a pointer that was in view at `previous`
+  /// (the user is moving it), so the Mac's own moves and layout never undo the placement.
+  mutating func follow(_ pointer: CGPoint, from previous: CGPoint? = nil, margin: CGFloat = 32) {
+    if placed, clamped(origin) != origin {
+      guard let previous, visible.contains(stage(previous)) else { return }
+    }
     let p = stage(pointer)
     let m = min(margin, visible.width / 3, visible.height / 3)
     let inner = visible.insetBy(dx: m, dy: m)
@@ -114,11 +132,38 @@ struct ScreenViewport: Equatable {
     pan(by: shift)
   }
 
-  /// Where the picture may sit, per axis. Narrower than `fit`: centred in it,
-  /// free only to move up from under the keyboard (or right from an open
-  /// side row). Wider: its edges stop at the visible area's edges.
+  /// A pan's or a follow's reach: the natural range, widened for a placed
+  /// picture to take in where the user left it (moving never pushes it further out).
+  private func movable(_ value: CGPoint) -> CGPoint {
+    guard placed else { return clamped(value) }
+    let natural = ranges()
+    func axis(_ value: CGFloat, _ range: (CGFloat, CGFloat), _ current: CGFloat) -> CGFloat {
+      min(max(value, min(range.0, current)), max(range.1, current))
+    }
+    return kept(CGPoint(x: axis(value.x, natural.x, origin.x), y: axis(value.y, natural.y, origin.y)))
+  }
+
+  /// Anywhere that leaves `keptVisible` of the picture inside the visible area on each axis.
+  private func kept(_ value: CGPoint) -> CGPoint {
+    func axis(_ value: CGFloat, size: CGFloat, visible: (CGFloat, CGFloat)) -> CGFloat {
+      let keep = min(Self.keptVisible, size, visible.1 - visible.0)
+      return min(max(value, visible.0 + keep - size), visible.1 - keep)
+    }
+    let s = scale
+    return CGPoint(x: axis(value.x, size: region.width * s, visible: (visible.minX, visible.maxX)),
+                   y: axis(value.y, size: region.height * s, visible: (visible.minY, visible.maxY)))
+  }
+
+  /// Where the picture may sit unplaced, per axis. Narrower than `fit`:
+  /// centred in it, free only to move up from under the keyboard (or right
+  /// from an open side row). Wider: its edges stop at the visible area's edges.
   private func clamped(_ value: CGPoint) -> CGPoint {
-    func axis(_ value: CGFloat, size: CGFloat, fit: (CGFloat, CGFloat), visible: (CGFloat, CGFloat)) -> CGFloat {
+    let r = ranges()
+    return CGPoint(x: min(max(value.x, r.x.0), r.x.1), y: min(max(value.y, r.y.0), r.y.1))
+  }
+
+  private func ranges() -> (x: (CGFloat, CGFloat), y: (CGFloat, CGFloat)) {
+    func axis(size: CGFloat, fit: (CGFloat, CGFloat), visible: (CGFloat, CGFloat)) -> (CGFloat, CGFloat) {
       let centred = fit.0 + (fit.1 - fit.0 - size) / 2
       let low: CGFloat, high: CGFloat
       if size <= fit.1 - fit.0 + 0.5 {
@@ -128,12 +173,11 @@ struct ScreenViewport: Equatable {
         low = visible.1 - size
         high = visible.0
       }
-      return min(max(value, low), max(low, high))
+      return (low, max(low, high))
     }
     let s = scale
-    return CGPoint(
-      x: axis(value.x, size: region.width * s, fit: (fit.minX, fit.maxX), visible: (visible.minX, visible.maxX)),
-      y: axis(value.y, size: region.height * s, fit: (fit.minY, fit.maxY), visible: (visible.minY, visible.maxY)))
+    return (axis(size: region.width * s, fit: (fit.minX, fit.maxX), visible: (visible.minX, visible.maxX)),
+            axis(size: region.height * s, fit: (fit.minY, fit.maxY), visible: (visible.minY, visible.maxY)))
   }
 }
 
