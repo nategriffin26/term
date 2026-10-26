@@ -1,12 +1,12 @@
 import UIKit
 
-/// The key bar above the software keyboard, after Blink's iPhone bar
-/// (KBLayout.iPhone, KBSizes): borderless keys on the keyboard's own
-/// background. Esc/Ctrl/Alt on the left; a scrolling middle of Tab, symbol
-/// pairs and F-keys (pull a pair down for its upper symbol); the arrow
-/// joystick, hide-keyboard and Cmd on the right. Cmd swaps the middle for
-/// its own row: the system paste control, then photo, camera and file keys
-/// that upload to the host and type the path.
+/// The key bar above the software keyboard: a glass capsule over the
+/// terminal, after Blink's iPhone bar (KBLayout.iPhone). Esc/Ctrl/Alt on the
+/// left; a scrolling middle of Tab, symbol pairs and F-keys (pull a pair
+/// down for its upper symbol); the arrow joystick, hide-keyboard and Cmd on
+/// the right. Cmd swaps the middle for its own row: the system paste
+/// control, then photo, camera and file keys that upload to the host and
+/// type the path.
 @MainActor
 final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     enum Action {
@@ -66,46 +66,48 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     private weak var terminal: TerminalView?
     var enableInputClicksWhenVisible: Bool { terminal?.keyClicksEnabled ?? true }
     private let layout: Layout
+    private let glass = GlassView()
     private var leftKeys: [KeyCap] = []
     private var rightKeys: [KeyCap] = []
     private var middleKeys: [KeyCap] = []
+    /// Holds the scroller; its mask fades the keys out at a side with more keys past it.
+    private let middle = UIView()
+    private let edgeFade = CAGradientLayer()
     private let scroller = HorizontalScroller()
-    private let leftEdge = UIView()
-    private let rightEdge = UIView()
     private let commandRow = UIView()
-    private let pasteControl: UIPasteControl
+    private var pasteControl: UIPasteControl
     private var insertKeys: [KeyCap] = []
     private var lastCommandTap: CFTimeInterval = 0
 
-    /// Blink's iPhone bar height; 38 pt where the phone is on its side.
-    static let height: CGFloat = 44
-    private var barHeight: CGFloat { traitCollection.verticalSizeClass == .compact ? 38 : SmartKeysBar.height }
+    /// The bar's height: the glass capsule plus a margin above and below it.
+    static let height: CGFloat = 52
+    /// Where the phone is on its side.
+    private static let compactHeight: CGFloat = 46
+    private var barHeight: CGFloat { traitCollection.verticalSizeClass == .compact ? Self.compactHeight : Self.height }
+    /// The capsule's inset from the bar's edges.
+    private static let capsuleInset = UIEdgeInsets(top: 3, left: 6, bottom: 3, right: 6)
 
     init(terminal: TerminalView, layout: Layout = .standard) {
         self.terminal = terminal
         self.layout = layout
-        // The system's own paste button: reads the clipboard without the
-        // "Allow Paste" prompt and hands it to the terminal's paste(itemProviders:).
-        let paste = UIPasteControl.Configuration()
-        paste.displayMode = .iconOnly
-        paste.cornerStyle = .fixed
-        paste.cornerRadius = 4
-        paste.baseForegroundColor = .white
-        paste.baseBackgroundColor = UIColor(white: 0.36, alpha: 1)
-        pasteControl = UIPasteControl(configuration: paste)
-        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: SmartKeysBar.height), inputViewStyle: .keyboard)
+        pasteControl = Self.makePasteControl(for: UITraitCollection.current)
+        super.init(frame: CGRect(x: 0, y: 0, width: 320, height: SmartKeysBar.height), inputViewStyle: .default)
         allowsSelfSizing = true
+        backgroundColor = .clear
+        glass.isGlassShown = true
+        glass.cornerConfiguration = .capsule()
+        glass.isUserInteractionEnabled = false
+        addSubview(glass)
         scroller.showsHorizontalScrollIndicator = false
         scroller.delaysContentTouches = false
         scroller.canCancelContentTouches = true
         scroller.alwaysBounceHorizontal = true
         scroller.delegate = self
-        addSubview(scroller)
-        for edge in [leftEdge, rightEdge] {
-            edge.backgroundColor = .separator
-            edge.isUserInteractionEnabled = false
-            addSubview(edge)
-        }
+        middle.addSubview(scroller)
+        edgeFade.startPoint = CGPoint(x: 0, y: 0.5)
+        edgeFade.endPoint = CGPoint(x: 1, y: 0.5)
+        middle.layer.mask = edgeFade
+        addSubview(middle)
         leftKeys = layout.left.map(makeKey)
         middleKeys = layout.middle.map(makeKey)
         rightKeys = layout.right.map(makeKey)
@@ -128,12 +130,14 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
                 return cap
             }
         insertKeys.forEach(commandRow.addSubview)
-        commandRow.clipsToBounds = true
         commandRow.isHidden = true
         commandRow.alpha = 0
         addSubview(commandRow)
         registerForTraitChanges([UITraitVerticalSizeClass.self]) { (bar: SmartKeysBar, _: UITraitCollection) in
             bar.invalidateIntrinsicContentSize()
+        }
+        registerForTraitChanges([AppThemeTrait.self]) { (bar: SmartKeysBar, _: UITraitCollection) in
+            bar.replacePasteControl()
         }
         refresh()
     }
@@ -143,56 +147,97 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
 
     override var intrinsicContentSize: CGSize { CGSize(width: UIView.noIntrinsicMetric, height: barHeight) }
 
+    /// The system's own paste button: reads the clipboard without the
+    /// "Allow Paste" prompt and hands it to the terminal's paste(itemProviders:).
+    /// Its colours are fixed when it is made, so a new theme gets a new one,
+    /// and the system draws it only on an opaque ground: the wash laid over the theme's.
+    private static func makePasteControl(for traits: UITraitCollection) -> UIPasteControl {
+        var g = (r: CGFloat(0), g: CGFloat(0), b: CGFloat(0), a: CGFloat(0)), w = g
+        Chrome.UI.bg.resolvedColor(with: traits).getRed(&g.r, green: &g.g, blue: &g.b, alpha: &g.a)
+        Chrome.UI.fill3.resolvedColor(with: traits).getRed(&w.r, green: &w.g, blue: &w.b, alpha: &w.a)
+        func over(_ x: CGFloat, _ y: CGFloat) -> CGFloat { y + (x - y) * w.a }
+        let paste = UIPasteControl.Configuration()
+        paste.displayMode = .iconOnly
+        paste.cornerStyle = .capsule
+        paste.baseForegroundColor = Chrome.UI.fg.resolvedColor(with: traits)
+        paste.baseBackgroundColor = UIColor(red: over(w.r, g.r), green: over(w.g, g.g), blue: over(w.b, g.b), alpha: 1)
+        return UIPasteControl(configuration: paste)
+    }
+
+    private func replacePasteControl() {
+        let next = Self.makePasteControl(for: traitCollection)
+        next.target = terminal
+        next.frame = pasteControl.frame
+        commandRow.insertSubview(next, aboveSubview: pasteControl)
+        pasteControl.removeFromSuperview()
+        pasteControl = next
+    }
+
     // ------------------------------------------------------------ layout
 
-    /// Slot widths: Blink's iPhone key (33) and wide key (39); a wide bar
-    /// (iPhone Duo's inner display) gets roomier slots.
+    /// Slot widths, each key's whole touch target; a wide bar (iPhone Duo's
+    /// inner display) gets roomier slots.
     private func width(of key: Key) -> CGFloat {
         let roomy = bounds.width >= 600
         switch key {
-        case .arrows, .command: return roomy ? 60 : 39
-        default: return roomy ? 46 : 33
+        case .arrows, .hideKeyboard, .command: return roomy ? 60 : 40
+        case .escape, .ctrl, .alt: return roomy ? 46 : 40
+        case .tab: return roomy ? 46 : 36
+        case .pair, .function: return roomy ? 46 : 33
         }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         let h = bounds.height
-        var x = safeAreaInsets.left
+        let capsule = bounds.inset(by: UIEdgeInsets(top: Self.capsuleInset.top, left: safeAreaInsets.left + Self.capsuleInset.left,
+                                                    bottom: Self.capsuleInset.bottom, right: safeAreaInsets.right + Self.capsuleInset.right))
+        glass.frame = capsule
+        // Keys keep the bar's full height as their target; the outer ones
+        // start a little inside the capsule's rounded ends.
+        var x = capsule.minX + Chrome.Space.s
         for (key, view) in zip(layout.left, leftKeys) {
             view.frame = CGRect(x: x, y: 0, width: width(of: key), height: h)
             x += view.frame.width
         }
         let middleStart = x
-        var right = bounds.width - safeAreaInsets.right
+        var right = capsule.maxX - Chrome.Space.s
         for (key, view) in zip(layout.right, rightKeys).reversed() {
             right -= width(of: key)
             view.frame = CGRect(x: right, y: 0, width: width(of: key), height: h)
         }
-        scroller.frame = CGRect(x: middleStart, y: 0, width: max(0, right - middleStart), height: h)
+        middle.frame = CGRect(x: middleStart, y: 0, width: max(0, right - middleStart), height: h)
+        scroller.frame = middle.bounds
         var mx: CGFloat = 0
         for (key, view) in zip(layout.middle, middleKeys) {
             view.frame = CGRect(x: mx, y: 0, width: width(of: key), height: h)
             mx += view.frame.width
         }
         scroller.contentSize = CGSize(width: mx, height: h)
-        commandRow.frame = scroller.frame
+        commandRow.frame = middle.frame
         let slots = CGFloat(1 + insertKeys.count)
         let slot = min(bounds.width >= 600 ? 56 : 44, commandRow.bounds.width / slots).rounded(.down)
-        pasteControl.frame = CGRect(x: 0, y: 0, width: slot, height: h).inset(by: KeyCap.plateInsets)
+        // A circle button; the system won't draw its paste control much smaller.
+        let side = min(Chrome.Size.circle, h - 12)
+        pasteControl.frame = CGRect(x: (slot - side) / 2, y: (h - side) / 2, width: side, height: side)
         for (i, cap) in insertKeys.enumerated() {
             cap.frame = CGRect(x: slot * CGFloat(i + 1), y: 0, width: slot, height: h)
         }
-        leftEdge.frame = CGRect(x: middleStart - 0.5, y: 9, width: 1 / max(traitCollection.displayScale, 1), height: h - 18)
-        rightEdge.frame = CGRect(x: right - 0.5, y: 9, width: leftEdge.frame.width, height: h - 18)
         updateEdges()
     }
 
-    /// A hairline marks each side of the middle that has keys scrolled out of view.
+    /// Keys fade out at each side of the middle that has more keys scrolled past it.
     fileprivate func updateEdges() {
         let offset = scroller.contentOffset.x
-        leftEdge.isHidden = command || offset <= 0
-        rightEdge.isHidden = command || scroller.contentSize.width - offset <= scroller.bounds.width + 0.5
+        let more = (left: !command && offset > 0,
+                    right: !command && scroller.contentSize.width - offset > scroller.bounds.width + 0.5)
+        let fade = min(20 / max(middle.bounds.width, 1), 0.5)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        edgeFade.frame = middle.bounds
+        edgeFade.colors = [more.left ? UIColor.clear : .black, .black, .black, more.right ? .clear : .black].map(\.cgColor)
+        edgeFade.locations = [0, fade, 1 - fade, 1].map { NSNumber(value: Double($0)) }
+        CATransaction.commit()
     }
 
     // ------------------------------------------------------------ keys
@@ -226,6 +271,7 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
             cap.onPick = { [weak self] second in self?.emit(.key(SmartKeysBar.functionKey(second ? b : a))) }
         case .arrows:
             cap.configureArrows()
+            cap.accessibilityLabel = "Arrows"
             cap.onArrow = { [weak self] direction in
                 guard let self else { return }
                 let keys: [TermKey] = command
@@ -234,7 +280,7 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
                 emit(.key(keys[direction]))
             }
         case .hideKeyboard:
-            cap.configure(symbol: "keyboard.chevron.compact.down")
+            cap.configure(symbol: "keyboard", secondary: true)
             cap.accessibilityLabel = "Hide Keyboard"
             cap.onTap = { [weak self] in self?.emit(.hideKeyboard) }
         case .command:
@@ -282,7 +328,7 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         commandRow.isHidden = false
         updateEdges()
         UIView.animate(withDuration: 0.12) {
-            self.scroller.alpha = row ? 0 : 1
+            self.middle.alpha = row ? 0 : 1
             self.commandRow.alpha = row ? 1 : 0
         } completion: { _ in
             self.commandRow.isHidden = !self.command
@@ -316,9 +362,9 @@ private final class HorizontalScroller: UIScrollView {
     override func touchesShouldCancel(in view: UIView) -> Bool { true }
 }
 
-/// One key, drawn like Blink's: a label on the bar, a rounded plate only
-/// while pressed or while a modifier is on. Reports taps, holds, pair picks
-/// and joystick directions.
+/// One key: a label on the glass, a capsule plate only while pressed (a
+/// wash) or while a modifier is on (the text colour, the label in the
+/// ground). Reports taps, holds, pair picks and joystick directions.
 private final class KeyCap: UIView {
     var onTap: (() -> Void)?
     var onHold: (() -> Void)?
@@ -330,13 +376,17 @@ private final class KeyCap: UIView {
     var onArrow: ((Int) -> Void)?
 
     var modifier = SmartKeysBar.Modifier.off { didSet { updateLook() } }
-    var alternateArrows = false { didSet { updateArrowSymbols() } }
+    var alternateArrows = false { didSet { updateArms() } }
 
     private let plate = UIView()
     private let title = UILabel()
     private let upper = UILabel()
     private let lockBar = UIView()
-    private var icons: [UIImageView] = []
+    private var icon: UIImageView?
+    private var secondary = false
+    /// The joystick's four arms (left, down, up, right), drawn like the
+    /// design's arrows glyph so each can light on its own.
+    private var arms: [CAShapeLayer] = []
     private var pressed = false { didSet { updateLook() } }
     private var holdTimer: Timer?
     private var held = false
@@ -346,30 +396,26 @@ private final class KeyCap: UIView {
     private var direction: Int?
     private let repeater = KeyRepeater()
 
-    /// Blink's small-key insets: the plate sits 3 pt below the bar top, 1 pt from the rest.
-    static let plateInsets = UIEdgeInsets(top: 3, left: 1, bottom: 1, right: 1)
+    /// The plate's height in a bar `height` tall: 32 in portrait, 26 on its side.
+    static func plateHeight(in height: CGFloat) -> CGFloat { height - 20 }
 
     init() {
         super.init(frame: .zero)
         isExclusiveTouch = true
         isAccessibilityElement = true
         accessibilityTraits = .keyboardKey
-        plate.layer.cornerRadius = 4
         plate.layer.cornerCurve = .continuous
         plate.isUserInteractionEnabled = false
         addSubview(plate)
-        let font = UIFont.systemFont(ofSize: 15, weight: .medium)
         for label in [upper, title] {
             label.textAlignment = .center
-            label.font = font
-            label.textColor = .white
             label.isUserInteractionEnabled = false
             addSubview(label)
         }
-        lockBar.backgroundColor = .black
         lockBar.layer.cornerRadius = 1
         lockBar.isHidden = true
         addSubview(lockBar)
+        registerForTraitChanges([AppThemeTrait.self]) { (cap: KeyCap, _: UITraitCollection) in cap.updateLook() }
         updateLook()
     }
 
@@ -384,86 +430,121 @@ private final class KeyCap: UIView {
         setNeedsLayout()
     }
 
-    func configure(symbol: String) {
-        let icon = UIImageView(image: UIImage(systemName: symbol,
-                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular)))
-        icon.contentMode = .center
-        icon.isUserInteractionEnabled = false
-        icons = [icon]
-        addSubview(icon)
+    /// `secondary`: drawn in the second text colour (hide-keyboard, which leaves the terminal be).
+    func configure(symbol: String, secondary: Bool = false) {
+        let view = UIImageView(image: UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control)))
+        view.contentMode = .center
+        view.isUserInteractionEnabled = false
+        icon = view
+        self.secondary = secondary
+        addSubview(view)
         updateLook()
     }
 
     func configureArrows() {
-        icons = (0..<4).map { _ in
-            let v = UIImageView()
-            v.contentMode = .center
-            v.isUserInteractionEnabled = false
-            addSubview(v)
-            return v
+        arms = (0..<4).map { _ in
+            let arm = CAShapeLayer()
+            arm.fillColor = nil
+            arm.lineWidth = 1.7
+            arm.lineCap = .round
+            arm.lineJoin = .round
+            layer.addSublayer(arm)
+            return arm
         }
-        updateArrowSymbols()
+        updateArms()
         updateLook()
     }
 
-    private func updateArrowSymbols() {
-        guard icons.count == 4 else { return }
-        let names = alternateArrows
-            ? ["arrow.left.to.line", "arrow.down.to.line", "arrow.up.to.line", "arrow.right.to.line"]
-            : ["arrow.left", "arrow.down", "arrow.up", "arrow.right"]
-        let config = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
-        for (v, name) in zip(icons, names) { v.image = UIImage(systemName: name, withConfiguration: config) }
+    /// One arm pointing up in the glyph's 20-unit box: a shaft from the
+    /// middle and a head, or with Cmd a head against a bar (Home/PgUp/…).
+    private func updateArms() {
+        guard arms.count == 4 else { return }
+        let up = UIBezierPath()
+        up.move(to: CGPoint(x: 10, y: 10))
+        if alternateArrows {
+            up.addLine(to: CGPoint(x: 10, y: 4.5))
+            up.move(to: CGPoint(x: 7.5, y: 7))
+            up.addLine(to: CGPoint(x: 10, y: 4.5))
+            up.addLine(to: CGPoint(x: 12.5, y: 7))
+            up.move(to: CGPoint(x: 7, y: 2.5))
+            up.addLine(to: CGPoint(x: 13, y: 2.5))
+        } else {
+            up.addLine(to: CGPoint(x: 10, y: 2.5))
+            up.move(to: CGPoint(x: 7.5, y: 5))
+            up.addLine(to: CGPoint(x: 10, y: 2.5))
+            up.addLine(to: CGPoint(x: 12.5, y: 5))
+        }
+        // left, down, up, right: the up arm turned about the middle.
+        let turns: [CGFloat] = [-.pi / 2, .pi, 0, .pi / 2]
+        let scale: CGFloat = 22 / 20
+        for (arm, turn) in zip(arms, turns) {
+            let path = up.copy() as! UIBezierPath
+            path.apply(CGAffineTransform(translationX: -10, y: -10))
+            path.apply(CGAffineTransform(rotationAngle: turn))
+            path.apply(CGAffineTransform(scaleX: scale, y: scale))
+            arm.path = path.cgPath
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let key = bounds.inset(by: KeyCap.plateInsets)
-        plate.frame = key
-        let center = CGPoint(x: key.midX, y: key.midY)
-        // Blink's pair key: the upper symbol rides above, small and faint,
-        // and slides into place as the finger pulls down.
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let plateHeight = KeyCap.plateHeight(in: bounds.height)
+        let content: CGFloat = icon != nil ? Chrome.SymbolStep.control.rawValue : title.intrinsicContentSize.width
+        let plateWidth = max(plateHeight, content + 2 * 9)
+        plate.bounds = CGRect(x: 0, y: 0, width: plateWidth, height: plateHeight)
+        plate.center = center
+        plate.layer.cornerRadius = plateHeight / 2
+        // The pair's upper symbol waits above, unseen, and slides into place
+        // as the finger pulls down.
         let p = progress
-        title.bounds = CGRect(x: 0, y: 0, width: key.width, height: 20)
+        title.bounds = CGRect(x: 0, y: 0, width: max(bounds.width, plateWidth), height: 22)
         title.center = center
         upper.bounds = title.bounds
         upper.center = center
         if upper.text != nil {
-            let lift = key.height * 0.3
+            let lift = bounds.height * 0.3
             let major = max(1 - p, 0.001)
-            title.transform = CGAffineTransform(translationX: 0, y: 4 + 14 * p).scaledBy(x: major, y: major)
+            title.transform = CGAffineTransform(translationX: 0, y: 14 * p).scaledBy(x: major, y: major)
             title.alpha = 1 - 0.5 * p
             let minor = 0.55 + 0.45 * p
             upper.transform = CGAffineTransform(translationX: 0, y: -lift + lift * p).scaledBy(x: minor, y: minor)
-            upper.alpha = 0.3 + 0.7 * p
+            upper.alpha = p
         } else {
             title.transform = .identity
             title.alpha = 1
         }
-        lockBar.frame = CGRect(x: key.midX - 7, y: key.maxY - 5, width: 14, height: 2)
-        if icons.count == 4 {
-            // Blink's joystick: four small arrows around the middle.
-            let offsets = [CGPoint(x: -key.width * 0.27, y: 0), CGPoint(x: 0, y: key.height * 0.22),
-                           CGPoint(x: 0, y: -key.height * 0.22), CGPoint(x: key.width * 0.27, y: 0)]
-            for (v, o) in zip(icons, offsets) {
-                v.bounds = CGRect(x: 0, y: 0, width: 14, height: 14)
-                v.center = CGPoint(x: center.x + o.x, y: center.y + o.y)
-            }
-        } else {
-            icons.first?.frame = key
+        lockBar.frame = CGRect(x: center.x - 6, y: plate.frame.maxY - 5, width: 12, height: 2)
+        icon?.frame = CGRect(x: center.x - 15, y: center.y - 15, width: 30, height: 30)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for arm in arms {
+            arm.position = center
         }
+        CATransaction.commit()
     }
 
     private func updateLook() {
         let on = modifier != .off
-        plate.backgroundColor = on ? .white : pressed && icons.count != 4 ? UIColor(white: 1, alpha: 0.22) : .clear
-        let fg: UIColor = on ? .black : .white
-        title.textColor = fg
-        upper.textColor = fg
-        lockBar.isHidden = modifier != .locked
-        for (i, v) in icons.enumerated() {
-            let lit = icons.count != 4 || direction == nil || direction == i
-            v.tintColor = fg.withAlphaComponent(lit ? 1 : 0.35)
+        let traits = traitCollection
+        plate.backgroundColor = on ? Chrome.UI.fg : pressed && arms.isEmpty ? Chrome.UI.fill3 : .clear
+        let ink = on ? Chrome.UI.bg : Chrome.UI.fg
+        let font = Chrome.uiFont(.title, on ? .semibold : .regular)
+        for label in [title, upper] {
+            label.textColor = ink
+            label.font = font
         }
+        lockBar.backgroundColor = Chrome.UI.bg
+        lockBar.isHidden = modifier != .locked
+        icon?.tintColor = on ? ink : secondary ? Chrome.UI.fg2 : Chrome.UI.fg
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (i, arm) in arms.enumerated() {
+            let lit = direction == nil || direction == i
+            arm.strokeColor = Chrome.UI.fg.resolvedColor(with: traits).withAlphaComponent(lit ? 1 : 0.35).cgColor
+        }
+        CATransaction.commit()
+        setNeedsLayout()
     }
 
     // ------------------------------------------------------------ touches
@@ -540,7 +621,7 @@ private final class KeyCap: UIView {
     /// arrow (none in a small dead zone); holding repeats at the Key Repeat
     /// settings, faster the farther the finger travels.
     private func aim(at p: CGPoint) {
-        let key = bounds.inset(by: KeyCap.plateInsets)
+        let key = bounds
         let dx = p.x - key.midX, dy = p.y - key.midY
         let next: Int?
         if abs(dx) < key.width * 0.2 && abs(dy) < key.height * 0.15 {

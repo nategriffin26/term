@@ -1,12 +1,15 @@
 import UIKit
 
-/// The session switcher's position readout: a capsule in the middle of the
-/// pane with one dot per session (the current one in the accent) and the
-/// sessions' names in a row under it, the current one centred and its
-/// neighbours fading out to the sides. Dots and names follow a swipe as it
-/// moves; the capsule fades out after it settles.
+/// The session switcher's position readout: a glass capsule in the middle
+/// of the pane with one dot per session (the current one in the text
+/// colour) and the sessions' names in a row under it, the current one
+/// centred and its neighbours fading out to the sides. Dots and names follow
+/// a swipe as it moves; the capsule dissolves after it settles.
 @MainActor
 final class SessionHUD: UIView {
+  private let glass = GlassView()
+  /// Dots and names, faded with the glass.
+  private let content = UIView()
   private let dotsView = UIView()
   private var dots: [UIView] = []
   private let highlight = UIView()
@@ -27,22 +30,16 @@ final class SessionHUD: UIView {
     super.init(frame: frame)
     isUserInteractionEnabled = false
     isAccessibilityElement = false
-    alpha = 0
     bounds = CGRect(origin: .zero, size: Self.size)
-    backgroundColor = Chrome.UI.raised.withAlphaComponent(0.94)
-    layer.cornerRadius = 22
-    layer.cornerCurve = .continuous
-    layer.borderWidth = 0.5
-    registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.updateBorder() }
-    updateBorder()
-    layer.shadowColor = UIColor.black.cgColor
-    layer.shadowOpacity = 0.35
-    layer.shadowRadius = 20
-    layer.shadowOffset = CGSize(width: 0, height: 12)
-    layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: 22).cgPath
+    glass.frame = bounds
+    glass.cornerConfiguration = .corners(radius: .fixed(Chrome.Radius.group))
+    addSubview(glass)
+    content.frame = bounds
+    content.alpha = 0
+    addSubview(content)
 
-    addSubview(dotsView)
-    highlight.backgroundColor = Chrome.UI.accent
+    content.addSubview(dotsView)
+    highlight.backgroundColor = Chrome.UI.fg
     highlight.bounds = CGRect(x: 0, y: 0, width: Self.dotSize + 1, height: Self.dotSize + 1)
     highlight.layer.cornerRadius = (Self.dotSize + 1) / 2
     dotsView.addSubview(highlight)
@@ -54,15 +51,10 @@ final class SessionHUD: UIView {
     fade.colors = [UIColor.clear, .black, .black, .clear].map(\.cgColor)
     fade.locations = [0.04, 0.3, 0.7, 0.96]
     namesView.layer.mask = fade
-    addSubview(namesView)
+    content.addSubview(namesView)
   }
 
   required init?(coder: NSCoder) { fatalError("not used") }
-
-  /// A layer's CGColor does not follow the app theme by itself.
-  private func updateBorder() {
-    layer.borderColor = Chrome.UI.line2.resolvedColor(with: traitCollection).cgColor
-  }
 
   /// Shows the strip at `position` (a session index, fractional mid-swipe),
   /// centered on `center`.
@@ -71,10 +63,7 @@ final class SessionHUD: UIView {
     hideTimer = nil
     setNames(names)
     layoutStrip(position: position, center: center, animateWindow: true)
-    if alpha < 1 {
-      layer.removeAllAnimations()
-      UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) { self.alpha = 1 }
-    }
+    show()
   }
 
   /// The swipe ended on `index`: dots and names spring there, then the
@@ -84,9 +73,7 @@ final class SessionHUD: UIView {
     let animator = UIViewPropertyAnimator(duration: 0.4, timingParameters: Chrome.springTiming)
     animator.addAnimations { self.layoutStrip(position: CGFloat(index), center: center, animateWindow: false) }
     animator.startAnimation()
-    if alpha < 1 {
-      UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState]) { self.alpha = 1 }
-    }
+    show()
     hideTimer?.invalidate()
     hideTimer = Timer.scheduledTimer(withTimeInterval: Self.linger, repeats: false) { [weak self] _ in
       MainActor.assumeIsolated { self?.fadeOut() }
@@ -96,13 +83,27 @@ final class SessionHUD: UIView {
   func hide() {
     hideTimer?.invalidate()
     hideTimer = nil
-    layer.removeAllAnimations()
-    alpha = 0
+    UIView.performWithoutAnimation {
+      glass.isGlassShown = false
+      content.alpha = 0
+    }
+  }
+
+  /// Glass materializes rather than fading: a fading superview breaks its effect.
+  private func show() {
+    guard !glass.isGlassShown else { return }
+    UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState, .curveEaseOut]) {
+      self.glass.isGlassShown = true
+      self.content.alpha = 1
+    }
   }
 
   private func fadeOut() {
     hideTimer = nil
-    UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) { self.alpha = 0 }
+    UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .curveEaseIn]) {
+      self.glass.isGlassShown = false
+      self.content.alpha = 0
+    }
   }
 
   private func setNames(_ names: [String]) {
@@ -127,7 +128,7 @@ final class SessionHUD: UIView {
     let strip = DotStrip.layout(count: names.count, position: position)
     while dots.count < strip.dots.count {
       let dot = UIView()
-      dot.backgroundColor = Chrome.UI.muted.withAlphaComponent(0.55)
+      dot.backgroundColor = Chrome.UI.faint
       dot.bounds = CGRect(x: 0, y: 0, width: Self.dotSize, height: Self.dotSize)
       dot.layer.cornerRadius = Self.dotSize / 2
       dotsView.insertSubview(dot, belowSubview: highlight)

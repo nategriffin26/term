@@ -139,6 +139,7 @@ final class TerminalView: UIView {
     var smartInsertDeleteType: UITextSmartInsertDeleteType = .no
     var inlinePredictionType: UITextInlinePredictionType = .no
     var keyboardType: UIKeyboardType = .default
+    /// Follows the app theme's lightness (AppThemeTrait), so a light theme gets a light keyboard.
     var keyboardAppearance: UIKeyboardAppearance = .dark
     var returnKeyType: UIReturnKeyType = .default
 
@@ -175,7 +176,9 @@ final class TerminalView: UIView {
         addSubview(safeRegion)
         addSubview(diagramOverlay)
 
-        scrollIndicator.backgroundColor = UIColor(white: 0.6, alpha: 0.8)
+        // Selection and its handles in the app's accent; the scroll
+        // indicator in the terminal's own text colour (updateScrollIndicator).
+        tintColor = Chrome.UI.accent
         scrollIndicator.layer.cornerRadius = 1.5
         scrollIndicator.alpha = 0
         scrollIndicator.isUserInteractionEnabled = false
@@ -191,6 +194,9 @@ final class TerminalView: UIView {
 
         registerForTraitChanges([UITraitDisplayScale.self]) { (view: TerminalView, _: UITraitCollection) in
             view.reloadFonts()
+        }
+        registerForTraitChanges([AppThemeTrait.self]) { (view: TerminalView, _: UITraitCollection) in
+            view.updateKeyboardAppearance()
         }
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardsChanged),
                                                name: .GCKeyboardDidConnect, object: nil)
@@ -229,11 +235,20 @@ final class TerminalView: UIView {
         sceneActive = window?.windowScene?.activationState == .foregroundActive
         updateBlinkTimer()
         guard window != nil else { return }
+        // A view made under the scene's theme sees no trait change when it joins the window.
+        updateKeyboardAppearance()
         let link = CADisplayLink(target: DisplayLinkTarget(self), selector: #selector(DisplayLinkTarget.tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
         reloadFonts()
+    }
+
+    private func updateKeyboardAppearance() {
+        let appearance: UIKeyboardAppearance = traitCollection[AppThemeTrait.self].isDark ? .dark : .light
+        guard appearance != keyboardAppearance else { return }
+        keyboardAppearance = appearance
+        if isFirstResponder { reloadInputViews() }
     }
 
     override func layoutSubviews() {
@@ -402,7 +417,7 @@ final class TerminalView: UIView {
         o.cursorOverride = cursorOverride
         o.blinkOn = blinkOn
         o.selection = selectionSpan
-        o.selectionColor = tintColor.argb
+        o.selectionColor = tintColor.resolvedColor(with: traitCollection).argb
         return o
     }
 
@@ -572,6 +587,7 @@ final class TerminalView: UIView {
         let fraction = CGFloat(history - snapshot.viewportOffset) / CGFloat(history)
         let x = bounds.width - safeAreaInsets.right - 5
         scrollIndicator.frame = CGRect(x: x, y: gridTop + (gridHeight - h) * fraction, width: 3, height: h)
+        scrollIndicator.backgroundColor = UIColor(argb: snapshot.fg | 0xFF00_0000).withAlphaComponent(0.45)
         scrollIndicator.alpha = 1
         scrollIndicatorHide?.invalidate()
         scrollIndicatorHide = Timer.scheduledTimer(withTimeInterval: snapshot.viewportOffset > 0 ? 1.6 : 0.6, repeats: false) { [weak self] _ in

@@ -453,22 +453,35 @@ final class AppThemeRefreshTests: XCTestCase {
     XCTAssertEqual(Chrome.UI.bg.resolvedColor(with: UITraitCollection()).argb, UIColor(rgb: 0x15121C).argb, "the fixed palette's ground")
   }
 
-  private func borderRGB(_ view: UIView) -> UInt32 {
-    UIColor(cgColor: view.layer.borderColor ?? UIColor.clear.cgColor).argb & 0xFFFFFF
+  func testTheProgressRingFollowsTheThemeOfItsWindow() {
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
+    window.traitOverrides[AppThemeTrait.self] = AppTheme.fixed()
+    let ring = RingView()
+    window.addSubview(ring)
+    window.layoutIfNeeded()
+    XCTAssertEqual(UIColor(cgColor: ring.arc.strokeColor!).argb, UIColor(rgb: 0xF6F4FA).argb, "the fixed palette's text")
+
+    var red = other
+    red.fg = AppTheme.Tone(rgb: 0xFF0000)
+    window.traitOverrides[AppThemeTrait.self] = red
+    window.layoutIfNeeded()
+    XCTAssertEqual(UIColor(cgColor: ring.arc.strokeColor!).argb, 0xFFFF_0000)
   }
 
-  func testBorderColoursFollowTheThemeOfTheirWindow() {
-    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
-    let banner = StatusBanner()
-    let hud = SessionHUD(frame: .zero)
-    window.addSubview(banner)
-    window.addSubview(hud)
+  /// A terminal made while the scene is already light sees no trait change
+  /// when it joins its window; its keyboard stayed dark.
+  func testATerminalOpenedUnderALightThemeGetsALightKeyboard() throws {
+    let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+    scene.traitOverrides[AppThemeTrait.self] = other
+    defer { scene.applyAppTheme() }
+    let window = UIWindow(windowScene: scene)
+    let view = TerminalView(session: try XCTUnwrap(Session(localCols: 20, rows: 5)))
+    window.addSubview(view)
     window.layoutIfNeeded()
-    XCTAssertEqual(UIColor(cgColor: banner.layer.borderColor!).argb >> 24, 0x2E, "the hairline: text at 18%")
+    XCTAssertEqual(view.keyboardAppearance, .light)
 
-    window.traitOverrides[AppThemeTrait.self] = other
+    window.traitOverrides[AppThemeTrait.self] = AppTheme.fixed()
     window.layoutIfNeeded()
-    XCTAssertEqual(borderRGB(banner), 0xFF0000)
-    XCTAssertEqual(borderRGB(hud), 0xFF0000)
+    XCTAssertEqual(view.keyboardAppearance, .dark, "the fixed palette is dark")
   }
 }

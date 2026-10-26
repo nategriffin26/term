@@ -53,11 +53,11 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     Self.liveSpaces.removeAll { $0.space == nil }
     Self.liveSpaces.append(WeakSpace(space: self))
     view.backgroundColor = AppSettings.shared.theme.backgroundColor
-    divider.backgroundColor = UIColor(white: 0.5, alpha: 0.35)
+    divider.backgroundColor = Chrome.UI.line2
     view.addSubview(divider)
 
     failureLabel.text = "The terminal core did not start."
-    failureLabel.textColor = .secondaryLabel
+    failureLabel.textColor = Chrome.UI.fg2
     failureLabel.isHidden = true
     view.addSubview(failureLabel)
 
@@ -639,10 +639,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     guard tab.isConnected, let target = tab.target else { return }
     menuRestoresFocus = false
     closeMenu()
-    let history = HistoryViewController(host: target, tmuxSession: tab.tmuxSession)
-    let nav = UINavigationController(rootViewController: history)
-    nav.modalPresentationStyle = .fullScreen
-    present(nav, animated: true)
+    present(HistoryViewController(host: target, tmuxSession: tab.tmuxSession), animated: true)
   }
 
   /// `tmux host` at the prompt: the tmux tab, scrolled to that host.
