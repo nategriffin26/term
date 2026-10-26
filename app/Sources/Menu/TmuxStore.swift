@@ -204,6 +204,8 @@ final class TmuxStore {
     if let known = engines[id], known.cols == cols, known.rows == rows {
       engine = known
     } else if let made = Session(localCols: cols, rows: rows) {
+      // Drawn as the tab that attaches will draw it.
+      made.setTheme(AppSettings.shared.termTheme)
       engine = made
       engines[id] = made
     } else {
