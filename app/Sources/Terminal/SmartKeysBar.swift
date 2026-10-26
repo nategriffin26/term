@@ -280,7 +280,8 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
                 emit(.key(keys[direction]))
             }
         case .hideKeyboard:
-            cap.configure(symbol: "keyboard", secondary: true)
+            cap.configure(symbol: "keyboard.chevron.compact.down",
+                          configuration: UIImage.SymbolConfiguration(pointSize: 16, weight: .regular))
             cap.accessibilityLabel = "Hide Keyboard"
             cap.onTap = { [weak self] in self?.emit(.hideKeyboard) }
         case .command:
@@ -376,17 +377,15 @@ private final class KeyCap: UIView {
     var onArrow: ((Int) -> Void)?
 
     var modifier = SmartKeysBar.Modifier.off { didSet { updateLook() } }
-    var alternateArrows = false { didSet { updateArms() } }
+    var alternateArrows = false { didSet { updateArrowSymbols() } }
 
     private let plate = UIView()
     private let title = UILabel()
     private let upper = UILabel()
     private let lockBar = UIView()
     private var icon: UIImageView?
-    private var secondary = false
-    /// The joystick's four arms (left, down, up, right), drawn like the
-    /// design's arrows glyph so each can light on its own.
-    private var arms: [CAShapeLayer] = []
+    /// The joystick's four arrows (left, down, up, right), each lit on its own.
+    private var arrows: [UIImageView] = []
     private var pressed = false { didSet { updateLook() } }
     private var holdTimer: Timer?
     private var held = false
@@ -430,60 +429,37 @@ private final class KeyCap: UIView {
         setNeedsLayout()
     }
 
-    /// `secondary`: drawn in the second text colour (hide-keyboard, which leaves the terminal be).
-    func configure(symbol: String, secondary: Bool = false) {
-        let view = UIImageView(image: UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control, size: .standard)))
+    /// `configuration` replaces the bar's symbol size (hide-keyboard keeps Blink's 16 pt glyph).
+    func configure(symbol: String, configuration: UIImage.SymbolConfiguration? = nil) {
+        let view = UIImageView(image: UIImage(systemName: symbol,
+                                              withConfiguration: configuration ?? Chrome.uiSymbol(.control, size: .standard)))
         view.contentMode = .center
         view.isUserInteractionEnabled = false
         icon = view
-        self.secondary = secondary
         addSubview(view)
         updateLook()
     }
 
     func configureArrows() {
-        arms = (0..<4).map { _ in
-            let arm = CAShapeLayer()
-            arm.fillColor = nil
-            arm.lineWidth = 1.7
-            arm.lineCap = .round
-            arm.lineJoin = .round
-            layer.addSublayer(arm)
-            return arm
+        arrows = (0..<4).map { _ in
+            let view = UIImageView()
+            view.contentMode = .center
+            view.isUserInteractionEnabled = false
+            addSubview(view)
+            return view
         }
-        updateArms()
+        updateArrowSymbols()
         updateLook()
     }
 
-    /// One arm pointing up in the glyph's 20-unit box: a shaft from the
-    /// middle and a head, or with Cmd a head against a bar (Home/PgUp/…).
-    private func updateArms() {
-        guard arms.count == 4 else { return }
-        let up = UIBezierPath()
-        up.move(to: CGPoint(x: 10, y: 10))
-        if alternateArrows {
-            up.addLine(to: CGPoint(x: 10, y: 4.5))
-            up.move(to: CGPoint(x: 7.5, y: 7))
-            up.addLine(to: CGPoint(x: 10, y: 4.5))
-            up.addLine(to: CGPoint(x: 12.5, y: 7))
-            up.move(to: CGPoint(x: 7, y: 2.5))
-            up.addLine(to: CGPoint(x: 13, y: 2.5))
-        } else {
-            up.addLine(to: CGPoint(x: 10, y: 2.5))
-            up.move(to: CGPoint(x: 7.5, y: 5))
-            up.addLine(to: CGPoint(x: 10, y: 2.5))
-            up.addLine(to: CGPoint(x: 12.5, y: 5))
-        }
-        // left, down, up, right: the up arm turned about the middle.
-        let turns: [CGFloat] = [-.pi / 2, .pi, 0, .pi / 2]
-        let scale: CGFloat = 22 / 20
-        for (arm, turn) in zip(arms, turns) {
-            let path = up.copy() as! UIBezierPath
-            path.apply(CGAffineTransform(translationX: -10, y: -10))
-            path.apply(CGAffineTransform(rotationAngle: turn))
-            path.apply(CGAffineTransform(scaleX: scale, y: scale))
-            arm.path = path.cgPath
-        }
+    /// Blink's joystick: four small arrows, or with Cmd arrows against a bar (Home/PgUp/…).
+    private func updateArrowSymbols() {
+        guard arrows.count == 4 else { return }
+        let names = alternateArrows
+            ? ["arrow.left.to.line", "arrow.down.to.line", "arrow.up.to.line", "arrow.right.to.line"]
+            : ["arrow.left", "arrow.down", "arrow.up", "arrow.right"]
+        let config = UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+        for (view, name) in zip(arrows, names) { view.image = UIImage(systemName: name, withConfiguration: config) }
     }
 
     override func layoutSubviews() {
@@ -516,18 +492,19 @@ private final class KeyCap: UIView {
         }
         lockBar.frame = CGRect(x: center.x - 6, y: plate.frame.maxY - 5, width: 12, height: 2)
         icon?.frame = CGRect(x: center.x - 15, y: center.y - 15, width: 30, height: 30)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for arm in arms {
-            arm.position = center
+        // Blink's joystick: four small arrows around the middle, spread as on its 40 pt key.
+        let spread = CGPoint(x: (bounds.width - 2) * 0.27, y: 40 * 0.22)
+        let offsets = [CGPoint(x: -spread.x, y: 0), CGPoint(x: 0, y: spread.y),
+                       CGPoint(x: 0, y: -spread.y), CGPoint(x: spread.x, y: 0)]
+        for (view, offset) in zip(arrows, offsets) {
+            view.bounds = CGRect(x: 0, y: 0, width: 14, height: 14)
+            view.center = CGPoint(x: center.x + offset.x, y: center.y + offset.y)
         }
-        CATransaction.commit()
     }
 
     private func updateLook() {
         let on = modifier != .off
-        let traits = traitCollection
-        plate.backgroundColor = on ? Chrome.UI.fg : pressed && arms.isEmpty ? Chrome.UI.fill3 : .clear
+        plate.backgroundColor = on ? Chrome.UI.fg : pressed && arrows.isEmpty ? Chrome.UI.fill3 : .clear
         let ink = on ? Chrome.UI.bg : Chrome.UI.fg
         let font = Chrome.uiFont(.title, on ? .semibold : .regular, size: .standard)
         for label in [title, upper] {
@@ -536,14 +513,11 @@ private final class KeyCap: UIView {
         }
         lockBar.backgroundColor = Chrome.UI.bg
         lockBar.isHidden = modifier != .locked
-        icon?.tintColor = on ? ink : secondary ? Chrome.UI.fg2 : Chrome.UI.fg
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for (i, arm) in arms.enumerated() {
+        icon?.tintColor = on ? ink : Chrome.UI.fg
+        for (i, view) in arrows.enumerated() {
             let lit = direction == nil || direction == i
-            arm.strokeColor = Chrome.UI.fg.resolvedColor(with: traits).withAlphaComponent(lit ? 1 : 0.35).cgColor
+            view.tintColor = Chrome.UI.fg.withAlphaComponent(lit ? 1 : 0.35)
         }
-        CATransaction.commit()
         setNeedsLayout()
     }
 

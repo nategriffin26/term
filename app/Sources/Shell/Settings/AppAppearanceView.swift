@@ -108,28 +108,28 @@ struct AppAppearancePage: View {
 }
 
 /// The home screen icons Term comes with (app/Resources/Assets.xcassets,
-/// the alternates drawn by scripts/app-icons.swift).
+/// drawn by scripts/app-icons.swift): Dusk is the primary, the rest alternates.
 enum AppIcon: CaseIterable {
-  case standard, porcelain, graphite
+  case dusk, porcelain, graphite
 
   static let side: CGFloat = 64
 
   var title: String {
     switch self {
-    case .standard: "Default"
+    case .dusk: "Dusk"
     case .porcelain: "Porcelain"
     case .graphite: "Graphite"
     }
   }
 
   /// The alternate icon's asset; nil for the primary.
-  var assetName: String? { self == .standard ? nil : "AppIcon-\(title)" }
+  var assetName: String? { self == .dusk ? nil : "AppIcon-\(title)" }
 
-  /// Its Settings tile (AppIconPreview-*, made by scripts/app-icons.swift): app icon sets don't load as images.
+  /// Its Settings tile (AppIconPreview-*): app icon sets don't load as images.
   var preview: Image { Image("AppIconPreview-\(title)") }
 
   @MainActor static var current: AppIcon {
     let name = UIApplication.shared.alternateIconName
-    return allCases.first { $0.assetName == name } ?? .standard
+    return allCases.first { $0.assetName == name } ?? .dusk
   }
 }

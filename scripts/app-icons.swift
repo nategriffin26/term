@@ -1,22 +1,24 @@
-// Renders Term's alternate app icons, and every icon's Settings preview:
-//   swift scripts/app-icons.swift app/Resources/Assets.xcassets [preview-dir]
+// Renders Term's app icons and their Settings previews:
+//   swift scripts/app-icons.swift app/Resources/Assets.xcassets
 // Each icon is a prompt chevron and a block cursor on a ground, drawn as
-// geometry (no fonts), 1024 px; Xcode makes the smaller sizes. A preview dir
-// also gets the proposed Dusk icon (Term's own theme) for review.
+// geometry (no fonts), 1024 px; Xcode makes the smaller sizes. Dusk (Term's
+// own theme) is the primary icon, the rest are alternates.
 import AppKit
 
 struct Icon {
   let name: String
   let top: UInt32, bottom: UInt32
   let chevron: UInt32, cursor: UInt32
-  /// Alternate icons ship; a proposal only renders to the preview dir.
-  var ships = true
+  var primary = false
+
+  /// Its app icon set: the primary is AppIcon, an alternate AppIcon-<name>.
+  var set: String { primary ? "AppIcon" : "AppIcon-\(name)" }
 }
 
 let icons = [
+  Icon(name: "Dusk", top: 0x221D2D, bottom: 0x110E17, chevron: 0xF6F4FA, cursor: 0x7EF0DA, primary: true),
   Icon(name: "Porcelain", top: 0xFBFAFD, bottom: 0xE8E5EF, chevron: 0x15121C, cursor: 0x15121C),
   Icon(name: "Graphite", top: 0x45424E, bottom: 0x2C2A33, chevron: 0xF6F4FA, cursor: 0xF6F4FA),
-  Icon(name: "Dusk", top: 0x221D2D, bottom: 0x110E17, chevron: 0xF6F4FA, cursor: 0x7EF0DA, ships: false),
 ]
 
 func color(_ rgb: UInt32) -> CGColor {
@@ -58,11 +60,11 @@ func write(_ data: Data, _ path: String) {
 }
 
 let args = CommandLine.arguments
-guard args.count >= 2 else { fatalError("usage: swift scripts/app-icons.swift <Assets.xcassets> [preview-dir]") }
+guard args.count == 2 else { fatalError("usage: swift scripts/app-icons.swift <Assets.xcassets>") }
 let assets = args[1]
 let fm = FileManager.default
-for icon in icons where icon.ships {
-  let set = "\(assets)/AppIcon-\(icon.name).appiconset"
+for icon in icons {
+  let set = "\(assets)/\(icon.set).appiconset"
   try? fm.createDirectory(atPath: set, withIntermediateDirectories: true)
   write(render(icon, size: 1024), "\(set)/icon.png")
   write(Data("""
@@ -83,7 +85,7 @@ for icon in icons where icon.ships {
 
     """.utf8), "\(set)/Contents.json")
 }
-// Settings › App Icon previews: 64 pt at 3x, the primary icon's taken from its own set.
+// Settings › App Icon previews: 64 pt at 3x (app icon sets don't load as images).
 func preview(_ png: Data, _ name: String) {
   let image = NSImage(data: png)!.cgImage(forProposedRect: nil, context: nil, hints: nil)!
   let ctx = CGContext(data: nil, width: 192, height: 192, bitsPerComponent: 8, bytesPerRow: 0,
@@ -110,11 +112,4 @@ func preview(_ png: Data, _ name: String) {
 
     """.utf8), "\(set)/Contents.json")
 }
-preview(try! Data(contentsOf: URL(fileURLWithPath: "\(assets)/AppIcon.appiconset/icon.png")), "Default")
-for icon in icons where icon.ships { preview(render(icon, size: 1024), icon.name) }
-
-if args.count >= 3 {
-  for icon in icons {
-    for px in [1024, 180, 120] { write(render(icon, size: px), "\(args[2])/\(icon.name)-\(px).png") }
-  }
-}
+for icon in icons { preview(render(icon, size: 1024), icon.name) }
