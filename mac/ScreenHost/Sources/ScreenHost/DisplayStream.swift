@@ -21,7 +21,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
     private var waitingForDrain = false
     private var awaitingKeyframe = true
     private var stopped = false
-    private var inFlight = 0
+    private(set) var inFlight = 0
     private var sharpEncoding = false
     private var lastImage: CVPixelBuffer?
     private var lastChange: UInt64 = 0
@@ -58,7 +58,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
         configuration.height = display.pixelHeight
         configuration.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
-        configuration.queueDepth = 3
+        configuration.queueDepth = 6
         configuration.showsCursor = false
         configuration.capturesAudio = false
         configuration.captureResolution = .best
@@ -90,7 +90,10 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
     func drained() {
         guard waitingForDrain else { return }
         waitingForDrain = false
-        keyframe()
+        if let lastImage {
+            let now = DispatchTime.now().uptimeNanoseconds
+            encode(lastImage, captureMicros: now / 1000, sharp: now - lastChange >= 350_000_000)
+        }
     }
 
     private func createEncoder(_ requested: ScreenWire.Codec) throws {
@@ -145,7 +148,6 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
         refresh?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, let image = self.lastImage, !self.stopped else { return }
-            self.needsKeyframe = true
             self.encode(image, captureMicros: DispatchTime.now().uptimeNanoseconds / 1000, sharp: true)
         }
         refresh = item
@@ -162,7 +164,6 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
     private func encode(_ image: CVPixelBuffer, captureMicros: UInt64, sharp: Bool) {
         guard !stopped, let encoder else { return }
         guard !congested() else {
-            needsKeyframe = true
             waitingForDrain = true
             return
         }
@@ -171,7 +172,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
             if sharp { waitingForDrain = true }
             return
         }
-        // A still picture gets a high-quality intra frame instead of retaining a moving-picture quantizer.
+        // Refine the retained picture without sending a full intra frame.
         if sharpEncoding != sharp {
             sharpEncoding = sharp
             VTSessionSetProperty(encoder, key: kVTCompressionPropertyKey_MaxAllowedFrameQP, value: (sharp ? 16 : 51) as CFNumber)

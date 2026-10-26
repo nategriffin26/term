@@ -106,4 +106,6 @@ print("Term Screen Host installed and started.")
 print("Approve Term Screen Host in System Settings > Privacy & Security:")
 print("  Screen & System Audio Recording")
 print("  Accessibility")
+print("  Paste from Other Apps: Always Allow")
+print("On the first Screen connection, allow the Mac's paste alert; then choose Always Allow in that pane.")
 PY

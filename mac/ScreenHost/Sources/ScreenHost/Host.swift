@@ -7,7 +7,9 @@ final class Host {
     private var client: SocketClient?
     private var welcomed = false
     private let input = Input()
-    private let clipboard = Clipboard()
+    private let clipboard: Clipboard
+    private let clipboardQueue = DispatchQueue(label: "screen.clipboard", qos: .userInitiated)
+    private var clipboardReadPending = false
     private let cursor = Cursor()
     private let power = DisplayPower()
     private var streams: [UInt32: DisplayStream] = [:]
@@ -19,6 +21,8 @@ final class Host {
     private var pointer = Desktop.pointer
     private var timers: [DispatchSourceTimer] = []
     private var observers: [NSObjectProtocol] = []
+
+    init(clipboard: Clipboard = Clipboard()) { self.clipboard = clipboard }
 
     func start() throws {
         access = Desktop.access(request: true)
@@ -33,7 +37,7 @@ final class Host {
         print("Term Screen Host listening")
     }
 
-    private func connect(_ next: SocketClient) {
+    func connect(_ next: SocketClient) {
         client?.close()
         client = next
         welcomed = false
@@ -77,12 +81,12 @@ final class Host {
             displays = Desktop.displays()
             pointer = Desktop.pointer
             client?.send(.welcome, ScreenWire.Welcome(name: hostName(), displays: displays, locked: locked, access: access, pointer: pointer))
-            clipboard.reset()
+            clipboardQueue.async { [clipboard] in clipboard.reset() }
             cursor.reset()
             timer(every: 1.0 / 60) { [weak self] in self?.pollPointer() }
             timer(every: 0.25) { [weak self] in
                 guard let self else { return }
-                if let content = self.clipboard.changed() { self.client?.send(.clipboard, content) }
+                self.pollClipboard()
                 self.setLocked(Desktop.locked())
             }
             timer(every: 2) { [weak self] in self?.pollAccess() }
@@ -97,7 +101,8 @@ final class Host {
             let request = try ScreenWire.decode(ScreenWire.KeyframeRequest.self, from: data)
             streams[request.display]?.keyframe()
         case .setClipboard:
-            clipboard.set(try ScreenWire.decode(ScreenWire.Clipboard.self, from: data))
+            let content = try ScreenWire.decode(ScreenWire.Clipboard.self, from: data)
+            clipboardQueue.async { [clipboard] in clipboard.set(content) }
         case .pointer, .button, .scroll, .key, .modifiers, .text:
             guard access.input else { client?.send(.failure, ScreenWire.Failure(message: "Allow Term Screen Host in System Settings > Privacy & Security > Accessibility.")); return }
             switch kind {
@@ -121,6 +126,22 @@ final class Host {
         timer.setEventHandler(handler: body)
         timers.append(timer)
         timer.resume()
+    }
+
+    private func pollClipboard() {
+        guard !clipboardReadPending, let connection = client else { return }
+        clipboardReadPending = true
+        clipboardQueue.async { [weak self, clipboard] in
+            var failure: String?
+            let content = clipboard.changed { failure = $0 }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.clipboardReadPending = false
+                guard self.client === connection else { return }
+                if let failure { connection.send(.failure, ScreenWire.Failure(message: failure)) }
+                if let content { connection.send(.clipboard, content) }
+            }
+        }
     }
 
     private func pollPointer() {
@@ -186,9 +207,15 @@ final class Host {
                         continue
                     }
                     let pipeline = try DisplayStream(display: display, source: source,
-                        congested: { [weak self] in (self?.client?.pendingVideos ?? 2) >= 2 },
+                        congested: { [weak self] in
+                            guard let self else { return true }
+                            return (self.client?.pendingVideos ?? 2) + self.streams.values.reduce(0) { $0 + $1.inFlight } >= 2
+                        },
                         output: { [weak self] format, frame in
                             guard let self, !self.locked, self.streams[id] != nil else { return false }
+                            DispatchQueue.main.async { [weak self] in
+                                for stream in self?.streams.values ?? [:].values { stream.drained() }
+                            }
                             return self.client?.video(format: format, frame: frame) ?? false
                         }, failure: { [weak self] message in
                             self?.client?.send(.failure, ScreenWire.Failure(message: message))

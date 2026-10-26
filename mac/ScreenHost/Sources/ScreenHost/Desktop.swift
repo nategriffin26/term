@@ -61,29 +61,65 @@ final class DisplayPower {
 
 final class Clipboard {
     static let types = ["public.utf8-plain-text", "public.rtf", "public.html", "public.png", "public.url"]
+    enum Access { case allow, prompt, deny }
+    static let approvalMessage = "Allow Term Screen Host in System Settings › Privacy & Security › Paste from Other Apps on the Mac."
     private let pasteboard: NSPasteboard
+    private let access: () -> Access
+    private let read: (NSPasteboard.PasteboardType) -> Data?
     private var count: Int
+    private var attemptedApproval = false
+    private var reportedDenial = false
 
-    init(pasteboard: NSPasteboard = .general) {
+    init(pasteboard: NSPasteboard = .general, access: (() -> Access)? = nil,
+         read: ((NSPasteboard.PasteboardType) -> Data?)? = nil) {
         self.pasteboard = pasteboard
+        self.access = access ?? {
+            if #available(macOS 15.4, *) {
+                switch pasteboard.accessBehavior {
+                case .alwaysAllow: return .allow
+                case .default: return .prompt
+                default: return .deny
+                }
+            }
+            return .allow
+        }
+        self.read = read ?? { pasteboard.data(forType: $0) }
         count = pasteboard.changeCount
     }
 
-    func reset() { count = pasteboard.changeCount }
-
-    func changed() -> ScreenWire.Clipboard? {
-        guard count != pasteboard.changeCount else { return nil }
+    func reset() {
         count = pasteboard.changeCount
+        attemptedApproval = false
+        reportedDenial = false
+    }
+
+    func changed(failure: (String) -> Void = { _ in }) -> ScreenWire.Clipboard? {
+        // Only the first access may enroll a new identity in the system approval pane.
+        if access() == .prompt && !attemptedApproval {
+            attemptedApproval = true
+            _ = read(.string)
+        }
+        func permitted() -> Bool {
+            guard access() == .allow else {
+                if !reportedDenial { reportedDenial = true; failure(Self.approvalMessage) }
+                return false
+            }
+            return true
+        }
+        guard permitted(), count != pasteboard.changeCount else { return nil }
+        let nextCount = pasteboard.changeCount
         var items = Self.types.compactMap { type -> ScreenWire.ClipboardItem? in
-            guard let data = pasteboard.data(forType: .init(type)) else { return nil }
+            guard permitted(), let data = read(.init(type)) else { return nil }
             return .init(type: type, data: data)
         }
         if !items.contains(where: { $0.type == "public.png" }),
-           let tiff = pasteboard.data(forType: .tiff),
+           permitted(), let tiff = read(.tiff),
            let image = NSBitmapImageRep(data: tiff),
            let png = image.representation(using: .png, properties: [:]) {
             items.append(.init(type: "public.png", data: png))
         }
+        guard permitted() else { return nil }
+        count = nextCount
         return .init(items: items)
     }
 

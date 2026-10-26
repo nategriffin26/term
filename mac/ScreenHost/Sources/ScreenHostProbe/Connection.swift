@@ -86,17 +86,19 @@ final class Connection {
     var pointerCount = 0
     var decodeFrames = true
     var recordTimeline = false
-    var timeline: [UInt32: [(micros: UInt64, key: Bool)]] = [:]
+    var timeline: [UInt32: [(micros: UInt64, key: Bool, bytes: Int, received: UInt64)]] = [:]
 
-    init() throws {
+    init(path: String) throws {
         descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         let descriptor = self.descriptor
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
-        let path = NSString(string: ScreenWire.socketPath).expandingTildeInPath
+        try require(path.utf8.count < 104, "Forwarded socket path is too long")
         withUnsafeMutableBytes(of: &address.sun_path) { destination in path.utf8CString.withUnsafeBytes { destination.copyBytes(from: $0) } }
         let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         try require(result == 0, "Cannot connect to the host: \(errno)")
+        var one: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
         var receiveBuffer: Int32 = 256 * 1024
         setsockopt(descriptor, SOL_SOCKET, SO_RCVBUF, &receiveBuffer, socklen_t(MemoryLayout<Int32>.size))
         source = DispatchSource.makeReadSource(fileDescriptor: descriptor, queue: .main)
@@ -137,7 +139,7 @@ final class Connection {
                     }
                 case .videoFrame:
                     let frame = try ScreenWire.decodeVideoFrame(payload)
-                    if recordTimeline { timeline[frame.display, default: []].append((frame.captureMicros, frame.isKeyframe)) }
+                    if recordTimeline { timeline[frame.display, default: []].append((frame.captureMicros, frame.isKeyframe, frame.sample.count, DispatchTime.now().uptimeNanoseconds / 1000)) }
                     if frame.isKeyframe && firstKeyMillis[frame.display] == nil {
                         firstKeyMillis[frame.display] = Double(DispatchTime.now().uptimeNanoseconds - watchTime) / 1_000_000
                     }
@@ -167,6 +169,25 @@ final class Connection {
         let end = Date().addingTimeInterval(seconds)
         while !condition() && Date() < end { try pump(0.01) }
         try require(condition(), "Timed out waiting for host response")
+    }
+
+    func checkDirectPeerRefused() throws {
+        let direct = socket(AF_UNIX, SOCK_STREAM, 0)
+        defer { Darwin.close(direct) }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let path = NSString(string: ScreenWire.socketPath).expandingTildeInPath
+        withUnsafeMutableBytes(of: &address.sun_path) { destination in path.utf8CString.withUnsafeBytes { destination.copyBytes(from: $0) } }
+        let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(direct, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+        try require(result == 0, "Cannot open direct socket for rejection check")
+        try pump(0.2)
+        var byte: UInt8 = 0
+        let count = Darwin.recv(direct, &byte, 1, MSG_DONTWAIT)
+        try require(count == 0, "Non-sshd peer was not refused")
+        let previous = counts.values.reduce(0, +)
+        for display in welcome!.displays { try send(.keyframe, ScreenWire.KeyframeRequest(display: display.id)) }
+        try wait(5) { counts.values.reduce(0, +) > previous }
+        print("direct_peer_refused=true current_client_survived=true")
     }
     deinit { source.cancel(); Darwin.close(descriptor) }
 }

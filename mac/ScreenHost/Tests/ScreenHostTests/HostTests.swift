@@ -100,6 +100,115 @@ final class HostTests: XCTestCase {
         XCTAssertNil(clipboard.changed())
     }
 
+    func testDeniedClipboardNeverReadsAndReportsOncePerConnection() {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        var access = Clipboard.Access.deny
+        var reads = 0
+        var failures: [String] = []
+        let clipboard = Clipboard(pasteboard: board, access: { access }, read: { type in
+            reads += 1
+            return board.data(forType: type)
+        })
+        board.clearContents()
+        board.setString("private", forType: .string)
+        XCTAssertNil(clipboard.changed { failures.append($0) })
+        XCTAssertNil(clipboard.changed { failures.append($0) })
+        XCTAssertEqual(reads, 0)
+        XCTAssertEqual(failures, ["Allow Term Screen Host in System Settings › Privacy & Security › Paste from Other Apps on the Mac."])
+        access = .allow
+        XCTAssertEqual(clipboard.changed()?.items, [.init(type: "public.utf8-plain-text", data: Data("private".utf8))])
+        access = .deny
+        clipboard.reset()
+        XCTAssertNil(clipboard.changed { failures.append($0) })
+        XCTAssertEqual(failures.count, 2)
+    }
+
+    func testClipboardRechecksAccessBeforeEachRepresentation() {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        var access = Clipboard.Access.allow
+        var reads = 0
+        let clipboard = Clipboard(pasteboard: board, access: { access }, read: { _ in
+            reads += 1
+            access = .deny
+            return Data("private".utf8)
+        })
+        board.clearContents()
+        board.setString("private", forType: .string)
+        XCTAssertNil(clipboard.changed())
+        XCTAssertEqual(reads, 1)
+    }
+
+    func testDefaultClipboardRequestsApprovalOnlyOnceAfterDenial() {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        var reads = 0
+        var failures = 0
+        let clipboard = Clipboard(pasteboard: board, access: { .prompt }, read: { _ in reads += 1; return nil })
+        XCTAssertNil(clipboard.changed { _ in failures += 1 })
+        XCTAssertNil(clipboard.changed { _ in failures += 1 })
+        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(failures, 1)
+    }
+
+    func testClipboardStartsSyncAfterFirstApproval() {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        var access = Clipboard.Access.prompt
+        let clipboard = Clipboard(pasteboard: board, access: { access }, read: { type in
+            access = .allow
+            return board.data(forType: type)
+        })
+        board.clearContents()
+        board.setString("approved", forType: .string)
+        XCTAssertEqual(clipboard.changed()?.items, [.init(type: "public.utf8-plain-text", data: Data("approved".utf8))])
+    }
+
+    func testClipboardApprovalCannotBlockMainQueueOrNewClient() throws {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let release = DispatchSemaphore(value: 0)
+        let started = expectation(description: "Approval read started")
+        let completed = expectation(description: "Approval read returned")
+        var approved = false
+        let clipboard = Clipboard(pasteboard: board, access: { approved ? .allow : .prompt }, read: { _ in
+            XCTAssertFalse(Thread.isMainThread)
+            started.fulfill()
+            _ = release.wait(timeout: .now() + 3)
+            approved = true
+            completed.fulfill()
+            return nil
+        })
+        let host = Host(clipboard: clipboard)
+        func connect() throws -> (SocketClient, Int32) {
+            var pair: [Int32] = [0, 0]
+            XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+            let client = SocketClient(pair[0])
+            host.connect(client)
+            try client.receive?(.hello, JSONEncoder().encode(ScreenWire.Hello()))
+            return (client, pair[1])
+        }
+        let first = try connect()
+        defer { first.0.close(); Darwin.close(first.1) }
+        wait(for: [started], timeout: 1)
+        let second = try connect()
+        defer { second.0.close(); Darwin.close(second.1) }
+        var bytes = [UInt8](repeating: 0, count: 65536)
+        let count = recv(second.1, &bytes, bytes.count, MSG_DONTWAIT)
+        XCTAssertGreaterThan(count, 0, "Welcome must arrive while clipboard approval is blocked")
+        release.signal()
+        wait(for: [completed], timeout: 1)
+    }
+
+    func testSameUserProcessIsNotAnSSHPeer() {
+        var pair: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+        defer { Darwin.close(pair[0]); Darwin.close(pair[1]) }
+        XCTAssertFalse(SocketListener.isSSHPeer(pair[0]))
+        XCTAssertFalse(SocketListener.isSSHPeer(-1))
+    }
+
     func testSlowClientCannotQueueAThirdVideoFrame() {
         var descriptors: [Int32] = [0, 0]
         XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors), 0)

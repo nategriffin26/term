@@ -46,10 +46,23 @@ final class SocketListener {
             while true {
                 let fd = Darwin.accept(descriptor, nil, nil)
                 if fd < 0 { break }
+                guard Self.isSSHPeer(fd) else { Darwin.close(fd); continue }
                 accept(SocketClient(fd))
             }
         }
         source.resume()
+    }
+
+    static func isSSHPeer(_ descriptor: Int32) -> Bool {
+        var pid: pid_t = 0
+        var length = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0,
+              length == MemoryLayout<pid_t>.size, pid > 0 else { return false }
+        var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &path, UInt32(path.count)) > 0 else { return false }
+        // These system executables are protected by SIP; same-user permission alone is insufficient.
+        let executable = String(cString: path)
+        return executable == "/usr/libexec/sshd-session" || executable == "/usr/sbin/sshd"
     }
 
     private static func address(_ path: String) -> sockaddr_un {

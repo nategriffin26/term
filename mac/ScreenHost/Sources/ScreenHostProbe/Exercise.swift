@@ -17,6 +17,13 @@ final class ProofDragView: NSView {
     }
 }
 
+final class ProofStillView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor(deviceRed: 0.08, green: 0.12, blue: 0.18, alpha: 1).setFill()
+        dirtyRect.fill()
+    }
+}
+
 final class ProofWindow {
     let window: NSWindow
     let scroll: NSScrollView
@@ -27,6 +34,8 @@ final class ProofWindow {
         window = NSWindow(contentRect: NSRect(origin: NSPoint(x: screen.frame.minX + 50, y: screen.frame.minY + 50), size: size),
                           styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Term Screen Host Proof"
+        window.setFrameOrigin(NSPoint(x: screen.frame.minX + 50, y: screen.frame.minY + 50))
+        print("proof_window_display=\(screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]!) frame=\(window.frame)")
         window.isReleasedWhenClosed = false
         scroll = NSScrollView(frame: NSRect(origin: .zero, size: size))
         scroll.hasVerticalScroller = true
@@ -200,10 +209,15 @@ func exercise(_ connection: Connection, seconds: Double) throws {
                      Double(connection.counts[id]!) / elapsed, Double(connection.bytes[id]!) * 8 / elapsed / 1_000_000,
                      connection.counts[id]!, elapsed))
     }
+    connection.decodeFrames = true
+    for display in connection.welcome!.displays { try connection.send(.keyframe, ScreenWire.KeyframeRequest(display: display.id)) }
+    try connection.pump(0.5)
     let stillWindows = NSScreen.screens.map { screen -> NSWindow in
         let window = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
+        window.setFrame(screen.frame, display: false)
         window.level = .screenSaver
+        window.contentView = ProofStillView(frame: NSRect(origin: .zero, size: screen.frame.size))
         window.backgroundColor = NSColor(deviceRed: 0.08, green: 0.12, blue: 0.18, alpha: 1)
         let label = NSTextField(labelWithString: "Term Screen text refresh — é 日本")
         label.font = .monospacedSystemFont(ofSize: 28, weight: .regular)
@@ -221,10 +235,43 @@ func exercise(_ connection: Connection, seconds: Double) throws {
     connection.recordTimeline = false
     for display in connection.welcome!.displays {
         let frames = connection.timeline[display.id] ?? []
-        let intervals = zip(frames, frames.dropFirst()).compactMap { before, after -> Double? in
-            after.key ? Double(after.micros - before.micros) / 1000 : nil
+        let refreshes = zip(frames, frames.dropFirst()).filter { before, after in
+            (250_000...700_000).contains(after.micros - before.micros)
         }
-        try require(intervals.contains(where: { (250...700).contains($0) }), "Static text did not receive a sharp refresh on display \(display.id): \(intervals)")
-        print("display=\(display.id) static_refresh_intervals_ms=\(intervals)")
+        try require(!refreshes.isEmpty, "Static text did not receive a sharp refresh on display \(display.id)")
+        for (before, after) in refreshes {
+            print("display=\(display.id) static_refresh_ms=\(Double(after.received - before.received) / 1000) sharp_bytes=\(after.bytes) sharp_key=\(after.key)")
+            if CommandLine.arguments.contains("--expect-refinement") {
+                try require(!after.key, "Sharp refresh must refine the current picture, not force a key frame")
+            }
+        }
+        let screenIndex = NSScreen.screens.firstIndex { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == display.id }!
+        let view = stillWindows[screenIndex].contentView!
+        let source = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
+        view.cacheDisplay(in: view.bounds, to: source)
+        let image = connection.decoders[display.id]!.image!
+        let ci = CIImage(cvPixelBuffer: image)
+        let decoded = NSBitmapImageRep(cgImage: CIContext().createCGImage(ci, from: ci.extent)!)
+        try require(source.pixelsWide == decoded.pixelsWide && source.pixelsHigh == decoded.pixelsHigh, "Source and decoded still dimensions differ")
+        let scale = Double(source.pixelsWide) / view.bounds.width
+        var squaredError = 0.0
+        var samples = 0
+        for y in Int((view.bounds.height - 150) * scale)..<Int((view.bounds.height - 100) * scale) {
+            for x in Int(100 * scale)..<min(source.pixelsWide, Int(1100 * scale)) {
+                let a = source.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
+                let b = decoded.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
+                for difference in [a.redComponent - b.redComponent, a.greenComponent - b.greenComponent, a.blueComponent - b.blueComponent] {
+                    squaredError += difference * difference
+                    samples += 1
+                }
+            }
+        }
+        let rmse = sqrt(squaredError / Double(samples)) * 255
+        print(String(format: "display=%u still_text_rmse_255=%.3f", display.id, rmse))
+        try require(rmse < 12, "Decoded still text differs from source window: RMSE \(rmse)")
+        if let directory = option("--output") {
+            try source.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: directory + "/source-still-\(display.id).png"))
+            try connection.decoders[display.id]!.save(directory + "/decoded-still-\(display.id).png")
+        }
     }
 }

@@ -11,7 +11,10 @@ func option(_ name: String) -> String? {
 }
 func runProbe() {
 do {
-    let connection = try Connection()
+    guard let socket = option("--socket") else {
+        throw ProbeError(message: "Pass --socket with an SSH-forwarded Unix socket; direct host connections are refused.")
+    }
+    let connection = try Connection(path: socket)
     try connection.wait(5) { connection.welcome != nil }
     let welcome = connection.welcome!
     print("welcome_version=\(welcome.version) screen_access=\(welcome.access.screen) input_access=\(welcome.access.input) locked=\(welcome.locked) displays=\(welcome.displays.count)")
@@ -30,6 +33,7 @@ do {
             print(String(format: "display=%u pixels=%dx%d first_key_ms=%.2f png=%@", display.id,
                 display.pixelWidth, display.pixelHeight, connection.firstKeyMillis[display.id]!, path))
         }
+        if arguments.contains("--check-peer") { try connection.checkDirectPeerRefused() }
         if arguments.contains("--exercise") {
             try exercise(connection, seconds: Double(option("--seconds") ?? "15") ?? 15)
         }
