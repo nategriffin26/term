@@ -103,7 +103,7 @@ struct TmuxTab: View {
     let clear: () -> Void = { store.markSeen([session.id], on: host) }
     let open: () -> Void = {
       store.markSeen([session.id], on: host)
-      model.space?.attach(host, session: session.name, preview: store.screen(host.serverKey, session.id))
+      Task { await model.space?.attach(host, session: session.name, preview: store.screen(host.serverKey, session.id)) }
     }
     let close: () -> Void = { self.close([session], on: host) }
     let detach: (() -> Void)? = others > 0 ? { detachOthers(session, on: host, keeping: mine) } : nil

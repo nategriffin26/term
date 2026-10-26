@@ -12,10 +12,14 @@ final class SessionRegistry {
   private var tabsByScene: [String: [Tab]] = [:]
   private let directory: URL
   private var indexURL: URL { directory.appending(path: "index.json") }
+  private var attachmentTimer: Task<Void, Never>?
+  private var foreground = true
 
   init(directory: URL) {
     self.directory = directory
   }
+
+  isolated deinit { attachmentTimer?.cancel() }
 
   func tabs(forScene id: String) -> [Tab] {
     tabsByScene[id] ?? []
@@ -23,6 +27,7 @@ final class SessionRegistry {
 
   func setTabs(_ tabs: [Tab], forScene id: String) {
     tabsByScene[id] = tabs
+    observeTmuxAttachments()
   }
 
   /// Windows the user closed: their sessions end.
@@ -33,11 +38,34 @@ final class SessionRegistry {
     }
   }
 
+  private func observeTmuxAttachments() {
+    guard foreground, attachmentTimer == nil else { return }
+    attachmentTimer = Task { [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(5))
+        guard !Task.isCancelled, let self else { return }
+        var candidates: [Tab] = []
+        var unreachable: Set<String> = []
+        for tabs in tabsByScene.values {
+          for tab in tabs {
+            if tab.unreachable, let host = tab.target { unreachable.insert(host.serverKey) }
+            if tab.pollsTmuxAttachment { candidates.append(tab) }
+          }
+        }
+        candidates.removeAll { $0.target.map { unreachable.contains($0.serverKey) } == true }
+        await TmuxAttachment.refresh(candidates)
+      }
+    }
+  }
+
   // MARK: - App lifecycle (the one place the core's suspend/save/resume run)
 
   /// App entered the background: stop the network and save every mosh
   /// session so a kill by iOS loses nothing.
   func suspendAll() {
+    foreground = false
+    attachmentTimer?.cancel()
+    attachmentTimer = nil
     var index: [String: [SavedTab]] = [:]
     for (scene, tabs) in tabsByScene {
       for tab in tabs {
@@ -61,10 +89,12 @@ final class SessionRegistry {
   /// so a kill between resume and delete would leave a checkpoint that can
   /// no longer resume.
   func resumeAll() {
+    foreground = true
     clearSaved()
     for tabs in tabsByScene.values {
       for tab in tabs { tab.resume() }
     }
+    observeTmuxAttachments()
   }
 
   /// Launch: bring back the mosh sessions saved before the app was killed.
@@ -84,6 +114,7 @@ final class SessionRegistry {
       let restored = saved.compactMap { Tab(restoring: $0.0, state: $0.1) }
       if !restored.isEmpty { tabsByScene[scene, default: []].append(contentsOf: restored) }
     }
+    observeTmuxAttachments()
   }
 
   private func stateURL(_ id: UUID) -> URL {

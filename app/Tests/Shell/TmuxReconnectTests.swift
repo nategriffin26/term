@@ -8,6 +8,7 @@ import XCTest
 @MainActor
 final class TmuxReconnectTests: XCTestCase {
   private var window: UIWindow?
+  private var space: SpaceController?
   private var tab: Tab?
   private var host: Host?
   private var keyName = ""
@@ -18,12 +19,14 @@ final class TmuxReconnectTests: XCTestCase {
 
   override func tearDown() async throws {
     tab?.disconnect()
+    if let space { SessionRegistry.shared.discardScenes([space.sceneID]) }
     if let host, !sessionName.isEmpty {
       _ = await RemoteExec.run(Tab.spec(for: host), Tmux.killCommand(ids: ["=" + sessionName]))
     }
     window?.isHidden = true
     window = nil
     tab = nil
+    space = nil
     Keychain.deleteKey(named: keyName)
   }
 
@@ -44,6 +47,7 @@ final class TmuxReconnectTests: XCTestCase {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = UIWindow(windowScene: scene)
     let space = SpaceController(sceneID: UUID().uuidString)
+    self.space = space
     window.rootViewController = UINavigationController(rootViewController: space)
     window.makeKeyAndVisible()
     self.window = window
@@ -82,7 +86,7 @@ final class TmuxReconnectTests: XCTestCase {
       try await until("manual tmux identity") { tab.tmuxSession == sessionName }
     } catch {
       let root = tab.current.processID
-      let probe = try await execute(TmuxAttachment.probeCommand(root: root))
+      let probe = try await execute(TmuxAttachment.probeCommand(roots: [root]))
       XCTFail("root=\(root), probe=\(String(decoding: probe.stdout, as: UTF8.self).debugDescription), screen=\(text(tab))")
       throw error
     }
@@ -102,7 +106,8 @@ final class TmuxReconnectTests: XCTestCase {
   }
 
   private func reconnectButton(in view: UIView) -> UIButton? {
-    if let button = view as? UIButton, button.title(for: .normal) == "Reconnect" { return button }
+    if let button = view as? UIButton,
+       button.configuration?.attributedTitle.map({ String($0.characters) }) == "Reconnect" { return button }
     return view.subviews.lazy.compactMap { self.reconnectButton(in: $0) }.first
   }
 
@@ -120,17 +125,17 @@ final class TmuxReconnectTests: XCTestCase {
     try await attach(tab)
     try await capture("\(transport)-attached")
     try await drop(tab)
-    try XCTUnwrap(reconnectButton(in: try XCTUnwrap(window))).sendActions(for: .touchUpInside)
+    try XCTUnwrap(reconnectButton(in: try XCTUnwrap(window))).sendActions(for: .primaryActionTriggered)
     try await until("replacement connection") { !tab.reconnecting && !tab.unreachable && tab.remote != nil }
     tab.current.write(Data("printf 'reopened-%s\\n' $((7*8))\r".utf8))
     try await until("same tmux session") { text(tab).contains("retained-42") && text(tab).contains("reopened-56") }
     XCTAssertEqual(tab.tmuxSession, sessionName)
     try await capture("\(transport)-reconnected")
 
-    tab.current.write(Data([2, 100])) // tmux's default Ctrl-B d
+    tab.current.write(Data("/opt/homebrew/bin/tmux -L termtest detach-client -s '=\(sessionName)'\r".utf8))
     try await until("detached shell identity") { tab.tmuxSession == nil }
     try await drop(tab)
-    try XCTUnwrap(reconnectButton(in: try XCTUnwrap(window))).sendActions(for: .touchUpInside)
+    try XCTUnwrap(reconnectButton(in: try XCTUnwrap(window))).sendActions(for: .primaryActionTriggered)
     try await until("replacement shell") { !tab.reconnecting && !tab.unreachable && tab.remote != nil }
     tab.current.write(Data("printf 'shell-%s:%s\\n' $((8*8)) \"${TMUX:-none}\"\r".utf8))
     try await until("shell outside tmux") { text(tab).contains("shell-64:none") }
@@ -144,6 +149,54 @@ final class TmuxReconnectTests: XCTestCase {
 
   func testHandAttachedSSHSessionReconnectsAndDetachedTabStaysShell() async throws {
     try await manualReconnect(.ssh)
+  }
+
+  func testRepeatedAttachOpensOnlyOneAdditionalTab() async throws {
+    _ = try await connect(.ssh)
+    let space = try XCTUnwrap(space)
+    let host = try XCTUnwrap(host)
+    let name = sessionName
+    let first = Task { @MainActor in await space.attach(host, session: name) }
+    let second = Task { @MainActor in await space.attach(host, session: name) }
+    await first.value
+    await second.value
+    XCTAssertEqual(space.tabs.filter { $0.tmuxSession == sessionName }.count, 1)
+    XCTAssertEqual(space.tabs.count, 2)
+    let attached = try XCTUnwrap(space.tabs.first { $0.tmuxSession == sessionName })
+    try await until("created tmux tab") { attached.remote != nil }
+    attached.current.write(Data("printf 'single-%s\\n' $((8*8))\r".utf8))
+    try await until("created session ready for cleanup") { text(attached).contains("single-64") }
+  }
+
+  func testProbeDeadlineDoesNotWaitForAStalledCommand() async throws {
+    _ = try await connect(.ssh)
+    let spec = Tab.spec(for: try XCTUnwrap(host))
+    let start = ContinuousClock.now
+    let result = await RemoteExec.run(spec, "sleep 3; printf late", timeout: .milliseconds(100))
+    XCTAssertNil(result)
+    XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+  }
+
+  func testOpeningHandAttachedSessionRefreshesIdentityInsteadOfAddingATab() async throws {
+    let tab = try await connect(.ssh)
+    let space = try XCTUnwrap(space)
+    let host = try XCTUnwrap(host)
+    // SSH remains connected; pause the periodic observer so this exercises
+    // the refresh performed by the tmux row's open-or-switch action.
+    tab.suspend()
+    tab.current.write(Data("/opt/homebrew/bin/tmux -L termtest new-session -s \(sessionName) /bin/sh\r".utf8))
+    tab.current.write(Data("printf 'selection-%s\\n' $((7*7))\r".utf8))
+    try await until("hand-attached session before the next observation") { text(tab).contains("selection-49") }
+    XCTAssertNil(tab.tmuxSession)
+    await space.attach(host, session: sessionName)
+    XCTAssertEqual(space.tabs.count, 1, "opening the same tmux session created a duplicate terminal")
+    XCTAssertTrue(space.focusedTab === tab)
+    XCTAssertEqual(tab.tmuxSession, sessionName)
+    XCTAssertEqual(space.menu.tabs(on: host, session: sessionName).map(\.id), [tab.id])
+    tab.resume()
+    space.openMenu(.sessions)
+    try await Task.sleep(for: .milliseconds(500))
+    try await capture("ssh-existing-session-tile")
   }
 
   func testHandAttachedMoshSessionAutomaticallyReconnects() async throws {

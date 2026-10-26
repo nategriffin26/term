@@ -36,6 +36,11 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private static var liveSpaces: [WeakSpace] = []
   /// Every window's controller, oldest first.
   static var live: [SpaceController] { liveSpaces.compactMap(\.space) }
+  private struct AttachmentTarget: Hashable {
+    var server: String
+    var session: String
+  }
+  private static var pendingAttachments: Set<AttachmentTarget> = []
 
   init(sceneID: String) {
     self.sceneID = sceneID
@@ -307,7 +312,20 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   /// Goes into tmux session `name` on `host`: the tab already attached to it
   /// comes forward (from any window); otherwise a tab attaches to it,
   /// showing `preview` (the session's last captured screen) until it draws.
-  func attach(_ host: Host, session name: String, preview: Data? = nil) {
+  func attach(_ host: Host, session name: String, preview: Data? = nil) async {
+    if let open = Self.live.lazy.flatMap(\.tabs).first(where: {
+      $0.tmuxSession == name && $0.target.map { TmuxStore.shared.sameServer($0, host) } == true
+    }) {
+      zoom(into: open, fromTile: false)
+      return
+    }
+    let selection = AttachmentTarget(server: host.serverKey, session: name)
+    guard Self.pendingAttachments.insert(selection).inserted else { return }
+    defer { Self.pendingAttachments.remove(selection) }
+    let candidates = Self.live.flatMap(\.tabs).filter {
+      $0.target.map { TmuxStore.shared.sameServer($0, host) } == true
+    }
+    await TmuxAttachment.refresh(candidates, timeout: .seconds(1))
     if let open = Self.live.flatMap(\.tabs).first(where: { $0.tmuxSession == name && $0.target.map { TmuxStore.shared.sameServer($0, host) } == true }) {
       zoom(into: open, fromTile: false)
       return

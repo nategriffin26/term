@@ -41,9 +41,14 @@ final class Tab {
   private(set) var notice: Notice?
   private var noticeTimer: Task<Void, Never>?
   private let autoReconnect = AutoReconnect()
-  private var attachmentTimer: Task<Void, Never>?
+  private var attachmentProbe: Task<Void, Never>?
   private var reconnectPreparation: Task<Void, Never>?
   private var foreground = true
+  private var firstAttachmentObservation = true
+
+  var pollsTmuxAttachment: Bool {
+    foreground && !unreachable && !reconnecting && remote != nil && connecting == nil
+  }
 
   var editor: LineEditor
   private var settingsObserver: NSObjectProtocol?
@@ -112,7 +117,7 @@ final class Tab {
   }
 
   isolated deinit {
-    attachmentTimer?.cancel()
+    attachmentProbe?.cancel()
     reconnectPreparation?.cancel()
     if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
   }
@@ -159,8 +164,8 @@ final class Tab {
   /// connection retains the last observation; mosh usually still has its client.
   func reconnect() {
     guard let remote, let target, !reconnecting else { return }
-    attachmentTimer?.cancel()
-    attachmentTimer = nil
+    attachmentProbe?.cancel()
+    attachmentProbe = nil
     reconnecting = true
     host?.tabDidChange(self)
     reconnectPreparation = Task { [weak self] in
@@ -217,7 +222,8 @@ final class Tab {
       // In Term's own tmux attach the probe also asks whether the session is
       // still there: one closed meanwhile ends the tab, as when tmux exits.
       let session = Tmux.attachedSession(target.startupCommand, session: tmuxSession)
-      guard case .success(let out) = await RemoteExec.run(Self.spec(for: target), session.map(Tmux.hasSessionCommand) ?? "true")
+      guard case .success(let out)? = await RemoteExec.run(Self.spec(for: target),
+        session.map(Tmux.hasSessionCommand) ?? "true", timeout: .seconds(2))
       else { return false }
       if session != nil, out.status == 1, remote != nil {
         closeRemote(reason: "")
@@ -228,42 +234,44 @@ final class Tab {
     autoReconnect.reconnect = { [weak self] in self?.reconnect() }
   }
 
-  /// One small response on the cached SSH connection every two seconds while
-  /// foregrounded. No terminal bytes, host files or shell configuration change.
+  /// Initial observation; periodic snapshots are batched by SessionRegistry.
   private func observeTmuxAttachment() {
-    attachmentTimer?.cancel()
-    guard foreground else { attachmentTimer = nil; return }
-    attachmentTimer = Task { [weak self] in
-      while !Task.isCancelled {
-        await self?.refreshTmuxAttachment()
-        try? await Task.sleep(for: .seconds(2))
-      }
-    }
+    attachmentProbe?.cancel()
+    guard foreground, !unreachable else { attachmentProbe = nil; return }
+    attachmentProbe = Task { [weak self] in await self?.refreshTmuxAttachment() }
   }
 
   private func stopAttachmentObservation() {
-    attachmentTimer?.cancel()
-    attachmentTimer = nil
-    reconnectPreparation?.cancel()
-    reconnectPreparation = nil
+    attachmentProbe?.cancel()
+    attachmentProbe = nil
+    if reconnectPreparation != nil {
+      reconnectPreparation?.cancel()
+      reconnectPreparation = nil
+      reconnecting = false
+      autoReconnect.reconnectFinished(succeeded: false)
+    }
   }
 
-  private func refreshTmuxAttachment() async {
-    guard let remote, let target, remote.processID > 1,
-          target.transport != .ssh || remote.status.kind == TERM_STATUS_CONNECTED.rawValue else { return }
-    let root = remote.processID
-    guard case .success(let out) = await RemoteExec.run(Self.spec(for: target), TmuxAttachment.probeCommand(root: root)),
-          out.status == 0, !Task.isCancelled, self.remote === remote, remote.processID == root,
-          target.transport != .ssh || remote.status.kind == TERM_STATUS_CONNECTED.rawValue else { return }
+  func refreshTmuxAttachment() async {
+    await TmuxAttachment.refresh([self])
+  }
+
+  func applyTmuxAttachment(_ observation: TmuxAttachment, session: Session, root: UInt32) {
+    guard remote === session, connecting == nil, let target, session.processID == root,
+          target.transport != .ssh || session.status.kind == TERM_STATUS_CONNECTED.rawValue else { return }
     let name: String?
-    switch TmuxAttachment.parse(String(decoding: out.stdout, as: UTF8.self), root: root) {
+    switch observation {
     case .unavailable: return
-    case .detached: name = nil
+    case .detached:
+      // CONNECTED can arrive before the startup command has launched tmux.
+      if firstAttachmentObservation { firstAttachmentObservation = false; return }
+      name = nil
     case .attached(let session): name = session
     }
+    firstAttachmentObservation = false
     guard tmuxSession != name else { return }
     tmuxSession = name
-    remote.diagrams = DiagramSource(host: target, tmuxSession: name)
+    session.diagrams = DiagramSource(host: target, tmuxSession: name)
     autoReconnect.statusChanged(unreachable: unreachable)
     host?.tabDidChange(self)
   }
@@ -297,6 +305,7 @@ final class Tab {
       guard let self, let session, session === remote else { return }
       reconnecting = false
       autoReconnect.reconnectFinished(succeeded: failure == nil)
+      if failure == nil { firstAttachmentObservation = true }
       observeTmuxAttachment()
       host?.tabDidChange(self)
     }
@@ -345,6 +354,7 @@ final class Tab {
         }
         reconnecting = false
         autoReconnect.stop()
+        firstAttachmentObservation = true
         observeTmuxAttachment()
         _ = old  // freed when this scope ends
       } else if session === remote {
@@ -367,8 +377,8 @@ final class Tab {
       } else if session === remote {
         if target?.transport == .ssh, message == "connection lost" {
           unreachable = true
-          attachmentTimer?.cancel()
-          attachmentTimer = nil
+          attachmentProbe?.cancel()
+          attachmentProbe = nil
         } else {
           closeRemote(reason: message)
         }
@@ -431,9 +441,9 @@ final class Tab {
 
   func suspend() {
     foreground = false
-    if reconnectPreparation != nil { reconnecting = false }
-    stopAttachmentObservation()
     autoReconnect.suspended()
+    // Cancelling preparation also releases AutoReconnect's in-flight state.
+    stopAttachmentObservation()
     remote?.suspend()
     connecting?.suspend()
   }

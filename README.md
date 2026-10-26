@@ -14,7 +14,7 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **SSH** with Ed25519 keys made or imported in the app. Host keys are pinned on first use.
 - **tmux, native.** A tmux tab lists every session on your hosts, one line each: tap one to open it in a window, long-press to see its screen, swipe or select to close them. Plus a scrollable history viewer, an overview of your open windows (three fingers up), and a swipe between windows that names where you're going.
 - **Agents that tell you when they stop.** With the omp extension below, the tmux tab shows what each [omp](https://github.com/can1357/oh-my-pi) agent is working on and how far through its todo list it is. A session whose agent finished, failed or asks you something shows the answer or question under its name, and the tab's icon counts them; a long press shows the whole answer with its model, context, cost and branch. Entering the session or clearing it there quiets it on every device.
-- **Reconnect in place.** Term remembers tmux sessions entered from a shell as well as those opened from its tmux tab. Reconnect attaches to the same session; a missing session is never recreated empty.
+- **Reconnect in place.** Term remembers tmux sessions entered from a shell as well as those opened from its tmux tab. Mosh reconnects automatically when contact is lost; Reconnect also works on SSH. Both attach to the same session, never recreating a missing session empty.
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
 - **A floating menu** for Sessions, tmux, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
 - **Smart Keys** for Esc, Ctrl, Alt, symbols and arrows, with configurable key repeat.
@@ -49,7 +49,7 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 
 tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads a tab's history with `tmux capture-pane` (a tab outside tmux shows its own scrollback), and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
 
-Term learns a tab's tmux client through process ancestry over SSH, without changing the host's configuration or terminal output. It checks while the app is active and again before reconnecting. A manually attached session returns to a login shell when it ends. SSH retains its last observation after a lost connection: an attach or detach between the last successful check and the drop cannot be recovered; mosh can usually inspect its surviving server before replacing it.
+Term learns a tab's tmux client through process ancestry over SSH, without changing the host's configuration or terminal output. It checks while the app is active, before reconnecting, and before opening a session from the tmux tab. The learned name labels the existing terminal, so selecting that session switches to it rather than opening a duplicate. A manually attached session returns to a login shell when it ends. SSH retains its last observation after a lost connection: an attach or detach between the last successful check and the drop cannot be recovered; mosh can usually inspect its surviving server before replacing it.
 
 ### omp agents
 
