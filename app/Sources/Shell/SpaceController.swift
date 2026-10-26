@@ -562,6 +562,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       for tab in [d.previous, d.next].compactMap({ $0 }) {
         tab.view.frame = pane.container.bounds
         pane.container.insertSubview(tab.view, belowSubview: pane.banner)
+        // Sliding views keep the geometry they have, so measure it here, in place.
+        tab.view.layoutIfNeeded()
       }
       pane.banner.isHidden = true
       drag = d

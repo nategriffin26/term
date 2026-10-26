@@ -288,8 +288,10 @@ final class TerminalView: UIView {
     }
 
     /// A swipe slides the view with a transform and animates it back. Its
-    /// insets follow where it is on screen, so a grid measured before it
-    /// rests is no size for the session; the swipe lays it out at rest.
+    /// insets follow where it is on screen, corner adaptation of the safe
+    /// area included: on a display with a rounded corner a page sliding in
+    /// under it measures 15 pt lower than at rest. A sliding view keeps the
+    /// geometry it had at rest; the swipe lays it out at rest.
     private var isSliding: Bool {
         !transform.isIdentity || !(layer.presentation()?.affineTransform().isIdentity ?? true)
     }
@@ -299,7 +301,7 @@ final class TerminalView: UIView {
     /// keyboard and rotation animations pass through in-between sizes, and
     /// each resize would make the remote (tmux) redraw.
     func layoutGrid() {
-        guard let m = renderer?.fonts.metrics, bounds.width > 0, bounds.height > 0 else { return }
+        guard !isSliding, let m = renderer?.fonts.metrics, bounds.width > 0, bounds.height > 0 else { return }
         // Corner adaptation of the safe area itself, so a corner already under
         // a bar costs nothing. One axis alone stops at the corner's 45° point,
         // which still clips the first cell; both together clear it.
@@ -315,7 +317,7 @@ final class TerminalView: UIView {
         let widthPx = max(0, Int(x1 - x0)), heightPx = max(0, Int(y1 - y0))
         let cols = max(1, widthPx / m.width), rows = max(1, heightPx / m.height)
         gridOrigin = CGPoint(x: x0 + CGFloat(max(0, widthPx - cols * m.width) / 2), y: y0)
-        if !isPinching, !isSliding {
+        if !isPinching {
             let grid = GridSize(cols: cols, rows: rows, cellWidth: m.width, cellHeight: m.height)
             resizeTask?.cancel()
             if !sessionSized {
