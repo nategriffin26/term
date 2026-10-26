@@ -296,6 +296,33 @@ impl Connection {
         })
     }
 
+    /// Opens a socket on the SSH server without a shell or PTY.
+    pub async fn tunnel(&self, target: &str) -> Result<Tunnel> {
+        let channel = if target.contains('/') {
+            let path = if let Some(rest) = target.strip_prefix("~/") {
+                let home = self.exec("printf '%s' \"$HOME\"").await?;
+                if home.exit_status != 0 || !home.stdout.starts_with(b"/") {
+                    return Err(Error::Protocol("could not find the login directory".into()));
+                }
+                let home = String::from_utf8(home.stdout)
+                    .map_err(|_| Error::Protocol("login directory is not UTF-8".into()))?;
+                format!("{home}/{rest}")
+            } else {
+                target.to_owned()
+            };
+            self.handle.channel_open_direct_streamlocal(path).await?
+        } else {
+            let (host, port) = target.rsplit_once(':')
+                .ok_or_else(|| Error::Protocol("expected a socket path or HOST:PORT".into()))?;
+            let port: u16 = port.parse()
+                .map_err(|_| Error::Protocol("invalid target port".into()))?;
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            self.handle.channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0).await?
+        };
+        let (reader, writer) = channel.split();
+        Ok(Tunnel { reader, writer: ShellWriter(Arc::new(writer)) })
+    }
+
     pub async fn disconnect(&self) -> Result<()> {
         self.handle
             .disconnect(russh::Disconnect::ByApplication, "", "en")
@@ -385,6 +412,26 @@ impl Shell {
                     self.closed = true;
                     return Some(ShellEvent::Closed(exit_code(self.status, self.signal.as_ref())));
                 }
+            }
+        }
+    }
+}
+
+/// Socket bytes retain russh's allocation all the way to the consumer.
+pub struct Tunnel {
+    reader: russh::ChannelReadHalf,
+    writer: ShellWriter,
+}
+
+impl Tunnel {
+    pub fn writer(&self) -> ShellWriter { self.writer.clone() }
+
+    pub async fn recv(&mut self) -> Option<Bytes> {
+        loop {
+            match self.reader.wait().await {
+                Some(ChannelMsg::Data { data }) => return Some(data),
+                Some(ChannelMsg::Eof | ChannelMsg::Close) | None => return None,
+                _ => {}
             }
         }
     }

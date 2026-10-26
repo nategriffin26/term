@@ -8,6 +8,8 @@ mod common;
 mod files;
 #[path = "network/reconnect.rs"]
 mod reconnect;
+#[path = "network/tunnels.rs"]
+mod tunnels;
 
 use std::ffi::{CString, c_char, c_void};
 use std::io::BufRead;

@@ -8,6 +8,8 @@ pub mod net;
 mod remote;
 mod session;
 pub mod svg;
+pub mod tunnel;
+pub mod vnc;
 
 use std::ffi::{CStr, CString, c_char};
 use std::sync::Arc;
@@ -17,6 +19,8 @@ pub use files::*;
 pub use net::*;
 pub use session::Session;
 pub use svg::*;
+pub use tunnel::*;
+pub use vnc::*;
 use session::{Remote, SCROLLBACK, State};
 
 /// A counted reference for the duration of one call, so a callback that frees
