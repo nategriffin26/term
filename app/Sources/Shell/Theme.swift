@@ -37,26 +37,34 @@ struct Theme: Identifiable, Hashable, Sendable {
     all.first { $0.name == name } ?? all[0]
   }
 
+  /// Term's own Dusk: the default theme and the fixed app palette's source.
+  static var dusk: Theme { named("Dusk") }
+
+  /// Term's own themes, first in the catalog in this order; the first is the
+  /// default for anyone who never picked one.
+  static let own = ["Dusk", "Term"]
+
   /// Term's own themes and a curated set from iTerm2-Color-Schemes, in
-  /// Ghostty's format (app/Resources/Themes); "Term" first, then by name.
+  /// Ghostty's format (app/Resources/Themes); Term's own first, then by name.
   static let all: [Theme] = {
     guard let folder = Bundle.main.url(forResource: "Themes", withExtension: nil) else {
       preconditionFailure("app/Resources/Themes is not in the app bundle")
     }
     let themes = catalog(in: folder)
-    precondition(themes.first?.name == "Term", "Themes/Term.ghostty is missing or unreadable")
+    precondition(themes.prefix(own.count).map(\.name) == own, "Themes/Dusk.ghostty or Term.ghostty is missing or unreadable")
     return themes
   }()
 
-  /// Every readable `.ghostty` file in `folder`, "Term" first, then by name.
+  /// Every readable `.ghostty` file in `folder`, Term's own first, then by name.
   static func catalog(in folder: URL) -> [Theme] {
     let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
     let themes = files.filter { $0.pathExtension == "ghostty" }.compactMap { url -> Theme? in
       guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
       return Theme(name: url.deletingPathExtension().lastPathComponent, ghostty: text)
     }
+    let rank = { (name: String) in own.firstIndex(of: name) ?? own.count }
     return themes.sorted { a, b in
-      a.name == "Term" || (b.name != "Term" && a.name.localizedStandardCompare(b.name) == .orderedAscending)
+      rank(a.name) != rank(b.name) ? rank(a.name) < rank(b.name) : a.name.localizedStandardCompare(b.name) == .orderedAscending
     }
   }
 }

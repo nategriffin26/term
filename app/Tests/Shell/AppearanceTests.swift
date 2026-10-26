@@ -75,14 +75,24 @@ final class ThemeParsingTests: XCTestCase {
     XCTAssertEqual(t.palette.count, 16)
   }
 
-  func testTheCatalogIsTermFirstThenTheOtherFortyFourByName() {
+  func testTheCatalogIsDuskThenTermThenTheOtherFortyFourByName() {
     let all = Theme.all
-    XCTAssertEqual(all.count, 45)
-    XCTAssertEqual(all[0].name, "Term")
-    XCTAssertEqual(Set(all.map(\.name)).count, 45)
-    let rest = all.dropFirst().map(\.name)
+    XCTAssertEqual(all.count, 46)
+    XCTAssertEqual(all.prefix(2).map(\.name), ["Dusk", "Term"])
+    XCTAssertEqual(Set(all.map(\.name)).count, 46)
+    let rest = all.dropFirst(2).map(\.name)
     XCTAssertEqual(rest, rest.sorted { $0.localizedStandardCompare($1) == .orderedAscending })
     XCTAssertTrue(all.allSatisfy { $0.palette.count == 16 })
+  }
+
+  func testDuskIsTheMockupsPalette() {
+    let t = Theme.named("Dusk")
+    XCTAssertEqual(t.name, "Dusk")
+    XCTAssertEqual(t.background, 0x15121C)
+    XCTAssertEqual(t.foreground, 0xF6F4FA)
+    XCTAssertEqual(t.cursor, 0x7EF0DA)
+    XCTAssertEqual(t.palette[1], 0xFF6B86)
+    XCTAssertEqual(t.palette[8], 0x5A5368)
   }
 
   func testTodaysTermThemeIsUnchanged() {
@@ -151,10 +161,16 @@ final class AppearanceSettingsTests: XCTestCase {
     XCTAssertEqual(s.appTheme, AppTheme.fixed())
   }
 
-  func testAFreshInstallBlinksAtTheDefaultTerm() {
+  func testAFreshInstallBlinksAtDusk() {
     let s = AppSettings(defaults: defaults)
     XCTAssertTrue(s.cursorBlink)
-    XCTAssertEqual(s.themeName, "Term")
+    XCTAssertEqual(s.themeName, "Dusk")
+    XCTAssertEqual(s.appTheme.bg.rgb, 0x15121C, "Match is on, so the chrome is Dusk's")
+  }
+
+  func testSomeoneWhoPickedTermKeepsIt() {
+    defaults.set("Term", forKey: "themeName")
+    XCTAssertEqual(AppSettings(defaults: defaults).theme.name, "Term")
   }
 
   func testUnknownOrOutOfRangeStoredValuesFallBack() {
@@ -163,7 +179,7 @@ final class AppearanceSettingsTests: XCTestCase {
     defaults.set("star", forKey: "cursorShape")
     defaults.set("rainbow", forKey: "cursorColor")
     let s = AppSettings(defaults: defaults)
-    XCTAssertEqual(s.theme.name, "Term")
+    XCTAssertEqual(s.theme.name, "Dusk")
     XCTAssertNil(s.appAccent)
     XCTAssertEqual(s.cursorShape, .block)
     XCTAssertEqual(s.cursorColor, .theme)
@@ -206,7 +222,7 @@ final class AppearanceSettingsTests: XCTestCase {
     var t = s.termTheme
     XCTAssertEqual(UInt32(t.cursor_style), UInt32(TERM_CURSOR_BAR.rawValue))
     XCTAssertEqual(t.cursor_blink, 0)
-    XCTAssertEqual(t.cursor, 0xFF00_0000 | 0xB0B0B0, "the theme's own cursor colour")
+    XCTAssertEqual(t.cursor, 0xFF00_0000 | 0x7EF0DA, "Dusk's own cursor colour")
 
     s.cursorShape = .underline
     s.cursorBlink = true
@@ -217,9 +233,9 @@ final class AppearanceSettingsTests: XCTestCase {
 
   func testTheAccentCursorColourIsTheAppAccent() {
     let s = AppSettings(defaults: defaults)
-    s.appAccent = 0x7EF0DA
+    s.appAccent = 0xF2A65A
     s.cursorColor = .accent
-    XCTAssertEqual(s.termTheme.cursor, 0xFF00_0000 | 0x7EF0DA)
+    XCTAssertEqual(s.termTheme.cursor, 0xFF00_0000 | 0xF2A65A)
   }
 
   func testProgramsMayChangeTheCursorUnlessTurnedOff() {

@@ -26,6 +26,8 @@ struct AppTheme: Identifiable, Hashable, Sendable {
   /// Washes and hairlines: the text colour at fixed opacities, so they read on light and dark grounds alike.
   var fill, fill2, fill3, line, line2: Tone
   var accent, onAccent, ok, warn, bad, overlay: Tone
+  /// Folders in Files: ANSI blue, legible on the panel.
+  var folder: Tone
 
   var id: String { name }
 
@@ -39,7 +41,7 @@ struct AppTheme: Identifiable, Hashable, Sendable {
   /// needs you) is `accent`, else the cursor colour if it has colour, else
   /// the first coloured of ANSI bright yellow, yellow, bright blue, blue,
   /// bright cyan, cyan, moved toward the text until it reads on the ground;
-  /// ok, warn and bad are ANSI green, yellow and red.
+  /// ok, warn and bad are ANSI green, yellow and red; folders ANSI blue.
   static func derived(from theme: Theme, accent override: UInt32? = nil) -> AppTheme {
     let bg = theme.background, fg = theme.foreground
     let raised = mix(bg, fg, 0.035)
@@ -56,21 +58,15 @@ struct AppTheme: Identifiable, Hashable, Sendable {
       line: Tone(rgb: fg, opacity: 0.09), line2: Tone(rgb: fg, opacity: 0.18),
       accent: Tone(rgb: accent), onAccent: Tone(rgb: onAccent(for: accent, background: bg)),
       ok: Tone(rgb: theme.palette[2]), warn: Tone(rgb: theme.palette[3]), bad: Tone(rgb: theme.palette[1]),
-      overlay: Tone(rgb: mix(bg, 0x000000, 0.6), opacity: 0.3))
+      overlay: Tone(rgb: mix(bg, 0x000000, 0.6), opacity: 0.3),
+      folder: Tone(rgb: legible(theme.palette[4], on: raised, ratio: 3, toward: fg)))
   }
 
-  /// The fixed palette (Match Terminal off): Term's own dusk glass, with the
-  /// accent replaced when one is picked.
+  /// The fixed palette (Match Terminal off): Term's own Dusk (a violet-black
+  /// ground, near-white text, a mint cursor), with the accent replaced when one is picked.
   static func fixed(accent override: UInt32? = nil) -> AppTheme {
-    derived(from: dusk, accent: override)
+    derived(from: Theme.dusk, accent: override)
   }
-
-  /// The colours the fixed palette is derived from: a violet-black ground,
-  /// near-white text, a mint cursor.
-  private static let dusk = Theme(
-    name: "Dusk", foreground: 0xF6F4FA, background: 0x15121C, cursor: 0x7EF0DA,
-    palette: [0x2B2636, 0xFF6B86, 0x8DE0A6, 0xF4D27E, 0x8DB3FF, 0xD3A6FF, 0x7FE3E0, 0xCFCAD9,
-              0x5A5368, 0xFF8FA4, 0xA9EDBD, 0xFFE3A3, 0xAECBFF, 0xE2C2FF, 0xA2EFEC, 0xF6F4FA])
 
   /// `a` moved `t` of the way to `b`, per sRGB channel.
   static func mix(_ a: UInt32, _ b: UInt32, _ t: Double) -> UInt32 {

@@ -8,14 +8,15 @@ import UIKit
 /// adds it here first, never a literal in place.
 ///
 /// - Colour: `AppTheme`, derived from the terminal theme (Match Terminal, on
-///   by default) or the fixed dusk palette. Text by importance: fg, fg2,
+///   by default) or Dusk's (Match off). Text by importance: fg, fg2,
 ///   muted, faint. Washes and hairlines are the text colour at fixed
 ///   opacities (fill < fill2 < fill3; line, line2), so light themes work
 ///   with no extra code. No literal colours, no white or black, no system blue.
 /// - State: `needsYou` (the accent) is the one loud signal: a filled pill on
 ///   a row and the count on the dock and the tmux tab. `done` is the accent
 ///   as a check and a word, `working` a ring in fg, `failed` is bad. The
-///   accent marks nothing else but the open tab's icon and switches that are on.
+///   accent marks nothing else but the open tab's icon and switches that
+///   are on. `folder` (ANSI blue) marks folders in Files.
 /// - Type: SF Pro for words, SF Mono for machine facts (session, host and
 ///   file names, paths, commands, sizes, keys). Four steps: title 17 (page
 ///   titles), body 15 (rows, tabs, buttons), secondary 13 (second lines,
@@ -24,11 +25,11 @@ import UIKit
 ///   and the chosen item.
 /// - Symbols: one weight (medium) at four sizes: inline 13, control 17,
 ///   dock 20, hero 34. Outline glyphs; the `.fill` variant only for the
-///   chosen tab.
+///   chosen tab and folders in Files.
 /// - Space: 4, 8, 12, 16, 24. Rows are 50 tall, controls 36, circle buttons
 ///   40, and every target at least 44.
-/// - Corners: capsules for controls and pills; groups 22, tiles 16, the
-///   panel 32 (concentric with the screen where it nears its corners).
+/// - Corners: capsules for controls and pills; groups 22, tiles 16, file
+///   thumbnails 6, the panel 32 (concentric with the screen where it nears its corners).
 /// - Material: the panel and the docks are Liquid Glass tinted with the
 ///   theme's ground (`glass`, `GlassView`). Nothing on glass is glass again:
 ///   controls on it use fills. Lists are inset groups of `fill` whose rows
@@ -55,6 +56,7 @@ enum Chrome {
   @MainActor static var warn: Color { theme.warn.color }
   @MainActor static var bad: Color { theme.bad.color }
   @MainActor static var overlay: Color { theme.overlay.color }
+  @MainActor static var folder: Color { theme.folder.color }
 
   // States.
   @MainActor static var needsYou: Color { accent }
@@ -79,6 +81,7 @@ enum Chrome {
     static var muted: UIColor { tone(\.muted) }
     static var faint: UIColor { tone(\.faint) }
     static var fill2: UIColor { tone(\.fill2) }
+    static var fill3: UIColor { tone(\.fill3) }
     static var line: UIColor { tone(\.line) }
     static var line2: UIColor { tone(\.line2) }
     static var accent: UIColor { tone(\.accent) }
@@ -148,6 +151,7 @@ enum Chrome {
     static let group: CGFloat = 22
     static let tile: CGFloat = 16
     static let panel: CGFloat = 32
+    static let thumb: CGFloat = 6
   }
 
   // MARK: Material
