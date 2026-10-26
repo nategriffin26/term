@@ -32,10 +32,15 @@ final class Dictation {
     didSet { if state != oldValue { NotificationCenter.default.post(name: .voiceStateChanged, object: self) } }
   }
   var isListening: Bool { capture != nil }
+  /// The microphone did not start; tapping the strip or the mic tries again.
+  private var microphoneFailed = false
 
   private let transcriber: @MainActor () -> Transcriber?
+  private let microphone: MicrophoneFactory
+  private let startDeadline: Duration
   private weak var target: DictationTarget?
-  private var capture: MicrophoneCapture?
+  private var capture: Microphone?
+  private var startTimer: Task<Void, Never>?
   private var segmenter = SpeechSegmenter()
   private let gate = SpeechGate()
   private var queue = TranscriptQueue<WeakTarget>()
@@ -46,18 +51,27 @@ final class Dictation {
   /// Segments that fail by themselves go again after 2 s, then 4, 8 … up to a minute.
   private var retryDelay = Dictation.firstRetryDelay
   private var retryTimer: Task<Void, Never>?
-  private var engineObserver: NSObjectProtocol?
 
   private static let firstRetryDelay = Duration.seconds(2)
   /// Levels the strip gets: the last 2 s.
   private static let levelCount = 40
 
+  /// Makes the microphone: samples arrive on the audio thread; the failure, on the main actor.
+  typealias MicrophoneFactory = @MainActor (_ onSamples: @escaping @Sendable ([Float]) -> Void,
+                                            _ onFailure: @escaping @MainActor @Sendable () -> Void) -> Microphone
+
   struct WeakTarget {
     weak var value: DictationTarget?
   }
 
-  init(transcriber: @escaping @MainActor () -> Transcriber?) {
+  /// `startDeadline`: how long the microphone may take to start before listening
+  /// fails; AudioToolbox's own limit for an audio server that stopped answering.
+  init(transcriber: @escaping @MainActor () -> Transcriber?,
+       microphone: @escaping MicrophoneFactory = { MicrophoneCapture(onSamples: $0, onFailure: $1) },
+       startDeadline: Duration = .seconds(9)) {
     self.transcriber = transcriber
+    self.microphone = microphone
+    self.startDeadline = startDeadline
     let center = NotificationCenter.default
     center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.stop() }
@@ -97,8 +111,8 @@ final class Dictation {
   }
 
   func start(in target: DictationTarget) {
-    // A tap delivered while the app comes back to the front would start the
-    // engine before the audio server takes it, and it aborts (seen on the simulator).
+    // A tap delivered while the app is still coming back to the front is
+    // dropped: the audio session does not start for an app that isn't active.
     guard !isListening, UIApplication.shared.applicationState == .active else { return }
     guard transcriber() != nil else {
       target.dictationNeedsSettings()
@@ -122,39 +136,38 @@ final class Dictation {
     guard let capture else { return }
     capture.stop()
     self.capture = nil
-    if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
-    engineObserver = nil
+    startTimer?.cancel()
+    startTimer = nil
     if let last = segmenter.finish(), let target { segmentEnded(last, in: target) }
     gate.release()
     target = nil
     levels = []
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     update()
   }
 
-  /// A terminal gave up the keyboard: listening into it stops with it.
+  /// A terminal gave up the keyboard: listening into it stops with it, and
+  /// a microphone failure shown on its Smart Keys goes with them.
   func targetLostFocus(_ view: DictationTarget) {
     if target === view { stop() }
+    if !isListening, microphoneFailed {
+      microphoneFailed = false
+      update()
+    }
   }
 
-  private func listen(into target: DictationTarget) {
+  /// Turns the microphone on into `target`. Listening shows at once; a
+  /// microphone that fails, or has not started by `startDeadline`, ends it
+  /// in the strip's failed state.
+  func listen(into target: DictationTarget) {
     guard !isListening else { return }
-    let session = AVAudioSession.sharedInstance()
     run += 1
     let run = run
-    let capture = MicrophoneCapture { [weak self] samples in
+    let capture = microphone({ [weak self] samples in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.heard(samples, run: run) } }
-    }
-    do {
-      try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
-      try session.setActive(true)
-      try capture.start()
-    } catch {
-      capture.stop()
-      try? session.setActive(false, options: .notifyOthersOnDeactivation)
-      target.dictationNotice("The microphone isn't available")
-      return
-    }
+    }, { [weak self] in
+      self?.microphoneStopped(run: run)
+    })
+    microphoneFailed = false
     self.capture = capture
     self.target = target
     segmenter = SpeechSegmenter()
@@ -164,15 +177,27 @@ final class Dictation {
       target.dictationNotice("Speech detection isn't available")
       stop()
     }
-    // A new route (headphones, AirPods) stops the engine: start again in its format.
-    engineObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
-                                                            object: capture.notificationObject, queue: .main) { [weak self] _ in
-      MainActor.assumeIsolated {
-        guard let self, let capture = self.capture else { return }
-        do { try capture.start() } catch { self.stop() }
-      }
+    capture.start { [weak self] error in
+      guard let self, run == self.run, isListening else { return }
+      startTimer?.cancel()
+      startTimer = nil
+      if error != nil { microphoneStopped(run: run) }
+    }
+    let deadline = startDeadline
+    startTimer = Task { [weak self] in
+      try? await Task.sleep(for: deadline)
+      guard !Task.isCancelled else { return }
+      self?.microphoneStopped(run: run)
     }
     retry(all: true)
+    update()
+  }
+
+  /// The microphone of listening `run` failed, or never started.
+  private func microphoneStopped(run: Int) {
+    guard run == self.run, isListening else { return }
+    stop()
+    microphoneFailed = true
     update()
   }
 
@@ -344,6 +369,8 @@ final class Dictation {
       state = .listening(levels: levels)
     } else if let problem = queue.problem {
       state = .failed(queued: queue.count, problem: problem)
+    } else if microphoneFailed {
+      state = .microphoneUnavailable
     } else if !queue.isEmpty {
       state = .transcribing(pending: queue.count)
     } else {

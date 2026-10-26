@@ -11,6 +11,8 @@ enum VoiceState: Equatable, Sendable {
   case transcribing(pending: Int)
   /// Not listening; `queued` segments wait behind a failure.
   case failed(queued: Int, problem: VoiceProblem)
+  /// Not listening: the microphone did not start, or stopped by itself.
+  case microphoneUnavailable
 }
 
 /// The mic key and the free middle of the Smart Keys bar, as one (Trace,
@@ -104,8 +106,11 @@ final class VoiceStripView: UIView {
   required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
   private func statusTapped() {
-    guard case .failed(_, let problem) = state else { return }
-    if problem.needsSettings { onOpenSettings?() } else { onRetry?() }
+    switch state {
+    case .failed(_, let problem): if problem.needsSettings { onOpenSettings?() } else { onRetry?() }
+    case .microphoneUnavailable: onMic?()
+    default: break
+    }
   }
 
   // MARK: - State
@@ -146,6 +151,11 @@ final class VoiceStripView: UIView {
       case .other(let message): "\(message), \(queued) waiting"
       }
       status.accessibilityHint = problem.needsSettings ? "Opens Voice settings" : "Retries"
+    case .microphoneUnavailable:
+      icon.image = UIImage(systemName: "mic.slash", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
+      count.text = nil
+      status.accessibilityLabel = "Microphone unavailable"
+      status.accessibilityHint = "Listens again"
     }
     status.isAccessibilityElement = state != .idle
     if case .failed = state { discard.isHidden = false } else { discard.isHidden = true }
@@ -234,7 +244,7 @@ final class VoiceStripView: UIView {
     switch state {
     case .listening: listening = true
     case .transcribing: waiting = true
-    case .failed: failed = true
+    case .failed, .microphoneUnavailable: failed = true
     case .idle: break
     }
     // Release levels on the strip's clock; p is how far the newest has scrolled in.
