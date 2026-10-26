@@ -286,7 +286,7 @@ final class TmuxStore {
     case .failure(let failure): return failure.message
     case .success(let out) where out.status != 0:
       let text = String(decoding: out.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-      return text.isEmpty ? "tmux exited with status \(out.status)" : text
+      return text.isEmpty ? "tmux exited with status \(out.status)" : Tmux.readableError(text)
     case .success: return nil
     }
   }
@@ -300,7 +300,7 @@ final class TmuxStore {
     case .success(let out):
       let text = String(decoding: out.stdout, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
       if out.status == 0, !text.isEmpty { return .success(text) }
-      return .failure(.init(message: text.isEmpty ? "tmux exited with status \(out.status)" : text))
+      return .failure(.init(message: text.isEmpty ? "tmux exited with status \(out.status)" : Tmux.readableError(text)))
     }
   }
 

@@ -257,4 +257,22 @@ final class TmuxTests: XCTestCase {
       }
     }
   }
+
+  /// tmux 3.6's own words (recorded from `tmux -L`), which showed raw in the
+  /// new-session page and the rename and kill alerts.
+  func testReadableErrorFromTmuxComplaints() {
+    XCTAssertEqual(Tmux.readableError("duplicate session: api\n"), "api already exists")
+    XCTAssertEqual(Tmux.readableError("duplicate session: a: b"), "a: b already exists")
+    XCTAssertEqual(Tmux.readableError("can't find session: $999"), "That session has ended")
+    XCTAssertEqual(Tmux.readableError("no server running on /private/tmp/tmux-501/default"), "tmux isn't running")
+    XCTAssertEqual(Tmux.readableError("error connecting to /private/tmp/tmux-501/x (No such file or directory)"),
+                   "tmux isn't running")
+  }
+
+  /// Our own messages and anything tmux says that has no shorter form pass through.
+  func testReadableErrorKeepsOtherText() {
+    XCTAssertEqual(Tmux.readableError("No such folder"), "No such folder")
+    XCTAssertEqual(Tmux.readableError("zsh: command not found: tmux"), "zsh: command not found: tmux")
+    XCTAssertEqual(Tmux.readableError("session duplicate session: x"), "session duplicate session: x")
+  }
 }

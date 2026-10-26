@@ -149,6 +149,16 @@ enum Tmux {
       + #"while read -r z t; do case ' \#(sizes) ' in *" $z "*) ;; *) tmux detach-client -t "$t";; esac; done"#
   }
 
+  /// What a failed action prints, in a few words: tmux's own complaints
+  /// name ids ("$3") and sockets he never sees.
+  static func readableError(_ output: String) -> String {
+    let text = output.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.hasPrefix("duplicate session: ") { return "\(text.dropFirst("duplicate session: ".count)) already exists" }
+    if text.hasPrefix("can't find session") { return "That session has ended" }
+    if text.hasPrefix("no server running") || text.hasPrefix("error connecting to") { return "tmux isn't running" }
+    return text
+  }
+
   /// tmux turns "." and ":" in session names into "_"; the phone does the
   /// same up front so the name it attaches to is the name tmux keeps.
   static func cleanName(_ name: String) -> String {
