@@ -48,6 +48,7 @@ struct SessionsOverview: View {
   private static let spacing: CGFloat = 12
   private static let rowSpacing: CGFloat = 16
   private static let groupHead: CGFloat = 34
+  private static let topID = "top"
 
   var body: some View {
     let store = TmuxStore.shared
@@ -68,8 +69,13 @@ struct SessionsOverview: View {
         ScrollView {
           VStack(alignment: .leading, spacing: 18) {
             ForEach(groups) { group in
-              VStack(alignment: .leading, spacing: 10) {
-                if showHeads { HostHead(group: group, server: group.host.flatMap { store.servers[$0.serverKey] }, model: model) }
+              VStack(alignment: .leading, spacing: 6) {
+                if showHeads {
+                  HostHead(group: group, server: group.host.flatMap { store.servers[$0.serverKey] }, model: model) {
+                    let id = group.id
+                    DispatchQueue.main.async { withAnimation(Helm.spring(0.45)) { proxy.scrollTo(id, anchor: .top) } }
+                  }
+                }
                 if !group.collapsed {
                   LazyVGrid(columns: Array(repeating: GridItem(.fixed(grid.tileWidth), spacing: Self.spacing, alignment: .top),
                                            count: grid.columns),
@@ -89,17 +95,23 @@ struct SessionsOverview: View {
               .id(group.id)
             }
           }
-          .padding(Self.padding)
-          // Mission Control: a grid that fits sits in the middle of the panel.
-          .frame(minWidth: geo.size.width, minHeight: geo.size.height)
+          .padding(.horizontal, Self.padding)
+          // A host head sits close under the tab bar, as its own top margin.
+          .padding(.top, showHeads ? 6 : Self.padding)
+          .padding(.bottom, Self.padding)
+          // Mission Control: a lone grid that fits sits in the middle of the
+          // panel; host groups read from the top.
+          .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: showHeads ? .top : .center)
           .animation(Helm.spring(0.35), value: groups)
+          .id(Self.topID)
         }
         .scrollIndicators(.hidden)
         .scrollBounceBehavior(.basedOnSize)
-        .onChange(of: model.scrollTarget, initial: true) { _, target in
-          guard let target else { return }
-          proxy.scrollTo(target, anchor: .top)
-          model.scrollTarget = nil
+        // Each opening starts at the top, where the current tab's group is
+        // (the terminal shrinks into its tile there), or at the host `tmux
+        // host` asked for; closing forgets that host.
+        .onChange(of: model.isOpen ? model.scrollTarget ?? Self.topID : nil, initial: true) { _, target in
+          if let target { proxy.scrollTo(target, anchor: .top) } else { model.scrollTarget = nil }
         }
       }
     }
@@ -213,6 +225,8 @@ private struct HostHead: View {
   let group: SessionMap.Group
   let server: TmuxStore.Server?
   let model: MenuModel
+  /// Scrolls the group up into view once it has opened.
+  var reveal: () -> Void = {}
 
   var body: some View {
     HStack(spacing: 8) {
@@ -221,13 +235,16 @@ private struct HostHead: View {
         Button {
           let store = TmuxStore.shared
           store.setExpanded(host.serverKey, group.collapsed)
-          if group.collapsed { store.refresh(host) }
+          if group.collapsed {
+            store.refresh(host)
+            reveal()
+          }
         } label: {
           HStack(spacing: 8) {
             Text(host.alias)
               .font(Helm.mono(12.5, .semibold))
               .foregroundStyle(Helm.fg2)
-            if !group.collapsed, server?.status == .ready, let count = server?.sessions.count {
+            if !group.collapsed, server?.status == .ready, let count = server?.sessions.count, count > 0 {
               Text("\(count)")
                 .font(Helm.mono(12))
                 .foregroundStyle(Helm.muted)
@@ -248,22 +265,24 @@ private struct HostHead: View {
         .disabled(hasTabs)
         .accessibilityLabel(host.alias)
         Spacer(minLength: 0)
-        if !group.collapsed {
+        if !group.collapsed, server.map({ $0.status != .notInstalled && !$0.isUnreachable }) ?? true {
           Button {
             model.sessionsPage = .newTmux(host)
           } label: {
             Image(systemName: "plus")
               .font(.system(size: 14, weight: .medium))
               .foregroundStyle(Helm.fg2)
-              .frame(width: 34, height: 34)
+              .frame(width: 44, height: 34)
               .contentShape(Rectangle())
           }
           .buttonStyle(PressScale(0.9))
+          // Under the panel's close button.
+          .padding(.trailing, -14)
           .accessibilityLabel("New tmux session on \(host.alias)")
         }
       } else {
-        Text("local")
-          .font(Helm.mono(12.5, .semibold))
+        Text("This phone")
+          .font(Helm.sans(12.5, .semibold))
           .foregroundStyle(Helm.fg2)
           .frame(height: 34)
         Spacer(minLength: 0)
@@ -324,11 +343,12 @@ private struct ServerState: View {
   }
 }
 
-/// The line under a tile: name, then what runs where (or the host), with
-/// a dot for its state.
+/// The line under a tile: name, then what runs where, with a dot for an
+/// open tab and a ring for clients elsewhere.
 private struct TileLabel: View {
   let name: String
-  let detail: String
+  /// What runs where, longest first: the longest that fits shows.
+  let details: [String]
   let isCurrent: Bool
   var dot: Color?
   /// Other clients on the session (the Mac, another phone).
@@ -349,15 +369,18 @@ private struct TileLabel: View {
         }
       }
       HStack(spacing: 5) {
-        if let dot { Circle().fill(dot).frame(width: 6, height: 6) }
+        if let dot, !details.isEmpty { Circle().fill(dot).frame(width: 6, height: 6) }
         if others > 0 {
           Circle().strokeBorder(Helm.muted, lineWidth: 1.25).frame(width: 7, height: 7)
             .accessibilityLabel(others == 1 ? "attached elsewhere" : "attached \(others) times elsewhere")
         }
-        Text(detail)
-          .font(Helm.mono(11))
-          .foregroundStyle(Helm.muted)
-          .truncationMode(.middle)
+        ViewThatFits(in: .horizontal) {
+          ForEach(details, id: \.self) { Text($0) }
+        }
+        .font(Helm.mono(11))
+        .foregroundStyle(Helm.muted)
+        // Keeps the row's height for a tab with nothing to say here.
+        if details.isEmpty { Text(" ").font(Helm.mono(11)) }
       }
     }
     .lineLimit(1)
@@ -406,8 +429,8 @@ private struct TabTile: View {
         .accessibilityLabel("Close \(tab.sessionName)")
       }
       HStack(alignment: .center, spacing: 6) {
-        TileLabel(name: tab.sessionName, detail: session.map(SessionMap.detail) ?? tab.hostName ?? "local",
-                  isCurrent: isCurrent, dot: Self.state(of: tab), others: others)
+        TileLabel(name: tab.sessionName, details: session.map(SessionMap.details) ?? tab.hostName.map { [$0] } ?? [],
+                  isCurrent: isCurrent, dot: Self.dot(for: tab, isCurrent: isCurrent), others: others)
         if tab.isConnected {
           Button {
             space.showHistory(for: tab)
@@ -431,11 +454,11 @@ private struct TabTile: View {
     .accessibilityLabel("\(tab.sessionName), \(tab.hostName ?? "local")")
     .accessibilityAddTraits(.isButton)
     .contextMenu {
-      if tab.isConnected {
-        Button("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") { space.showHistory(for: tab) }
-      }
       if let rename = actions.rename {
         Button("Rename", systemImage: "pencil", action: rename)
+      }
+      if tab.isConnected {
+        Button("History", systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90") { space.showHistory(for: tab) }
       }
       if others > 0, let detach = actions.detachOthers {
         Button("Detach Others", systemImage: "rectangle.portrait.and.arrow.right", action: detach)
@@ -447,11 +470,11 @@ private struct TabTile: View {
     }
   }
 
-  /// Dot beside the detail: connecting (accent) or out of contact (amber).
-  static func state(of tab: Tab) -> Color? {
+  /// An open tab's dot: out of contact (amber), else the current tab (accent)
+  /// or another open one (fg-2).
+  static func dot(for tab: Tab, isCurrent: Bool) -> Color {
     if tab.unreachable { return Helm.warn }
-    if tab.connecting != nil { return Helm.accent }
-    return nil
+    return isCurrent || tab.connecting != nil ? Helm.accent : Helm.fg2
   }
 }
 
@@ -482,7 +505,7 @@ private struct SnapshotTile: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
           model.snapshotFrames[key] = frame
         }
-      TileLabel(name: session.name, detail: SessionMap.detail(session), isCurrent: false, others: others,
+      TileLabel(name: session.name, details: SessionMap.details(session), isCurrent: false, others: others,
                 age: SessionMap.age(session.lastActivity, now: .now))
         .frame(width: size.width, height: 36, alignment: .leading)
     }
@@ -634,9 +657,9 @@ private struct NewTmuxPage: View {
           .disabled(busy)
           .padding(16)
           if !folders.isEmpty {
-            GroupHead("Folders")
+            GroupHead("Recent")
             ForEach(folders, id: \.self) { path in
-              Row(title: SessionMap.shortPath(path), mono: true) { folder = path }
+              Row(title: path, mono: true) { folder = path }
             }
           }
         }

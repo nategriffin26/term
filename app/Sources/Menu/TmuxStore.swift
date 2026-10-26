@@ -96,21 +96,42 @@ enum SessionMap {
     max(0, session.attached - tabs.filter { $0.isConnected && $0.tmuxSession == session.name }.count)
   }
 
-  /// Folders to start a new session in: where the host's sessions are, most
-  /// recently active first, then home.
+  /// Folders to start a new session in, as shown and typed ("~/…", "/tmp/…"):
+  /// where the host's sessions are, most recently active first, then home.
   static func folders(_ sessions: [Tmux.Session]) -> [String] {
     var seen = Set<String>()
-    return (sessions.sorted { $0.lastActivity > $1.lastActivity }.map(\.path) + ["~"])
+    return (sessions.sorted { $0.lastActivity > $1.lastActivity }.map { shortPath($0.path) } + ["~"])
       .filter { !$0.isEmpty && seen.insert($0).inserted }
   }
 
-  /// "nvim · ~/Projects/api": what runs in the session's active pane, and where.
-  static func detail(_ session: Tmux.Session) -> String {
-    [session.command, shortPath(session.path)].filter { !$0.isEmpty }.joined(separator: " · ")
+  /// What runs in the session's active pane, and where, from the whole path
+  /// down to its last folder ("nvim · ~/Projects/api", "nvim · …/api"): a
+  /// narrow line shows the longest that fits, cut at a folder, never mid-name.
+  static func details(_ session: Tmux.Session) -> [String] {
+    let paths = session.path.isEmpty ? [""] : pathTails(session.path)
+    return paths.map { [session.command, $0].filter { !$0.isEmpty }.joined(separator: " · ") }
   }
 
-  /// A remote home ("/Users/NAME", "/home/NAME", "/root") shown as "~".
+  /// A path shown in full, then shortened from the front a folder at a time:
+  /// "/tmp/demo/api", "…/demo/api", "…/api".
+  static func pathTails(_ path: String) -> [String] {
+    let short = shortPath(path)
+    let parts = short.split(separator: "/")
+    guard parts.count > 1 else { return [short] }
+    // "~/a" → "…/a" saves nothing: each tail must be shorter than the last.
+    return (1..<parts.count).reversed().reduce(into: [short]) { tails, n in
+      let tail = "…/" + parts.suffix(n).joined(separator: "/")
+      if tail.count < tails[tails.count - 1].count { tails.append(tail) }
+    }
+  }
+
+  /// A remote home ("/Users/NAME", "/home/NAME", "/root") shown as "~", and
+  /// macOS's /private/tmp, /private/var and /private/etc as the /tmp, /var
+  /// and /etc one types.
   static func shortPath(_ path: String) -> String {
+    for root in ["/tmp", "/var", "/etc"] where path == "/private" + root || path.hasPrefix("/private" + root + "/") {
+      return String(path.dropFirst("/private".count))
+    }
     if path == "/root" || path.hasPrefix("/root/") { return "~" + path.dropFirst(5) }
     for base in ["/Users/", "/home/"] where path.hasPrefix(base) {
       let rest = path.dropFirst(base.count)
@@ -150,6 +171,8 @@ final class TmuxStore {
   struct Server: Equatable {
     var status = Status.loading
     var sessions: [Tmux.Session] = []
+
+    var isUnreachable: Bool { if case .unreachable = status { true } else { false } }
   }
 
   private(set) var servers: [String: Server] = [:]
@@ -194,12 +217,13 @@ final class TmuxStore {
     }
   }
 
-  /// One overview exec on `host`, unless one is already running.
+  /// One overview exec on `host`, unless one is already running. A retry of
+  /// an unreachable host shows as loading until it answers.
   func refresh(_ host: Host) {
     let key = host.serverKey
     guard !inFlight.contains(key) else { return }
     inFlight.insert(key)
-    if servers[key] == nil { servers[key] = Server() }
+    if servers[key] == nil || servers[key]?.isUnreachable == true { servers[key] = Server() }
     let skip = captured.filter { $0.key.hasPrefix(key + "\t") }
       .reduce(into: [String: Date]()) { $0[String($1.key.dropFirst(key.count + 1))] = $1.value }
     let command = Tmux.overviewCommand(skip: skip)

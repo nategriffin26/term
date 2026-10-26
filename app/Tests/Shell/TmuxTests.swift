@@ -123,16 +123,30 @@ final class TmuxTests: XCTestCase {
 
   /// The capture loop reads id then activity; the parser reads every field
   /// with the name last. Both depend on this order.
+  /// Bug: activity read from session_activity, which tmux moves only on key
+  /// input, so a session printing output (a build, a log) kept its first
+  /// snapshot and showed the age of its creation. window_activity moves on output.
   func testOverviewCommandListsTheParsersFieldsInOrder() {
     let command = Tmux.overviewCommand()
     let format = command.components(separatedBy: "list-sessions -F '")[1].components(separatedBy: "'")[0]
     XCTAssertEqual(format.components(separatedBy: "\t"), Tmux.fields.map { "#{\($0)}" })
     XCTAssertEqual(Tmux.fields.first, "session_id")
-    XCTAssertEqual(Tmux.fields[1], "session_activity")
+    XCTAssertEqual(Tmux.fields[1], "window_activity")
     XCTAssertEqual(Tmux.fields.last, "session_name")
     XCTAssertTrue(command.hasPrefix(Tmux.path + "; "))
     XCTAssertTrue(command.contains(#"tmux capture-pane -p -e -J -t "$i""#))
     XCTAssertTrue(command.contains(#"printf '\036%s\n' "$i""#))
+  }
+
+  /// Bug: a tmux server with no sessions showed "tmux failed": the capture
+  /// loop ran once for the empty line and its failed capture became the
+  /// exec's status (a session killed between list and capture did the same).
+  /// Seen through the test sshd: the fixed command shows "No sessions".
+  func testOverviewCommandSucceedsOnceTheListIsRead() {
+    let command = Tmux.overviewCommand()
+    XCTAssertTrue(command.contains(#"do [ -n "$i" ] || continue; case"#), command)
+    XCTAssertTrue(command.contains(#"tmux capture-pane -p -e -J -t "$i" 2>/dev/null;;"#), command)
+    XCTAssertTrue(command.hasSuffix("; done; exit 0"), command)
   }
 
   /// Unchanged sessions are skipped by id and activity in whole seconds,

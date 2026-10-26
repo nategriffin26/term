@@ -12,6 +12,7 @@ enum Tmux {
     /// Number of clients attached right now.
     var attached: Int
     var created: Date
+    /// Last output in its current window (what its snapshot shows).
     var lastActivity: Date
     /// The active pane of the current window: what runs there and where.
     var command: String
@@ -41,9 +42,11 @@ enum Tmux {
   static let path = #"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin""#
 
   /// list-sessions fields, tab-separated. The name goes last so a tab in it
-  /// stays in it; id and activity go first for the capture loop.
+  /// stays in it; id and activity go first for the capture loop. Activity is
+  /// window_activity: session_activity moves only on key input, so a session
+  /// printing output would keep its first snapshot.
   static let fields = [
-    "session_id", "session_activity", "session_windows", "session_attached", "session_created",
+    "session_id", "window_activity", "session_windows", "session_attached", "session_created",
     "pane_width", "pane_height", "cursor_x", "cursor_y", "pane_current_command", "pane_current_path",
     "session_name",
   ]
@@ -53,7 +56,9 @@ enum Tmux {
 
   /// One exec per refresh: the session list, then the visible screen of each
   /// session's active pane, except sessions in `skip` (id → activity) whose
-  /// activity has not moved since their last capture.
+  /// activity has not moved since their last capture. Once the list is read
+  /// the exec succeeds: an empty server, or a session gone before its
+  /// capture, still shows the list.
   static func overviewCommand(skip: [String: Date] = [:]) -> String {
     let format = fields.map { "#{\($0)}" }.joined(separator: "\t")
     let known = skip.sorted { $0.key < $1.key }.map { "\($0.key):\(Int($0.value.timeIntervalSince1970))" }
@@ -63,7 +68,8 @@ enum Tmux {
       "s=$?",
       #"printf '%s\n' "$l""#,
       "[ $s = 0 ] || exit $s",
-      #"printf '%s\n' "$l" | while IFS='\#t' read -r i a r; do case ' \#(known.joined(separator: " ")) ' in *" $i:$a "*) ;; *) printf '\036%s\n' "$i"; tmux capture-pane -p -e -J -t "$i";; esac; done"#,
+      #"printf '%s\n' "$l" | while IFS='\#t' read -r i a r; do [ -n "$i" ] || continue; case ' \#(known.joined(separator: " ")) ' in *" $i:$a "*) ;; *) printf '\036%s\n' "$i"; tmux capture-pane -p -e -J -t "$i" 2>/dev/null;; esac; done"#,
+      "exit 0",
     ].joined(separator: "; ")
   }
 

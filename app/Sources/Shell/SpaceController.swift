@@ -686,7 +686,10 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
     if fromIcon {
       panel.open(tab, fromIcon: true)
-    } else if tab == .sessions, page == .grid, let pane = focusedPane, !UIAccessibility.isReduceMotionEnabled {
+    } else if tab == .sessions, page == .grid, menu.scrollTarget == nil, let pane = focusedPane,
+              !UIAccessibility.isReduceMotionEnabled {
+      // The terminal shrinks into its tile only when the grid opens at the
+      // top, where that tile is (`tmux host` opens it at the host instead).
       openOverview(shrinking: pane)
     } else {
       panel.open(tab, fromIcon: false)

@@ -108,6 +108,14 @@ final class SessionMapTests: XCTestCase {
     XCTAssertEqual(SessionMap.folders([]), ["~"])
   }
 
+  /// Bug: a session in the remote home listed "~" twice (its "/Users/NAME"
+  /// and home), and picking a folder typed "/private/tmp/…" instead of the "/tmp/…" shown.
+  func testFoldersAreTheShownPathsOnce() {
+    let listed = [session("$1", "a", activity: 300, path: "/Users/dev"), session("$2", "b", activity: 200, path: "/private/tmp/x"),
+                  session("$3", "c", activity: 100, path: "/tmp/x")]
+    XCTAssertEqual(SessionMap.folders(listed), ["~", "/tmp/x"])
+  }
+
   func testShortPathShowsRemoteHomesAsTilde() {
     XCTAssertEqual(SessionMap.shortPath("/Users/dev/Projects/api"), "~/Projects/api")
     XCTAssertEqual(SessionMap.shortPath("/home/dev"), "~")
@@ -115,6 +123,36 @@ final class SessionMapTests: XCTestCase {
     XCTAssertEqual(SessionMap.shortPath("/rootkit"), "/rootkit")
     XCTAssertEqual(SessionMap.shortPath("/Users/"), "/Users/")
     XCTAssertEqual(SessionMap.shortPath("/srv/app"), "/srv/app")
+  }
+
+  /// Bug: a session in /tmp on a Mac showed as "/private/tmp", a path nobody types.
+  func testShortPathShowsMacPrivateFoldersAsTyped() {
+    XCTAssertEqual(SessionMap.shortPath("/private/tmp/term-demo/api"), "/tmp/term-demo/api")
+    XCTAssertEqual(SessionMap.shortPath("/private/tmp"), "/tmp")
+    XCTAssertEqual(SessionMap.shortPath("/private/var/log"), "/var/log")
+    XCTAssertEqual(SessionMap.shortPath("/private/etc"), "/etc")
+    XCTAssertEqual(SessionMap.shortPath("/private/tmpx"), "/private/tmpx")
+    XCTAssertEqual(SessionMap.shortPath("/private"), "/private")
+    XCTAssertEqual(SessionMap.shortPath("/tmp/x"), "/tmp/x")
+  }
+
+  /// Bug: a narrow tile cut the path in the middle ("sleep · /…m-demo/api");
+  /// it gives up whole folders from the front instead, the last one kept.
+  func testDetailsShortenThePathFromTheFrontAFolderAtATime() {
+    var s = session("$1", "a", path: "/Users/dev/Projects/term/app")
+    XCTAssertEqual(SessionMap.details(s), ["zsh · ~/Projects/term/app", "zsh · …/term/app", "zsh · …/app"])
+    s.path = "/private/tmp/term-demo/api"
+    s.command = "sleep"
+    XCTAssertEqual(SessionMap.details(s), ["sleep · /tmp/term-demo/api", "sleep · …/term-demo/api", "sleep · …/api"])
+    s.path = "/home/dev"
+    XCTAssertEqual(SessionMap.details(s), ["sleep · ~"])
+    s.path = "/"
+    XCTAssertEqual(SessionMap.details(s), ["sleep · /"])
+    s.path = ""
+    XCTAssertEqual(SessionMap.details(s), ["sleep"])
+    s.command = ""
+    s.path = "/srv/a"
+    XCTAssertEqual(SessionMap.details(s), ["/srv/a", "…/a"])
   }
 
   func testAgeAtItsBoundaries() {
