@@ -19,19 +19,20 @@ final class TmuxTests: XCTestCase {
   /// A list line in `Tmux.fields` order.
   private func line(_ id: String, _ name: String, activity: Int = 100, windows: Int = 1, attached: Int = 0,
                     command: String = "zsh", path: String = "/home/u") -> String {
-    "\(id)\t\(activity)\t\(windows)\t\(attached)\t50\t80\t24\t3\t5\t\(command)\t\(path)\t\(name)"
+    "\(id)\t\(activity)\t\(windows)\t\(attached)\t50\t80\t24\t3\t5\t\(command)\t\(path)\toff\t\(name)"
   }
 
   // MARK: - Overview output
 
   /// Captured from tmux 3.6a through the test sshd's zsh running
-  /// `overviewCommand(skip: ["$0": …])` (home paths made neutral): two
+  /// `overviewCommand(skip: ["$0": …])` (home paths made neutral; the status
+  /// field added later as that server prints it, status on top): two
   /// sessions captured, the skipped one listed without a screen, and tmux's
   /// own escaping of a tab in a name.
   func testRealOverviewOutput() {
-    let out = "$8\t1792969779\t1\t0\t1792969779\t50\t10\t11\t0\tzsh\t/home/u/term\tit's\\ttab\n"
-      + "$7\t1792969779\t1\t2\t1792969779\t60\t12\t11\t2\tzsh\t/private/tmp\tmy work\n"
-      + "$0\t1792950408\t1\t0\t1792945985\t51\t25\t8\t22\tzsh\t/home/u\tt1\n"
+    let out = "$8\t1792969779\t1\t0\t1792969779\t50\t10\t11\t0\tzsh\t/home/u/term\ton\tit's\\ttab\n"
+      + "$7\t1792969779\t1\t2\t1792969779\t60\t12\t11\t2\tzsh\t/private/tmp\ton\tmy work\n"
+      + "$0\t1792950408\t1\t0\t1792945985\t51\t25\t8\t22\tzsh\t/home/u\ton\tt1\n"
       + "\u{1e}$7\n\u{1b}[32me2e\u{1b}[39m /tmp % printf red\n\u{1b}[31mred\u{1b}[0m plain\n\n"
       + "\u{1e}$8\n\u{1b}[32me2e\u{1b}[39m term % \n\n\n"
     let o = overview(out)
@@ -39,17 +40,22 @@ final class TmuxTests: XCTestCase {
     let work = o.sessions[1]
     XCTAssertEqual(work, Tmux.Session(id: "$7", name: "my work", windows: 1, attached: 2, created: at(1_792_969_779),
                                       lastActivity: at(1_792_969_779), command: "zsh", path: "/private/tmp",
-                                      width: 60, height: 12, cursorX: 11, cursorY: 2))
+                                      width: 60, height: 12, cursorX: 11, cursorY: 2, statusRows: 1))
     XCTAssertEqual(Set(o.screens.keys), ["$7", "$8"])
     XCTAssertEqual(o.screens["$7"], "\u{1b}[32me2e\u{1b}[39m /tmp % printf red\n\u{1b}[31mred\u{1b}[0m plain\n")
     XCTAssertEqual(o.screens["$8"], "\u{1b}[32me2e\u{1b}[39m term % \n\n")
   }
 
   func testFieldsAreReadInTheCommandsOrder() {
-    let o = overview("$3\t300\t4\t2\t200\t120\t40\t7\t9\tnvim\t/srv/app\tmain\n")
+    let o = overview("$3\t300\t4\t2\t200\t120\t40\t7\t9\tnvim\t/srv/app\t2\tmain\n")
     XCTAssertEqual(o.sessions, [Tmux.Session(id: "$3", name: "main", windows: 4, attached: 2, created: at(200),
                                             lastActivity: at(300), command: "nvim", path: "/srv/app",
-                                            width: 120, height: 40, cursorX: 7, cursorY: 9)])
+                                            width: 120, height: 40, cursorX: 7, cursorY: 9, statusRows: 2)])
+  }
+
+  /// A status line at the bottom or turned off takes no rows above the pane.
+  func testStatusOffOrBelowTakesNoRowsAbove() {
+    XCTAssertEqual(overview(line("$1", "a")).sessions.first?.statusRows, 0)
   }
 
   /// The name is the last field, so tabs, spaces and colons in it can't shift the others.
@@ -204,6 +210,13 @@ final class TmuxTests: XCTestCase {
   func testScreenBytes() {
     let bytes = String(decoding: Tmux.screenBytes("\u{1b}[44mtop\nnext", cursorX: 0, cursorY: 1), as: UTF8.self)
     XCTAssertEqual(bytes, "\u{1b}[0m\u{1b}[H\u{1b}[2J\u{1b}[44mtop\u{1b}[0m\r\nnext\u{1b}[0m\u{1b}[2;1H")
+  }
+
+  /// The screen a tab shows while it attaches sits below tmux's status line,
+  /// where the pane will be, so the handoff doesn't shift it a row.
+  func testScreenBytesBelowStatusLine() {
+    let bytes = String(decoding: Tmux.screenBytes("top\nnext", cursorX: 2, cursorY: 1, top: 1), as: UTF8.self)
+    XCTAssertEqual(bytes, "\u{1b}[0m\u{1b}[H\u{1b}[2J\r\ntop\u{1b}[0m\r\nnext\u{1b}[0m\u{1b}[3;3H")
   }
 
   func testAttachCommandCreatesOrAttachesByName() {

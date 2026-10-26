@@ -546,7 +546,8 @@ private struct SnapshotTile: View {
   }
 
   private func open() {
-    model.space?.attach(host, session: session.name, tile: model.snapshotFrames[key])
+    model.space?.attach(host, session: session.name, tile: model.snapshotFrames[key],
+                        preview: TmuxStore.shared.screen(host.serverKey, session.id))
   }
 }
 

@@ -182,6 +182,8 @@ final class TmuxStore {
   /// One terminal engine per snapshot, fed each new capture.
   @ObservationIgnored private var engines: [String: Session] = [:]
   @ObservationIgnored private var captured: [String: Date] = [:]
+  /// The last capture of each snapshot, for the tab that attaches to it to show until it draws.
+  @ObservationIgnored private var screens: [String: Data] = [:]
   @ObservationIgnored private var inFlight: Set<String> = []
 
   static let expandedKey = "sessions.expandedHosts"
@@ -202,6 +204,8 @@ final class TmuxStore {
 
   /// The snapshot engine of a session, once it has been captured.
   func engine(_ key: String, _ id: String) -> Session? { engines[key + "\t" + id] }
+  /// The last capture of a session, as terminal bytes.
+  func screen(_ key: String, _ id: String) -> Data? { screens[key + "\t" + id] }
 
   /// Refreshes `hosts` now and every `interval` until the task is cancelled
   /// (the overview hides). The first pass also retries unreachable hosts.
@@ -256,6 +260,7 @@ final class TmuxStore {
     for id in engines.keys where id.hasPrefix(key + "\t") && !alive.contains(id) {
       engines[id] = nil
       captured[id] = nil
+      screens[id] = nil
     }
     if servers[key] != server { servers[key] = server }
   }
@@ -273,6 +278,7 @@ final class TmuxStore {
       return
     }
     engine.feed(Tmux.screenBytes(screen, cursorX: session.cursorX, cursorY: session.cursorY))
+    screens[id] = Tmux.screenBytes(screen, cursorX: session.cursorX, cursorY: session.cursorY, top: session.statusRows)
     captured[id] = session.lastActivity
   }
 

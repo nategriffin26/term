@@ -296,13 +296,17 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     guard let tab = makeTab(at: index) else { return nil }
     show(tab, in: pane)
     if focus { tab.view.becomeFirstResponder() }
+    // Connecting sends the tab's grid size: laid out now, it is the pane's
+    // instead of a fresh terminal's 80x24, which tmux would first draw at.
+    pane.container.layoutIfNeeded()
     return tab
   }
 
   /// Goes into tmux session `name` on `host`: the tab already attached to it
   /// comes forward (from any window); otherwise a tab attaches to it, growing
-  /// out of `tile` (its snapshot in the overview, window coordinates).
-  func attach(_ host: Host, session name: String, tile: CGRect? = nil) {
+  /// out of `tile` (its snapshot in the overview, window coordinates) and
+  /// showing `preview` (that snapshot's screen) until it connects.
+  func attach(_ host: Host, session name: String, tile: CGRect? = nil, preview: Data? = nil) {
     if let open = Self.live.flatMap(\.tabs).first(where: { $0.target?.serverKey == host.serverKey && $0.tmuxSession == name }) {
       zoom(into: open)
       return
@@ -313,7 +317,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     var target = host
     target.startupCommand = Tmux.attachCommand(name)
     tab.echo("tmux \(host.alias) \(name)\r\n")
-    tab.connect(target, tmuxSession: name)
+    tab.connect(target, tmuxSession: name, preview: preview)
     guard let pane = panes.first(where: { $0.tab === tab }), let tile, panel.isOpen,
           !UIAccessibility.isReduceMotionEnabled else {
       closeMenu()

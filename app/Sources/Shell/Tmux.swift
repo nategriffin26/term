@@ -22,6 +22,8 @@ enum Tmux {
     var height: Int
     var cursorX: Int
     var cursorY: Int
+    /// Rows tmux's status line takes above the pane on its clients.
+    var statusRows = 0
   }
 
   /// One refresh of a host: its sessions, most recently active first, and
@@ -48,6 +50,8 @@ enum Tmux {
   static let fields = [
     "session_id", "window_activity", "session_windows", "session_attached", "session_created",
     "pane_width", "pane_height", "cursor_x", "cursor_y", "pane_current_command", "pane_current_path",
+    // The status line's rows when it sits on top ("on", or a count), else "off".
+    "?#{==:#{status-position},top},#{status},off",
     "session_name",
   ]
 
@@ -101,17 +105,19 @@ enum Tmux {
           let activity = TimeInterval(f[1]), let windows = Int(f[2]), let attached = Int(f[3]),
           let created = TimeInterval(f[4]), let width = Int(f[5]), let height = Int(f[6]),
           let cx = Int(f[7]), let cy = Int(f[8]) else { return nil }
-    return Session(id: f[0], name: f[11], windows: windows, attached: attached,
+    return Session(id: f[0], name: f[12], windows: windows, attached: attached,
                    created: Date(timeIntervalSince1970: created), lastActivity: Date(timeIntervalSince1970: activity),
-                   command: f[9], path: f[10], width: width, height: height, cursorX: cx, cursorY: cy)
+                   command: f[9], path: f[10], width: width, height: height, cursorX: cx, cursorY: cy,
+                   statusRows: f[11] == "on" ? 1 : Int(f[11]) ?? 0)
   }
 
   /// What a terminal engine is fed to show a captured screen as it was:
-  /// cleared, rows from the top, the cursor where the pane had it.
-  static func screenBytes(_ screen: String, cursorX: Int, cursorY: Int) -> Data {
+  /// cleared, rows from the top (below `top` blank rows, where tmux's status
+  /// line goes), the cursor where the pane had it.
+  static func screenBytes(_ screen: String, cursorX: Int, cursorY: Int, top: Int = 0) -> Data {
     let rows = screen.split(separator: "\n", omittingEmptySubsequences: false)
-    return Data(("\u{1b}[0m\u{1b}[H\u{1b}[2J" + rows.joined(separator: "\u{1b}[0m\r\n")
-      + "\u{1b}[0m\u{1b}[\(cursorY + 1);\(cursorX + 1)H").utf8)
+    return Data(("\u{1b}[0m\u{1b}[H\u{1b}[2J" + String(repeating: "\r\n", count: top) + rows.joined(separator: "\u{1b}[0m\r\n")
+      + "\u{1b}[0m\u{1b}[\(cursorY + top + 1);\(cursorX + 1)H").utf8)
   }
 
   // MARK: - Actions

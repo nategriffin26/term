@@ -24,6 +24,9 @@ final class Tab {
   private(set) var remote: Session?
   /// A connection in progress: shown once it reports CONNECTED.
   private(set) var connecting: Session?
+  /// Shown instead of the prompt while `connecting` comes up: the screen of
+  /// the tmux session it attaches to, as last captured.
+  private var preview: Session?
   /// What `remote`/`connecting` was opened with; reconnect and history reuse it.
   private(set) var target: Host?
   /// tmux session the remote is attached to, when known.
@@ -109,8 +112,9 @@ final class Tab {
   // MARK: - Connecting
 
   /// Opens `target` (its startup command, or `command` instead), replacing any remote.
-  func connect(_ target: Host, tmuxSession: String? = nil) {
+  func connect(_ target: Host, tmuxSession: String? = nil, preview screen: Data? = nil) {
     connecting = nil
+    dropPreview()
     let spec = Self.spec(for: target)
     guard let session = Session(connect: spec, cols: local.cols, rows: local.rows) else {
       echo("\u{1b}[31mCould not start a connection to \(target.alias).\u{1b}[0m\r\n")
@@ -124,6 +128,12 @@ final class Tab {
     if remote == nil {
       let via = target.transport == .mosh ? "mosh" : "ssh"
       echo("Connecting to \(target.alias) (\(target.user)@\(target.hostname)) over \(via)…\r\n")
+      if let screen, let shown = Session(localCols: local.cols, rows: local.rows) {
+        shown.setTheme(AppSettings.shared.termTheme)
+        shown.feed(screen)
+        preview = shown
+        view.session = shown
+      }
     }
     host?.tabDidChange(self)
   }
@@ -142,7 +152,14 @@ final class Tab {
   /// Abandons a connection attempt; the screen stays as it is.
   func cancelConnecting() {
     connecting = nil
+    dropPreview()
     host?.tabDidChange(self)
+  }
+
+  private func dropPreview() {
+    guard preview != nil else { return }
+    preview = nil
+    view.session = remote ?? local
   }
 
   /// The tmux session this tab is attached to was renamed: its name, a
@@ -158,6 +175,7 @@ final class Tab {
   /// Ends the remote session and returns to the prompt.
   func disconnect() {
     connecting = nil
+    dropPreview()
     if remote != nil { closeRemote(reason: "") }
   }
 
@@ -245,7 +263,22 @@ final class Tab {
         connecting = nil
         let old = remote
         remote = session
-        view.session = session
+        if preview == nil {
+          view.session = session
+        } else {
+          // A mosh session connects blank and tmux draws a moment later:
+          // the snapshot stays until then, or a second if nothing draws.
+          session.onFrame = { [weak self, weak session] in
+            guard let self, let session,
+                  !session.text(fromCol: 0, row: 0, toCol: session.cols - 1, row: session.rows - 1).allSatisfy(\.isWhitespace)
+            else { return }
+            reveal(session)
+          }
+          Task { [weak self, weak session] in
+            try? await Task.sleep(for: .seconds(1))
+            if let self, let session { reveal(session) }
+          }
+        }
         reconnecting = false
         autoReconnect.stop()
         _ = old  // freed when this scope ends
@@ -260,6 +293,7 @@ final class Tab {
     case Int(TERM_STATUS_CLOSED.rawValue):
       if session === connecting {
         connecting = nil
+        dropPreview()
         if remote == nil {
           let why = message.isEmpty ? "Connection closed." : message
           echo("\u{1b}[31m\(why)\u{1b}[0m\r\n")
@@ -274,12 +308,20 @@ final class Tab {
     host?.tabDidChange(self)
   }
 
+  /// The connected session takes over from the preview.
+  private func reveal(_ session: Session) {
+    guard preview != nil, remote === session else { return }
+    preview = nil
+    view.session = session
+  }
+
   private func closeRemote(reason: String) {
     let label = target?.alias ?? "host"
     remote = nil
     unreachable = false
     reconnecting = false
     autoReconnect.stop()
+    preview = nil
     view.session = local
     title = "term"
     if reason.isEmpty {
