@@ -120,3 +120,32 @@ fn vnc_can_be_freed_from_its_frame_callback_without_later_events() {
     log.wait(2,1); server.join().unwrap();
     assert_eq!(log.events.lock().unwrap().iter().map(|e| e.0).collect::<Vec<_>>(), [1,2]);
 }
+
+#[test]
+fn vnc_pause_keeps_ssh_and_input_alive_and_resumes_with_a_full_request() {
+    let sshd = Sshd::start(); let params = Params::new(&sshd,transport::SSH);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let target = CString::new(listener.local_addr().unwrap().to_string()).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut s = listener.accept().unwrap().0; handshake(&mut s);
+        // The pointer is queued after pause, so receiving it is a barrier.
+        assert_eq!(read::<6>(&mut s), [5,0,0,1,0,1]);
+        s.write_all(&[0,0,0,1,0,0,0,0,0,1,0,1,0,0,0,0,1,2,3,0]).unwrap();
+        // No incremental request may appear before this key.
+        assert_eq!(read::<8>(&mut s), [4,1,0,0,0,0,0,65]);
+        assert_eq!(read::<10>(&mut s), [3,0,0,0,0,0,0,4,0,4]);
+        rect(&mut s,0,0,1,1,0,&[4,5,6,0]);
+    });
+    let log = Box::<VncLog>::default();
+    let v = unsafe { term_vnc_connect(&params.raw(),target.as_ptr(),std::ptr::null(),std::ptr::null(),log.callbacks()) };
+    log.wait(1,1);
+    unsafe { term_vnc_pause(v,true); term_vnc_pointer(v,1,1,0); }
+    log.wait(2,1);
+    assert_eq!(&frame(v).1[..4], &[1,2,3,255]);
+    unsafe { term_vnc_key(v,65,true); term_vnc_pause(v,false); }
+    log.wait(2,2);
+    assert_eq!(&frame(v).1[..4], &[4,5,6,255]);
+    server.join().unwrap();
+    log.wait(4,1);
+    unsafe { term_vnc_free(v) };
+}

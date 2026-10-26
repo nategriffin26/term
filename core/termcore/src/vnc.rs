@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 struct State { client: ::vnc::Client, frame_pending: bool }
-enum Input { Pointer(u16,u16,u8), Key(u32,bool) }
+enum Input { Pointer(u16,u16,u8), Key(u32,bool), Pause(bool) }
 pub struct TermVnc {
     gate: CallbackGate,
     state: Mutex<State>,
@@ -96,6 +96,7 @@ pub unsafe extern "C" fn term_vnc_connect(c: *const TermConnect, target: *const 
                             match input {
                                 Input::Pointer(x,y,buttons) => state.client.pointer(x,y,buttons),
                                 Input::Key(key,down) => state.client.key(key,down),
+                                Input::Pause(paused) => state.client.pause(paused),
                             }
                             state.client.output()
                         };
@@ -163,6 +164,12 @@ pub unsafe extern "C" fn term_vnc_pointer(v: *const TermVnc, x: u16, y: u16, but
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn term_vnc_key(v: *const TermVnc, key: u32, down: bool) {
     if let Some(v) = unsafe { v.as_ref() } { let _ = v.input.send(Input::Key(key,down)); }
+}
+/// # Safety
+/// v is NULL or live, as for term_vnc_pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn term_vnc_pause(v: *const TermVnc, paused: bool) {
+    if let Some(v) = unsafe { v.as_ref() } { let _ = v.input.send(Input::Pause(paused)); }
 }
 /// # Safety
 /// v is NULL or an owned live client, with no outstanding framebuffer lock.

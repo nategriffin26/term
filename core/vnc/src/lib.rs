@@ -20,13 +20,14 @@ pub struct Client {
     user: Zeroizing<String>,
     password: Zeroizing<String>,
     apple: bool,
+    paused: bool,
     pub frame: Frame,
     pub cursor: Option<Cursor>,
     zrle: frame::Zrle,
 }
 impl Client {
     pub fn new(user: String, password: String) -> Self {
-        Self { state: State::Version, input: BytesMut::new(), output: Vec::new(), user: Zeroizing::new(user), password: Zeroizing::new(password), apple: false, frame: Frame::default(), cursor: None, zrle: frame::Zrle::default() }
+        Self { state: State::Version, input: BytesMut::new(), output: Vec::new(), user: Zeroizing::new(user), password: Zeroizing::new(password), apple: false, paused: false, frame: Frame::default(), cursor: None, zrle: frame::Zrle::default() }
     }
     pub fn output(&mut self) -> Vec<u8> { std::mem::take(&mut self.output) }
     pub fn is_closed(&self) -> bool { matches!(self.state, State::Closed) }
@@ -67,6 +68,7 @@ impl Client {
         events
     }
     fn request(&mut self, incremental: bool) {
+        if self.paused { return; }
         self.output.extend_from_slice(&[3, incremental as u8, 0, 0, 0, 0]);
         self.output.extend_from_slice(&(self.frame.width as u16).to_be_bytes());
         self.output.extend_from_slice(&(self.frame.height as u16).to_be_bytes());
@@ -218,6 +220,15 @@ impl Client {
             State::Closed => return Ok(false),
         }
         Ok(true)
+    }
+    /// Keeps authentication and input active while stopping framebuffer requests.
+    /// Responses to requests already sent are still decoded.
+    pub fn pause(&mut self, paused: bool) {
+        if self.paused == paused { return; }
+        self.paused = paused;
+        if !paused && matches!(self.state, State::Message | State::Rect(_) | State::Pixels(..)) {
+            self.request(false);
+        }
     }
     pub fn pointer(&mut self, x: u16, y: u16, buttons: u8) {
         if !matches!(self.state, State::Message | State::Rect(_) | State::Pixels(..)) { return; }

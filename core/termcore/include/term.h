@@ -522,6 +522,12 @@ void term_vnc_pointer(TermVnc *v, uint16_t x, uint16_t y, uint8_t buttons);
 // Apple's server expects.
 void term_vnc_key(TermVnc *v, uint32_t keysym, bool down);
 
+// Keeps the authenticated connection and key/pointer input active, but stops
+// framebuffer requests while paused. Already-requested updates may still arrive.
+// Unpausing requests one full frame, then resumes incremental updates.
+// Repeating the current state does nothing. Thread rules match term_vnc_pointer.
+void term_vnc_pause(TermVnc *v, bool paused);
+
 // Disconnects. No callback for v runs after this returns.
 void term_vnc_free(TermVnc *v);
 

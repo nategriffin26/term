@@ -230,3 +230,40 @@ fn authentication_failure_preserves_server_reason_or_uses_clear_default() {
         assert_eq!(c.feed(&failure), [Event::Closed(if reason.is_empty() { "The Mac refused the user name or password." } else { reason }.into())]);
     }
 }
+
+#[test]
+fn pausing_stops_update_requests_without_disabling_input_and_resume_refreshes_once() {
+    let mut c = client();
+    c.pause(true);
+    c.pause(true);
+    assert_eq!(c.feed(&rectangle(0,0,1,1,0,&[1,2,3,0])), [Event::Frame]);
+    c.feed(&[0,0,0,0]);
+    assert!(c.output().is_empty());
+    c.pointer(2,3,1);
+    c.key(0xffeb,true);
+    assert_eq!(c.output(), [5,1,0,2,0,3,4,1,0,0,0,0,255,237]);
+    c.pause(false);
+    c.pause(false);
+    assert_eq!(c.output(), [3,0,0,0,0,0,0,4,0,4]);
+    c.feed(&rectangle(0,0,1,1,0,&[4,5,6,0]));
+    assert_eq!(c.output(), [3,1,0,0,0,0,0,4,0,4]);
+    c.pause(true);
+    c.eof();
+    c.pause(false);
+    assert!(c.output().is_empty());
+}
+
+#[test]
+fn pausing_before_handshake_defers_initial_frame_request_until_resume() {
+    let mut c = Client::new(String::new(),String::new());
+    c.pause(true);
+    c.feed(b"RFB 003.008\n"); c.output();
+    c.feed(&[1,1]); c.output();
+    c.feed(&[0,0,0,0]); c.output();
+    assert_eq!(c.feed(&init(4,4)), [Event::Connected]);
+    let mut expected = vec![0,0,0,0,32,24,0,1,0,255,0,255,0,255,16,8,0,0,0,0,2,0,0,5];
+    for encoding in [16i32,1,0,-239,-223] { expected.extend(encoding.to_be_bytes()); }
+    assert_eq!(c.output(), expected);
+    c.pause(false);
+    assert_eq!(c.output(), [3,0,0,0,0,0,0,4,0,4]);
+}
