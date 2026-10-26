@@ -33,6 +33,10 @@ targets:
     sources:
       - path: Sources
       - path: Resources
+        excludes:
+          - Themes
+      - path: Resources/Themes
+        type: folder
     info:
       path: Info.plist
       properties:

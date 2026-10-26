@@ -47,7 +47,21 @@ final class TerminalView: UIView {
         }
     }
 
+    /// Off for pages that only show text (tmux history).
     var cursorBlinkEnabled = true {
+        didSet { updateBlinkTimer(); setNeedsRender() }
+    }
+    /// The cursor drawn whatever the program asks for (the user keeps theirs).
+    var cursorOverride: CursorLook? {
+        didSet { if cursorOverride != oldValue { updateBlinkTimer(); setNeedsRender() } }
+    }
+    /// Cell height as a multiple of the font's line height.
+    var lineSpacing: CGFloat = 1 {
+        didSet { if lineSpacing != oldValue { reloadFonts() } }
+    }
+    /// A settings preview: draws and blinks its cursor as focused without
+    /// taking the keyboard.
+    var isPreview = false {
         didSet { updateBlinkTimer(); setNeedsRender() }
     }
     var showsSmartKeysWithHardwareKeyboard = false {
@@ -76,8 +90,13 @@ final class TerminalView: UIView {
     var zoomCenter = CGPoint.zero
     var isPinching = false
 
-    var blinkOn = true
+    var blinkOn = true              // SGR 5 text
     private var blinkTimer: Timer?
+    /// When the cursor last went solid; its blink fade counts from here.
+    private var blinkEpoch: CFTimeInterval = 0
+    private var cursorBlinks = false
+    private var drawnCursorAlpha: Float = 1
+    private var frameTime: CFTimeInterval = 0
 
     var selection: (start: GridPoint, end: GridPoint)?
     let keyboardSpacer = UIView()
@@ -176,6 +195,11 @@ final class TerminalView: UIView {
                                                name: .GCKeyboardDidDisconnect, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardFrameWillChange(_:)),
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        // Blink only while the scene is in front and active.
+        NotificationCenter.default.addObserver(self, selector: #selector(sceneActivationChanged(_:)),
+                                               name: UIScene.didActivateNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(sceneActivationChanged(_:)),
+                                               name: UIScene.willDeactivateNotification, object: nil)
         attach()
     }
 
@@ -199,6 +223,8 @@ final class TerminalView: UIView {
         super.didMoveToWindow()
         displayLink?.invalidate()
         displayLink = nil
+        sceneActive = window?.windowScene?.activationState == .foregroundActive
+        updateBlinkTimer()
         guard window != nil else { return }
         let link = CADisplayLink(target: DisplayLinkTarget(self), selector: #selector(DisplayLinkTarget.tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
@@ -265,10 +291,10 @@ final class TerminalView: UIView {
         let s = traitCollection.displayScale
         guard window != nil, s > 0 else { return }
         scale = s
-        let fonts = FontSet(family: fontFamily, pointSize: fontSize, scale: scale)
+        if let old = renderer?.fonts, old.family == fontFamily, old.pointSize == fontSize, old.scale == scale,
+           old.lineHeight == lineSpacing { return }
+        let fonts = FontSet(family: fontFamily, pointSize: fontSize, scale: scale, lineHeight: lineSpacing)
         if let renderer {
-            let old = renderer.fonts
-            if old.family == fonts.family, old.pointSize == fonts.pointSize, old.scale == fonts.scale { return }
             renderer.setFonts(fonts)
         } else {
             renderer = Renderer(fonts: fonts)
@@ -316,10 +342,12 @@ final class TerminalView: UIView {
         displayLink?.isPaused = false
     }
 
-    var isAnimating: Bool { isCoasting || isPinching }
+    var isAnimating: Bool { isCoasting || isPinching || cursorFading }
 
     fileprivate func tick(_ link: CADisplayLink) {
+        frameTime = link.targetTimestamp
         if isCoasting { coast(to: link.targetTimestamp) }
+        if cursorAlpha != drawnCursorAlpha { needsDraw = true }
         render()
         if !isAnimating && !needsDraw { link.isPaused = true }
     }
@@ -338,12 +366,14 @@ final class TerminalView: UIView {
             renderer.build(snapshot, overlay: overlay)
             needsBuild = false
             needsDraw = true
-            if renderer.hasBlinkingText != (blinkTimer != nil) { updateBlinkTimer() }
+            updateBlinkTimer()
         }
         guard needsDraw, metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else { return }
         needsDraw = false
+        let p = placement
         guard let drawable = metalLayer.nextDrawable(),
-              let cb = renderer.encode(into: drawable.texture, placement: placement) else { return }
+              let cb = renderer.encode(into: drawable.texture, placement: p) else { return }
+        drawnCursorAlpha = p.cursorAlpha
         cb.present(drawable)
         cb.commit()
     }
@@ -353,13 +383,17 @@ final class TerminalView: UIView {
             viewport: SIMD2(Float(metalLayer.drawableSize.width), Float(metalLayer.drawableSize.height)),
             origin: SIMD2(Float(gridOrigin.x), Float(gridOrigin.y)),
             zoom: Float(zoom),
-            zoomCenter: SIMD2(Float(zoomCenter.x), Float(zoomCenter.y)))
+            zoomCenter: SIMD2(Float(zoomCenter.x), Float(zoomCenter.y)),
+            cursorAlpha: cursorAlpha)
     }
+
+    /// The cursor looks focused: this terminal has the keyboard, or it is a preview.
+    private var showsFocus: Bool { isFirstResponder || isPreview }
 
     var overlay: Renderer.Overlay {
         var o = Renderer.Overlay()
-        o.focused = isFirstResponder
-        o.cursorOn = blinkOn || !cursorBlinkEnabled
+        o.focused = showsFocus
+        o.cursorOverride = cursorOverride
         o.blinkOn = blinkOn
         o.selection = selectionSpan
         o.selectionColor = tintColor.argb
@@ -379,31 +413,65 @@ final class TerminalView: UIView {
 
     // ------------------------------------------------------------ blink
 
+    /// Only while the window's scene is in front and active.
+    private var sceneActive = false
+
+    @objc private func sceneActivationChanged(_ note: Notification) {
+        guard let scene = note.object as? UIScene, scene === window?.windowScene else { return }
+        sceneActive = note.name == UIScene.didActivateNotification
+        updateBlinkTimer()
+    }
+
+    private var cursorAlpha: Float { cursorBlinks ? CursorBlink.alpha(at: frameTime - blinkEpoch) : 1 }
+    private var cursorFading: Bool { cursorBlinks && CursorBlink.isFading(at: frameTime - blinkEpoch) }
+
+    /// One timer drives both blinks: each phase start begins a cursor fade
+    /// (drawn by the display link, which sleeps between fades) and flips
+    /// SGR 5 text. It runs only while something visible blinks.
     func updateBlinkTimer() {
-        let cursorBlinks = snapshot.cursorBlink && cursorBlinkEnabled && isFirstResponder && snapshot.cursorVisible
-        let wants = cursorBlinks || (renderer?.hasBlinkingText ?? false)
-        if wants, blinkTimer == nil {
-            blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.blinkOn.toggle()
-                    self.setNeedsRender()
-                }
-            }
-        } else if !wants, let t = blinkTimer {
+        let live = window != nil && sceneActive
+        let look = CursorLook.resolve(frameStyle: snapshot.cursorStyle, frameBlinks: snapshot.cursorBlink,
+                                      override: cursorOverride, focused: showsFocus)
+        let blinks = live && cursorBlinkEnabled && look.blinks && snapshot.cursorVisible
+        let text = live && (renderer?.hasBlinkingText ?? false)
+        if blinks != cursorBlinks {
+            cursorBlinks = blinks
+            if blinks { startBlinkTimer() }
+            setNeedsRender(build: false)
+        }
+        if blinks || text {
+            if blinkTimer == nil { startBlinkTimer() }
+        } else if let t = blinkTimer {
             t.invalidate()
             blinkTimer = nil
             if !blinkOn { blinkOn = true; setNeedsRender() }
         }
     }
 
+    private func startBlinkTimer() {
+        blinkTimer?.invalidate()
+        blinkEpoch = CACurrentMediaTime()
+        frameTime = blinkEpoch
+        let timer = Timer(fire: Date(timeIntervalSinceNow: CursorBlink.phase), interval: CursorBlink.phase,
+                          repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.blinkPhaseBegan() }
+        }
+        timer.tolerance = 0.02
+        RunLoop.main.add(timer, forMode: .common)
+        blinkTimer = timer
+    }
+
+    private func blinkPhaseBegan() {
+        let text = renderer?.hasBlinkingText ?? false
+        if text { blinkOn.toggle() }
+        setNeedsRender(build: text)
+    }
+
     /// Shows the cursor solid again (after input) and restarts its phase.
     func restartBlink() {
         guard blinkTimer != nil else { return }
-        blinkTimer?.invalidate()
-        blinkTimer = nil
         blinkOn = true
-        updateBlinkTimer()
+        startBlinkTimer()
         setNeedsRender()
     }
 
@@ -519,6 +587,26 @@ private final class DisplayLinkTarget: NSObject {
     @MainActor @objc func tick(_ link: CADisplayLink) {
         guard let view else { link.invalidate(); return }
         view.tick(link)
+    }
+}
+
+/// Cursor blink: solid for a phase, fading out over the first `fade` seconds
+/// of the next, hidden, fading back in; the first phase starts solid.
+enum CursorBlink {
+    static let phase: CFTimeInterval = 0.6
+    static let fade: CFTimeInterval = 0.12
+
+    /// Cursor opacity `t` seconds after the cursor last went solid.
+    static func alpha(at t: CFTimeInterval) -> Float {
+        guard t >= phase else { return 1 }
+        let k = (t / phase).rounded(.down)
+        let u = min((t - k * phase) / fade, 1)
+        let eased = Float(u * u * (3 - 2 * u))
+        return Int(k) % 2 == 1 ? 1 - eased : eased
+    }
+
+    static func isFading(at t: CFTimeInterval) -> Bool {
+        t >= phase && t.truncatingRemainder(dividingBy: phase) < fade
     }
 }
 

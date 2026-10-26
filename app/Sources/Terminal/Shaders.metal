@@ -12,6 +12,7 @@ struct Uniforms {
     uint cols;
     uint rows;
     uint defaultBg;     // 0xAARRGGBB
+    float alpha;        // multiplies glyph and rect colours (the cursor's blink fade)
 };
 
 struct GlyphInstance {
@@ -85,7 +86,7 @@ vertex GlyphOut glyph_vertex(uint vid [[vertex_id]],
     GlyphOut o;
     o.position = toClip(u.origin + float2(g.pos) + corner * size, u);
     o.uv = float2(g.uv) + corner * size;
-    o.color = unpack(g.color);
+    o.color = unpack(g.color) * float4(1.0, 1.0, 1.0, u.alpha);
     o.flags = g.flags;
     return o;
 }
@@ -123,7 +124,7 @@ vertex RectOut rect_vertex(uint vid [[vertex_id]],
     o.position = toClip(u.origin + r.pos + local, u);
     o.local = local;
     o.grid = r.pos + local;
-    o.color = unpack(r.color);
+    o.color = unpack(r.color) * float4(1.0, 1.0, 1.0, u.alpha);
     o.size = r.size;
     o.kind = r.kind;
     return o;

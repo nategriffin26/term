@@ -5,9 +5,16 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
   static let windowActivity = AppIdentity.bundleID + ".window"
 
   var window: UIWindow?
+  private var settingsObserver: NSObjectProtocol?
 
   func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
     guard let scene = scene as? UIWindowScene else { return }
+    scene.applyAppTheme()
+    settingsObserver = NotificationCenter.default.addObserver(
+      forName: .termSettingsChanged, object: nil, queue: .main
+    ) { [weak scene] _ in
+      MainActor.assumeIsolated { scene?.applyAppTheme() }
+    }
     let space = SpaceController(sceneID: session.persistentIdentifier)
     let window = UIWindow(windowScene: scene)
     window.rootViewController = TerminalNavigationController(rootViewController: space)

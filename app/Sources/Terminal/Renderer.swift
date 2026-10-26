@@ -85,6 +85,7 @@ private struct Uniforms {
     var cols: UInt32
     var rows: UInt32
     var defaultBg: UInt32
+    var alpha: Float = 1        // multiplies glyph and rect colours (the cursor's blink fade)
 }
 
 private struct GlyphInstance {
@@ -103,14 +104,28 @@ private struct RectInstance {
 
 private enum RectStyle: UInt32 { case solid = 0, curly = 1, dotted = 2, dashed = 3 }
 
+/// The cursor to draw. Frames carry the user's cursor until the program sets
+/// its own (DECSCUSR); `override`, the user's cursor kept whatever programs
+/// ask, beats both; a terminal without the keyboard shows a steady hollow block.
+struct CursorLook: Equatable {
+    var style: UInt32           // TermCursorStyle
+    var blinks: Bool
+
+    static func resolve(frameStyle: UInt32, frameBlinks: Bool, override: CursorLook?, focused: Bool) -> CursorLook {
+        guard focused else { return CursorLook(style: UInt32(TERM_CURSOR_BLOCK_HOLLOW.rawValue), blinks: false) }
+        return override ?? CursorLook(style: frameStyle, blinks: frameBlinks)
+    }
+}
+
 /// Draws frames with Metal: one full-screen pass for cell backgrounds,
 /// instanced quads for glyphs from the atlases, instanced rects for
-/// underlines, strikes and the cursor.
+/// underlines and strikes, then the cursor on top so its blink fade is a
+/// redraw with another alpha, not a rebuild.
 @MainActor
 final class Renderer {
     struct Overlay {
         var focused = true
-        var cursorOn = true         // blink phase of the cursor
+        var cursorOverride: CursorLook?
         var blinkOn = true          // blink phase of SGR 5 text
         var selection: SelectionSpan?
         var selectionColor: UInt32 = 0xFF0A_84FF
@@ -121,6 +136,7 @@ final class Renderer {
         var origin: SIMD2<Float>        // grid top-left px
         var zoom: Float = 1
         var zoomCenter: SIMD2<Float> = .zero
+        var cursorAlpha: Float = 1      // blink fade, 0...1
     }
 
     let device: MTLDevice
@@ -137,6 +153,9 @@ final class Renderer {
         var cells = 0
         var glyphCount = 0
         var rectCount = 0
+        // The cursor's rects and the glyph it inverts follow the others.
+        var cursorRectCount = 0
+        var cursorGlyphCount = 0
         var cols = 0, rows = 0
         var defaultBg: UInt32 = 0xFF00_0000
     }
@@ -222,9 +241,10 @@ final class Renderer {
     private func fill(_ slot: Slot, _ s: FrameSnapshot, _ o: Overlay) {
         let cols = s.cols, rows = s.rows, n = cols * rows
         let bgBuf = buffer(&slot.bg, bytes: n * 4)
-        let glyphBuf = buffer(&slot.glyphs, bytes: n * MemoryLayout<GlyphInstance>.stride)
+        // One glyph per cell, plus the one the block cursor redraws inverted.
+        let glyphBuf = buffer(&slot.glyphs, bytes: (n + 1) * MemoryLayout<GlyphInstance>.stride)
         let bgOut = bgBuf.contents().bindMemory(to: UInt32.self, capacity: max(n, 1))
-        let glyphOut = glyphBuf.contents().bindMemory(to: GlyphInstance.self, capacity: max(n, 1))
+        let glyphOut = glyphBuf.contents().bindMemory(to: GlyphInstance.self, capacity: n + 1)
         rects.removeAll(keepingCapacity: true)
 
         let m = glyphs.fonts.metrics
@@ -232,15 +252,16 @@ final class Renderer {
         let defaultBg = s.bg | 0xFF00_0000
         let cursorColor = s.cursorColor >> 24 != 0 ? s.cursorColor : s.fg
         let showCursor = s.cursorVisible && s.cursorRow < rows && s.cursorCol < cols
-            && (o.cursorOn || !o.focused || !s.cursorBlink)
-        let cursorStyle: UInt32 = o.focused ? s.cursorStyle : UInt32(TERM_CURSOR_BLOCK_HOLLOW.rawValue)
+        let cursorStyle = CursorLook.resolve(frameStyle: s.cursorStyle, frameBlinks: s.cursorBlink,
+                                             override: o.cursorOverride, focused: o.focused).style
         let blockCursor = showCursor && cursorStyle == UInt32(TERM_CURSOR_BLOCK.rawValue)
         let cursorIndex = s.cursorRow * cols + s.cursorCol
         let cursorWide = showCursor && n > 0 && s.cells[cursorIndex].flags & UInt16(TERM_CELL_WIDE) != 0
         let selColor = o.selectionColor
         var glyphCount = 0
         var blinking = false
-
+        // The glyph under a block cursor, drawn again in its cell's background.
+        var cursorGlyph: GlyphInstance?
         s.cells.withUnsafeBufferPointer { cells in
             for row in 0..<rows {
                 let sel = o.selection?.columns(inRow: row, cols: cols)
@@ -253,10 +274,6 @@ final class Renderer {
                     var bg = c.bg
                     if f & UInt32(TERM_CELL_SELECTED) != 0 || sel?.contains(col) == true {
                         bg = Renderer.mix(bg == 0 ? defaultBg : bg, selColor, 0.45)
-                    }
-                    if blockCursor && (i == cursorIndex || (cursorWide && i == cursorIndex + 1)) {
-                        fg = bg >> 24 == 0 ? defaultBg : bg | 0xFF00_0000
-                        bg = cursorColor
                     }
                     bgOut[i] = bg
                     if f & UInt32(TERM_CELL_SPACER) != 0 { continue }
@@ -280,10 +297,16 @@ final class Renderer {
                             e = glyphs.entry(c.ch, style: style)
                         }
                         if e.w > 0 {
-                            glyphOut[glyphCount] = GlyphInstance(
+                            let instance = GlyphInstance(
                                 x: Int16(truncatingIfNeeded: x + Int(e.ox)), y: Int16(truncatingIfNeeded: y + Int(e.oy)),
                                 w: e.w, h: e.h, u: e.x, v: e.y, color: fg, flags: e.color ? 1 : 0)
+                            glyphOut[glyphCount] = instance
                             glyphCount += 1
+                            if blockCursor && i == cursorIndex {
+                                var inverted = instance
+                                if !e.color { inverted.color = bg >> 24 == 0 ? defaultBg : bg | 0xFF00_0000 }
+                                cursorGlyph = inverted
+                            }
                         }
                     }
 
@@ -305,12 +328,15 @@ final class Renderer {
             }
         }
 
-        if showCursor && !blockCursor {
+        let decorations = rects.count
+        if showCursor {
             let x = Float(s.cursorCol * cw), y = Float(s.cursorRow * ch)
             let w = Float((cursorWide ? 2 : 1) * cw), h = Float(ch)
             let bar = Float(max(1, Int((1.5 * fonts.scale).rounded())))
             let line = Float(max(1, Int(fonts.scale.rounded())))
             switch cursorStyle {
+            case UInt32(TERM_CURSOR_BLOCK.rawValue):
+                rects.append(RectInstance(x: x, y: y, w: w, h: h, color: cursorColor, kind: 0))
             case UInt32(TERM_CURSOR_BAR.rawValue):
                 rects.append(RectInstance(x: x, y: y, w: bar, h: h, color: cursorColor, kind: 0))
             case UInt32(TERM_CURSOR_UNDERLINE.rawValue):
@@ -322,6 +348,7 @@ final class Renderer {
                 rects.append(RectInstance(x: x + w - line, y: y + line, w: line, h: h - 2 * line, color: cursorColor, kind: 0))
             }
         }
+        if let cursorGlyph { glyphOut[glyphCount] = cursorGlyph }
 
         let rectBuf = buffer(&slot.rects, bytes: rects.count * MemoryLayout<RectInstance>.stride)
         rects.withUnsafeBytes { raw in
@@ -331,7 +358,9 @@ final class Renderer {
         slot.cols = cols
         slot.rows = rows
         slot.glyphCount = glyphCount
-        slot.rectCount = rects.count
+        slot.cursorGlyphCount = cursorGlyph == nil ? 0 : 1
+        slot.rectCount = decorations
+        slot.cursorRectCount = rects.count - decorations
         slot.defaultBg = defaultBg
         hasBlinkingText = blinking
     }
@@ -425,6 +454,25 @@ final class Renderer {
             enc.setVertexBuffer(r, offset: 0, index: 1)
             enc.setFragmentBytes(&u, length: uSize, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: slot.rectCount)
+        }
+        // The cursor last, faded by its blink.
+        if built, p.cursorAlpha > 0 {
+            u.alpha = p.cursorAlpha
+            if slot.cursorRectCount > 0, let r = slot.rects {
+                enc.setRenderPipelineState(rectPipeline)
+                enc.setVertexBytes(&u, length: uSize, index: 0)
+                enc.setVertexBuffer(r, offset: slot.rectCount * MemoryLayout<RectInstance>.stride, index: 1)
+                enc.setFragmentBytes(&u, length: uSize, index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: slot.cursorRectCount)
+            }
+            if slot.cursorGlyphCount > 0, let g = slot.glyphs {
+                enc.setRenderPipelineState(glyphPipeline)
+                enc.setVertexBytes(&u, length: uSize, index: 0)
+                enc.setVertexBuffer(g, offset: slot.glyphCount * MemoryLayout<GlyphInstance>.stride, index: 1)
+                enc.setFragmentTexture(glyphs.gray.texture, index: 0)
+                enc.setFragmentTexture(glyphs.color.texture, index: 1)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4, instanceCount: slot.cursorGlyphCount)
+            }
         }
         enc.endEncoding()
         return cb

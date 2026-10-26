@@ -32,16 +32,19 @@ final class FontSet {
     let family: String
     let pointSize: CGFloat
     let scale: CGFloat
+    /// Cell height as a multiple of the font's line height.
+    let lineHeight: CGFloat
     let metrics: CellMetrics
     /// Indexed by style: bit 0 bold, bit 1 italic.
     let faces: [CTFont]
 
     /// `family` is a bundled Nerd Font or any installed font family;
     /// its bold/italic faces come from the family's own traits.
-    init(family: String = FontSet.family, pointSize: CGFloat, scale: CGFloat) {
+    init(family: String = FontSet.family, pointSize: CGFloat, scale: CGFloat, lineHeight: CGFloat = 1) {
         self.family = family
         self.pointSize = pointSize
         self.scale = scale
+        self.lineHeight = lineHeight
         let px = pointSize * scale
         if let bundled = FontSet.bundled.first(where: { $0.family == family }) {
             let descriptors = FontSet.descriptors[bundled.fileStem] ?? [:]
@@ -59,12 +62,13 @@ final class FontSet {
                 t.isEmpty ? base : CTFontCreateCopyWithSymbolicTraits(base, px, nil, t, t) ?? base
             }
         }
-        metrics = FontSet.measure(faces[0])
+        metrics = FontSet.measure(faces[0], lineHeight: lineHeight)
     }
 
     func face(_ style: Int) -> CTFont { faces[style & 3] }
 
-    private static func measure(_ font: CTFont) -> CellMetrics {
+    /// Extra line height is shared above and below the text.
+    private static func measure(_ font: CTFont, lineHeight: CGFloat) -> CellMetrics {
         var ch: UniChar = 0x4D  // "M"
         var glyph: CGGlyph = 0
         CTFontGetGlyphsForCharacters(font, &ch, &glyph, 1)
@@ -75,7 +79,7 @@ final class FontSet {
         let descent = CTFontGetDescent(font)
         let leading = CTFontGetLeading(font)
         let width = max(1, Int(advance.width.rounded()))
-        let height = max(1, Int((ascent + descent + leading).rounded()))
+        let height = max(1, Int(((ascent + descent + leading) * lineHeight).rounded()))
         let baseline = Int((ascent + (CGFloat(height) - ascent - descent) / 2).rounded())
         let stroke = max(1, Int(CTFontGetUnderlineThickness(font).rounded()))
         var underlineY = baseline + Int((-CTFontGetUnderlinePosition(font)).rounded()) - stroke / 2

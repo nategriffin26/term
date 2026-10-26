@@ -338,7 +338,8 @@ final class Tab {
     let s = AppSettings.shared
     view.fontSize = CGFloat(s.fontSize)
     view.fontFamily = s.fontFamily
-    view.cursorBlinkEnabled = s.cursorBlink
+    view.lineSpacing = CGFloat(s.lineSpacing)
+    view.cursorOverride = s.cursorOverride
     view.showsSmartKeysWithHardwareKeyboard = s.smartKeysWithHardwareKeyboard
     view.keyClicksEnabled = s.keyClickSound
     let theme = s.termTheme

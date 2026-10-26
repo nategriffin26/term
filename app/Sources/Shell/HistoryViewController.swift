@@ -75,6 +75,7 @@ final class HistoryViewController: UIViewController {
     let terminal = TerminalView(session: session)
     terminal.fontFamily = settings.fontFamily
     terminal.fontSize = CGFloat(settings.fontSize)
+    terminal.lineSpacing = CGFloat(settings.lineSpacing)
     terminal.cursorBlinkEnabled = false
     terminal.isReadOnly = true
     terminal.translatesAutoresizingMaskIntoConstraints = false

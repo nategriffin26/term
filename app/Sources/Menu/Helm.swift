@@ -2,42 +2,50 @@ import CoreText
 import SwiftUI
 import UIKit
 
-/// Helm style for app chrome (menu panel, overview, HUD, files):
-/// blue-black ink, hairlines, one cobalt accent for "you are here / asks
-/// you", Geist for language and Geist Mono for machine facts.
+/// App chrome tokens (menu panel, overview, HUD, files, settings): colours
+/// from the current AppTheme, Geist for language and Geist Mono for
+/// machine facts.
 enum Helm {
-  // Colours (dark; the app runs dark only).
-  static let bg = Color(hex: 0x0A0D13)
-  static let raised = Color(hex: 0x121722)
-  static let fg = Color(hex: 0xE6EAF3)
-  static let fg2 = Color(hex: 0xA2ABBF)
-  static let muted = Color(hex: 0x7C85A1)
-  static let faint = Color(hex: 0x384056)
-  static let line = Color(red: 150 / 255, green: 175 / 255, blue: 1, opacity: 0.075)
-  static let line2 = Color(red: 150 / 255, green: 175 / 255, blue: 1, opacity: 0.14)
-  static let hover = Color(red: 150 / 255, green: 175 / 255, blue: 1, opacity: 0.045)
-  static let sel = Color(red: 150 / 255, green: 175 / 255, blue: 1, opacity: 0.08)
-  static let accent = Color(hex: 0x6F8CFF)
-  static let onAccent = Color(hex: 0x060A1A)
-  static let ok = Color(hex: 0x4FB894)
-  static let warn = Color(hex: 0xE5B25D)
-  static let bad = Color(hex: 0xFF5B69)
-  static let overlay = Color(red: 2 / 255, green: 4 / 255, blue: 10 / 255, opacity: 0.62)
+  // Colours: read inside a SwiftUI body, they redraw it when the app theme changes.
+  @MainActor static var bg: Color { theme.bg.color }
+  @MainActor static var raised: Color { theme.raised.color }
+  @MainActor static var fg: Color { theme.fg.color }
+  @MainActor static var fg2: Color { theme.fg2.color }
+  @MainActor static var muted: Color { theme.muted.color }
+  @MainActor static var faint: Color { theme.faint.color }
+  @MainActor static var line: Color { theme.line.color }
+  @MainActor static var line2: Color { theme.line2.color }
+  @MainActor static var hover: Color { theme.hover.color }
+  @MainActor static var sel: Color { theme.sel.color }
+  @MainActor static var accent: Color { theme.accent.color }
+  @MainActor static var onAccent: Color { theme.onAccent.color }
+  @MainActor static var ok: Color { theme.ok.color }
+  @MainActor static var warn: Color { theme.warn.color }
+  @MainActor static var bad: Color { theme.bad.color }
+  @MainActor static var overlay: Color { theme.overlay.color }
 
-  /// UIKit twins of the colours above.
+  @MainActor private static var theme: AppTheme { AppSettings.shared.appTheme }
+
+  /// UIKit twins of the colours above: dynamic, resolved against the
+  /// window scene's AppThemeTrait, so views refresh when it changes. A
+  /// CGColor taken from them (layer borders) must be re-taken on that trait's change.
   enum UI {
-    static let bg = UIColor(rgb: 0x0A0D13)
-    static let raised = UIColor(rgb: 0x121722)
-    static let fg = UIColor(rgb: 0xE6EAF3)
-    static let fg2 = UIColor(rgb: 0xA2ABBF)
-    static let muted = UIColor(rgb: 0x7C85A1)
-    static let faint = UIColor(rgb: 0x384056)
-    static let line = UIColor(red: 150 / 255, green: 175 / 255, blue: 1, alpha: 0.075)
-    static let line2 = UIColor(red: 150 / 255, green: 175 / 255, blue: 1, alpha: 0.14)
-    static let sel = UIColor(red: 150 / 255, green: 175 / 255, blue: 1, alpha: 0.08)
-    static let accent = UIColor(rgb: 0x6F8CFF)
-    static let bad = UIColor(rgb: 0xFF5B69)
-    static let overlay = UIColor(red: 2 / 255, green: 4 / 255, blue: 10 / 255, alpha: 0.62)
+    static var bg: UIColor { tone(\.bg) }
+    static var raised: UIColor { tone(\.raised) }
+    static var fg: UIColor { tone(\.fg) }
+    static var fg2: UIColor { tone(\.fg2) }
+    static var muted: UIColor { tone(\.muted) }
+    static var faint: UIColor { tone(\.faint) }
+    static var line: UIColor { tone(\.line) }
+    static var line2: UIColor { tone(\.line2) }
+    static var sel: UIColor { tone(\.sel) }
+    static var accent: UIColor { tone(\.accent) }
+    static var bad: UIColor { tone(\.bad) }
+    static var overlay: UIColor { tone(\.overlay) }
+
+    private static func tone(_ key: KeyPath<AppTheme, AppTheme.Tone> & Sendable) -> UIColor {
+      UIColor { traits in traits[AppThemeTrait.self][keyPath: key].uiColor }
+    }
   }
 
   // Type.
