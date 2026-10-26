@@ -639,16 +639,17 @@ private struct NewTmuxPage: View {
   @State private var folder = ""
   @State private var busy = false
   @State private var error: String?
-  @FocusState private var naming: Bool
+  @FocusState private var focus: Field?
+
+  private enum Field { case name, folder }
 
   var body: some View {
     let folders = SessionMap.folders(TmuxStore.shared.servers[host.serverKey]?.sessions ?? [])
     PageScaffold(title: "New on \(host.alias)", back: { model.sessionsPage = .grid }) {
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
-          field("Name", text: $name, prompt: "name")
-            .focused($naming)
-          field("Folder", text: $folder, prompt: "~")
+          field("Name", text: $name, prompt: "name", as: .name)
+          field("Folder", text: $folder, prompt: "~", as: .folder)
           if let error {
             Text(error)
               .font(Helm.sans(13))
@@ -681,10 +682,10 @@ private struct NewTmuxPage: View {
       }
       .scrollIndicators(.hidden)
     }
-    .onAppear { naming = true }
+    .onAppear { focus = .name }
   }
 
-  private func field(_ label: String, text: Binding<String>, prompt: String) -> some View {
+  private func field(_ label: String, text: Binding<String>, prompt: String, as kind: Field) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       Text(label)
         .font(Helm.sans(12.5, .medium))
@@ -696,10 +697,12 @@ private struct NewTmuxPage: View {
         .autocorrectionDisabled()
         .submitLabel(.go)
         .onSubmit(create)
+        .focused($focus, equals: kind)
         .padding(.horizontal, 10)
         .frame(height: 40)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Helm.bg.opacity(0.55)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Helm.line2, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+          .strokeBorder(focus == kind ? Helm.accent : Helm.line2, lineWidth: 1))
     }
     .padding(.horizontal, 16)
     .padding(.top, 12)
