@@ -3,13 +3,15 @@ import Network
 import UIKit
 
 extension Notification.Name {
-  /// Posted on the main thread when `Dictation.shared.state` changes.
+  /// Posted on the main thread when `Dictation.shared.state` or `showsCopied` changes.
   static let voiceStateChanged = Notification.Name("VoiceStateChanged")
 }
 
 /// Where dictated text goes: the terminal the microphone was turned on in.
 @MainActor
 protocol DictationTarget: AnyObject {
+  /// Where input typed here goes now; nil at the local prompt.
+  var dictationDestination: DictationDestination? { get }
   /// Types a transcript at the cursor.
   func typeDictation(_ text: String)
   /// Says what went wrong (the microphone refused, the key rejected).
@@ -18,18 +20,40 @@ protocol DictationTarget: AnyObject {
   func dictationNeedsSettings()
 }
 
+/// Where a terminal's input goes: a tmux session on a host, or, while the
+/// session's name is not known, one connection to the host.
+struct DictationDestination {
+  let host: UUID
+  let tmuxSession: String?
+  weak var connection: AnyObject?
+
+  /// Whether text said into `self` may be typed into `now`: the same tmux
+  /// session on the same host (a reconnect into it included), or, with no
+  /// session known, the very same connection.
+  func admits(_ now: DictationDestination?) -> Bool {
+    guard let now, now.host == host else { return false }
+    if let tmuxSession { return now.tmuxSession == tmuxSession }
+    return connection != nil && now.connection === connection
+  }
+}
+
 /// Voice to text for the Smart Keys mic key. Listens, cuts speech into
 /// segments at pauses, sends each the moment it ends and types its text
 /// in spoken order, so words appear while the user is still talking.
-/// Speech is never dropped for a slow or missing network: failed segments
-/// keep their place and go again when the network returns, when the
-/// service answers again, on coming back to the app, or on a tap.
+/// Speech is never dropped for a slow or missing network: segments wait on
+/// disk, failed ones keep their place and go again on their own schedule,
+/// when the network returns, on coming back to the app, or on a tap. Text
+/// whose terminal now shows another session goes to the clipboard instead.
 @MainActor
 final class Dictation {
   static let shared = Dictation(transcriber: Dictation.openRouter)
 
   private(set) var state = VoiceState.idle {
     didSet { if state != oldValue { NotificationCenter.default.post(name: .voiceStateChanged, object: self) } }
+  }
+  /// Text just went to the clipboard instead of its terminal; the strip says so for a moment.
+  private(set) var showsCopied = false {
+    didSet { if showsCopied != oldValue { NotificationCenter.default.post(name: .voiceStateChanged, object: self) } }
   }
   var isListening: Bool { capture != nil }
   /// The microphone did not start; tapping the strip or the mic tries again.
@@ -38,40 +62,51 @@ final class Dictation {
   private let transcriber: @MainActor () -> Transcriber?
   private let microphone: MicrophoneFactory
   private let startDeadline: Duration
+  private let spool: SpeechSpool
+  private let pasteboard: UIPasteboard
   private weak var target: DictationTarget?
   private var capture: Microphone?
   private var startTimer: Task<Void, Never>?
   private var segmenter = SpeechSegmenter()
   private let gate = SpeechGate()
-  private var queue = TranscriptQueue<WeakTarget>()
+  private var queue = TranscriptQueue<Destination>()
   private var run = 0
   private var levels: [Float] = []
   private var path: NWPathMonitor?
   private var backgroundTask = UIBackgroundTaskIdentifier.invalid
-  /// Segments that fail by themselves go again after 2 s, then 4, 8 … up to a minute.
-  private var retryDelay = Dictation.firstRetryDelay
   private var retryTimer: Task<Void, Never>?
+  private var copiedTimer: Task<Void, Never>?
+  /// What dictation last put on the clipboard, while nothing else replaced
+  /// it: text copied next is added to it rather than replacing it.
+  private var copied: (text: String, changeCount: Int)?
 
-  private static let firstRetryDelay = Duration.seconds(2)
   /// Levels the strip gets: the last 2 s.
   private static let levelCount = 40
+  /// The run of segments said before the app last quit.
+  private static let leftoverRun = -1
 
   /// Makes the microphone: samples arrive on the audio thread; the failure, on the main actor.
   typealias MicrophoneFactory = @MainActor (_ onSamples: @escaping @Sendable ([Float]) -> Void,
                                             _ onFailure: @escaping @MainActor @Sendable () -> Void) -> Microphone
 
-  struct WeakTarget {
-    weak var value: DictationTarget?
+  /// A segment's terminal, and where that terminal's input went when the segment was said.
+  struct Destination {
+    weak var view: DictationTarget?
+    let place: DictationDestination?
   }
 
   /// `startDeadline`: how long the microphone may take to start before listening
   /// fails; AudioToolbox's own limit for an audio server that stopped answering.
   init(transcriber: @escaping @MainActor () -> Transcriber?,
        microphone: @escaping MicrophoneFactory = { MicrophoneCapture(onSamples: $0, onFailure: $1) },
-       startDeadline: Duration = .seconds(9)) {
+       startDeadline: Duration = .seconds(9),
+       spool: SpeechSpool = SpeechSpool(directory: AppDirectories.speech),
+       pasteboard: UIPasteboard = .general) {
     self.transcriber = transcriber
     self.microphone = microphone
     self.startDeadline = startDeadline
+    self.spool = spool
+    self.pasteboard = pasteboard
     let center = NotificationCenter.default
     center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.stop() }
@@ -90,8 +125,9 @@ final class Dictation {
 
   /// The OpenRouter key and model from Settings › Voice; nil without a key.
   static func openRouter() -> Transcriber? {
-    #if DEBUG
-    // Simulator runs pass these in the environment (SIMCTL_CHILD_…); nothing ships them.
+    #if targetEnvironment(simulator)
+    // Simulator runs may pass these in the environment (SIMCTL_CHILD_…);
+    // a device build has no way to send the key anywhere but OpenRouter.
     let env = ProcessInfo.processInfo.environment
     let key = env["TERM_OPENROUTER_KEY"] ?? Keychain.openRouterKey()
     let base = env["TERM_OPENROUTER_BASE_URL"].flatMap(URL.init(string:)) ?? OpenRouterTranscriber.defaultBaseURL
@@ -162,6 +198,12 @@ final class Dictation {
     guard !isListening else { return }
     run += 1
     let run = run
+    let deadline = startDeadline
+    startTimer = Task { [weak self] in
+      try? await Task.sleep(for: deadline)
+      guard !Task.isCancelled else { return }
+      self?.microphoneStopped(run: run)
+    }
     let capture = microphone({ [weak self] samples in
       DispatchQueue.main.async { MainActor.assumeIsolated { self?.heard(samples, run: run) } }
     }, { [weak self] in
@@ -183,14 +225,7 @@ final class Dictation {
       startTimer = nil
       if error != nil { microphoneStopped(run: run) }
     }
-    let deadline = startDeadline
-    startTimer = Task { [weak self] in
-      try? await Task.sleep(for: deadline)
-      guard !Task.isCancelled else { return }
-      self?.microphoneStopped(run: run)
-    }
     retry(all: true)
-    update()
   }
 
   /// The microphone of listening `run` failed, or never started.
@@ -214,15 +249,16 @@ final class Dictation {
 
   /// A segment the loudness detector cut: sent only if the gate hears speech in it.
   func segmentEnded(_ samples: [Float], in target: DictationTarget) {
-    gate.judge(samples) { [weak self, weak target] speech in
-      guard speech, let self, let target else { return }
-      submit(samples, to: target)
+    let destination = Destination(view: target, place: target.dictationDestination)
+    gate.judge(samples) { [weak self] speech in
+      guard speech, let self else { return }
+      submit(samples, to: destination)
     }
   }
 
   /// A finished segment: its place in spoken order now, its audio once encoded.
-  private func submit(_ samples: [Float], to target: DictationTarget) {
-    let id = reserve(for: target)
+  private func submit(_ samples: [Float], to destination: Destination) {
+    let id = reserve(destination, run: run)
     Task.detached(priority: .userInitiated) { [weak self] in
       let audio = try? SpeechAudio.m4a(samples)
       await self?.encoded(id, audio)
@@ -230,44 +266,71 @@ final class Dictation {
   }
 
   private func encoded(_ id: Int, _ audio: Data?) {
-    guard let audio else {
-      type(queue.drop(id))
-      update()
-      return
-    }
-    send(audio, for: id)
+    if let audio { send(audio, for: id) } else { spooled(id, nil) }
   }
 
-  /// Holds a place in spoken order for a segment said into `target`.
+  /// Holds a place in spoken order for a segment said into `target` now.
   func reserve(for target: DictationTarget) -> Int {
+    reserve(Destination(view: target, place: target.dictationDestination), run: run)
+  }
+
+  private func reserve(_ destination: Destination, run: Int) -> Int {
     watchNetwork()
-    let id = queue.reserve(run: run, target: WeakTarget(value: target))
+    let id = queue.reserve(run: run, target: destination)
     update()
     return id
   }
 
-  /// Sends a segment's audio (m4a) for transcription.
+  /// Spools a segment's audio (m4a) to disk; it is sent once a request slot is free.
   func send(_ audio: Data, for id: Int) {
-    queue.setAudio(audio, for: id)
-    send(id)
+    let spool = spool
+    Task.detached(priority: .userInitiated) { [weak self] in
+      let file = try? spool.write(audio, id: id)
+      await self?.spooled(id, file)
+    }
   }
 
-  private func send(_ id: Int) {
+  private func spooled(_ id: Int, _ file: URL?) {
+    if let file {
+      queue.setAudio(file, for: id)
+      sendReady()
+    } else {
+      output(queue.drop(id))
+    }
+    update()
+  }
+
+  /// Speech said before the app last quit: transcribed in order and copied
+  /// to the clipboard, never typed (where it was said is gone).
+  func transcribeLeftovers() {
+    let files = spool.leftovers()
+    guard !files.isEmpty else { return }
+    for file in files {
+      queue.setAudio(file, for: reserve(Destination(view: nil, place: nil), run: Self.leftoverRun))
+    }
+    resend()
+  }
+
+  /// Sends spooled segments, earliest first, while a request slot is free.
+  private func sendReady() {
     guard let transcriber = transcriber() else {
-      queue.fail(id, TranscriptionFailure(problem: .badKey, retriesByItself: false))
-      update()
+      while case let requests = queue.send(), !requests.isEmpty {
+        for request in requests {
+          queue.fail(request.id, TranscriptionFailure(problem: .badKey, retriesByItself: false), at: .now)
+        }
+      }
       return
     }
-    guard let request = queue.send(id) else { return }
-    update()
-    Task { [weak self] in
-      do throws(TranscriptionFailure) {
-        let text = try await transcriber.transcribe(request.audio, prompt: request.prompt) { [weak self] in
-          Task { @MainActor in self?.waiting(id) }
+    for request in queue.send() {
+      Task { [weak self] in
+        do throws(TranscriptionFailure) {
+          let text = try await transcriber.transcribe(request.audio, prompt: request.prompt) { [weak self] in
+            Task { @MainActor in self?.waiting(request.id) }
+          }
+          self?.finished(request.id, text)
+        } catch {
+          self?.failed(request.id, error)
         }
-        self?.finished(id, text)
-      } catch {
-        self?.failed(id, error)
       }
     }
   }
@@ -278,17 +341,15 @@ final class Dictation {
   }
 
   private func finished(_ id: Int, _ text: String) {
-    type(queue.complete(id, reply: text))
-    retryDelay = Self.firstRetryDelay
-    // An answer means the service works again: what failed by itself goes now.
-    retry(all: false)
+    output(queue.complete(id, reply: text))
+    sendReady()
     update()
   }
 
   private func failed(_ id: Int, _ failure: TranscriptionFailure) {
-    let target = queue.entries.first { $0.id == id }?.target.value
+    let target = queue.entries.first { $0.id == id }?.target.view
     let wasStuck = queue.problem != nil
-    queue.fail(id, failure)
+    queue.fail(id, failure, at: .now)
     if failure.retriesByItself {
       scheduleRetry()
     } else if !wasStuck {
@@ -302,28 +363,47 @@ final class Dictation {
       }
       target?.dictationNotice(notice)
     }
+    sendReady()
     update()
   }
 
-  private func type(_ ready: [TranscriptQueue<WeakTarget>.Typed]) {
-    for typed in ready { typed.target.value?.typeDictation(typed.text) }
+  /// Types each transcript into its terminal while that terminal's input
+  /// still goes where it went when the words were said; copies it otherwise.
+  private func output(_ ready: [TranscriptQueue<Destination>.Typed]) {
+    for typed in ready {
+      if let view = typed.target.view, let place = typed.target.place, place.admits(view.dictationDestination) {
+        view.typeDictation(typed.text)
+      } else {
+        copy(typed.text)
+      }
+    }
+  }
+
+  private func copy(_ text: String) {
+    let joined = copied.flatMap { $0.changeCount == pasteboard.changeCount ? $0.text + " " + text : nil } ?? text
+    pasteboard.string = joined
+    copied = (joined, pasteboard.changeCount)
+    showsCopied = true
+    UIAccessibility.post(notification: .announcement, argument: "Dictated text copied")
+    copiedTimer?.cancel()
+    copiedTimer = Task { [weak self] in
+      try? await Task.sleep(for: .seconds(3))
+      guard !Task.isCancelled else { return }
+      self?.showsCopied = false
+    }
   }
 
   // MARK: - Retrying
 
-  /// The strip's tap: everything queued goes again.
+  /// The strip's tap: everything queued goes again, each schedule from the start.
   func retry() {
-    retryTimer?.cancel()
-    retryTimer = nil
-    retryDelay = Self.firstRetryDelay
     retry(all: true)
   }
 
   /// Forgets everything queued.
   func discard() {
-    retryTimer?.cancel()
-    retryTimer = nil
     queue.discard()
+    scheduleRetry()
     update()
   }
 
@@ -334,19 +414,27 @@ final class Dictation {
   }
 
   private func retry(all: Bool) {
-    for id in queue.retry(all: all) { send(id) }
+    queue.retry(all: all)
+    resend()
+  }
+
+  private func resend() {
+    sendReady()
+    scheduleRetry()
     update()
   }
 
+  /// Wakes at the earliest failed segment's own time to go again.
   private func scheduleRetry() {
-    guard retryTimer == nil else { return }
-    let delay = retryDelay
-    retryDelay = min(retryDelay * 2, .seconds(60))
+    retryTimer?.cancel()
+    retryTimer = nil
+    guard let at = queue.nextRetry else { return }
     retryTimer = Task { [weak self] in
-      try? await Task.sleep(for: delay)
+      try? await Task.sleep(until: at, clock: .continuous)
       guard !Task.isCancelled, let self else { return }
       retryTimer = nil
-      retry(all: false)
+      queue.retryDue(at: .now)
+      resend()
     }
   }
 
@@ -364,7 +452,7 @@ final class Dictation {
   // MARK: - State
 
   private func update() {
-    type(queue.remove { $0.value == nil })
+    for file in queue.takeReleasedAudio() { spool.remove(file) }
     if isListening {
       state = .listening(levels: levels)
     } else if let problem = queue.problem {

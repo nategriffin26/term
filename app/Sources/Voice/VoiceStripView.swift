@@ -20,11 +20,15 @@ enum VoiceState: Equatable, Sendable {
 /// locked modifier and runs a trace of the voice through the middle in the
 /// text colour; transcribing flattens it to dots with a light passing
 /// across; a failure shows its glyph and the queued count in the error
-/// colour. Tapping a failure retries, or opens Settings › Voice when it is
-/// fixed there; the close button discards the queue after a confirmation.
+/// colour; text copied instead of typed shows the clipboard glyph and
+/// "Copied" in the text colour for a moment. Tapping a failure retries, or
+/// opens Settings › Voice when it is fixed there; the close button discards
+/// the queue after a confirmation.
 @MainActor
 final class VoiceStripView: UIView {
   var state = VoiceState.idle { didSet { if state != oldValue { update(from: oldValue) } } }
+  /// Dictated text just went to the clipboard: the middle says so over whatever else it shows.
+  var copied = false { didSet { if copied != oldValue { showMarks() } } }
   var micWidth: CGFloat = 40 { didSet { setNeedsLayout() } }
   var onMic: (() -> Void)?
   var onRetry: (() -> Void)?
@@ -116,17 +120,20 @@ final class VoiceStripView: UIView {
   // MARK: - State
 
   private func update(from old: VoiceState) {
-    let listening: Bool
     if case .listening(let levels) = state {
-      listening = true
       if case .listening(let before) = old { pending += Self.newLevels(levels, after: before) } else {
         pending = levels
         history = []
       }
     } else {
-      listening = false
       pending = []
     }
+    showMarks()
+  }
+
+  /// The mic key, the failure or copied mark, and what VoiceOver reads, for the state.
+  private func showMarks() {
+    let listening = if case .listening = state { true } else { false }
     let lit = listening ? SmartKeysBar.Modifier.armed : .off
     if mic.modifier != lit {
       mic.setSymbol(listening ? "mic.fill" : "mic")
@@ -157,8 +164,15 @@ final class VoiceStripView: UIView {
       status.accessibilityLabel = "Microphone unavailable"
       status.accessibilityHint = "Listens again"
     }
-    status.isAccessibilityElement = state != .idle
-    if case .failed = state { discard.isHidden = false } else { discard.isHidden = true }
+    if copied {
+      icon.image = UIImage(systemName: "doc.on.clipboard", withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
+      count.text = "Copied"
+      status.accessibilityLabel = "Dictated text copied"
+    }
+    icon.tintColor = copied ? Chrome.UI.fg : Chrome.UI.bad
+    count.textColor = copied ? Chrome.UI.fg : Chrome.UI.bad
+    status.isAccessibilityElement = state != .idle || copied
+    if case .failed = state, !copied { discard.isHidden = false } else { discard.isHidden = true }
     setNeedsLayout()
     run()
   }
@@ -285,9 +299,9 @@ final class VoiceStripView: UIView {
       bars[i].backgroundColor = ink
     }
     CATransaction.commit()
-    let traceTarget: CGFloat = listening || waiting ? 1 : 0
+    let traceTarget: CGFloat = (listening || waiting) && !copied ? 1 : 0
     trace.alpha = ease(&traceAlpha, to: traceTarget, 0.2)
-    let markTarget: CGFloat = failed ? 1 : 0
+    let markTarget: CGFloat = failed || copied ? 1 : 0
     let mark = ease(&markAlpha, to: markTarget, 0.3)
     icon.alpha = mark
     count.alpha = mark

@@ -56,11 +56,16 @@ final class SpeechSegmenterTests: XCTestCase {
     XCTAssertEqual(segments.count, 1)
   }
 
-  /// Catches clicks becoming requests (and the prompt echo they cause): under 0.25 s of speech is dropped.
-  func testUnderQuarterSecondOfSpeechIsDropped() {
-    XCTAssertTrue(run(frames(quiet, 40) + frames(-20, 4) + frames(quiet, 20)).segments.isEmpty)
-    XCTAssertEqual(run(frames(quiet, 40) + frames(-20, 5) + frames(quiet, 20)).segments.count, 1)
+  /// Catches a short answer cut off by its length before the speech
+  /// classifier hears it, and a lone click making a segment: 100 ms of loud
+  /// audio makes one (the classifier judges it), 50 ms does not.
+  func testOneHundredMillisecondsMakesASegmentAndAClickDoesNot() {
+    XCTAssertEqual(run(frames(quiet, 40) + frames(-20, 2) + frames(quiet, 20)).segments.count, 1)
+    XCTAssertEqual(run(frames(quiet, 40) + frames(-20, 4) + frames(quiet, 20)).segments.count, 1)
     XCTAssertTrue(run(frames(quiet, 40) + frames(-20, 1) + frames(quiet, 20)).segments.isEmpty)
+    var s = SpeechSegmenter()
+    _ = s.append(frames(quiet, 40) + frames(-20, 2))
+    XCTAssertNotNil(s.finish(), "stopping keeps a word just begun")
   }
 
   /// Catches silence or steady room noise being sent: neither makes a segment, nor does finishing.

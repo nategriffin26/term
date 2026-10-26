@@ -457,6 +457,10 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     tabs.first { $0.view === view }?.showNotice(text, failed: true, for: 8)
   }
 
+  func terminalViewDictationDestination(_ view: TerminalView) -> DictationDestination? {
+    tabs.first { $0.view === view }?.dictationDestination
+  }
+
   func terminalViewOpensVoiceSettings(_ view: TerminalView) {
     menu.settingsStart = .voice
     openMenu(.settings)

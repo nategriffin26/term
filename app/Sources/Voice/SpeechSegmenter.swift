@@ -4,8 +4,9 @@ import Foundation
 /// loudness in 50 ms frames against the room's noise floor. A segment starts
 /// with 100 ms of speech (with the 300 ms before it, so first syllables
 /// survive) and ends after 0.7 s of silence, or 0.3 s once it is 15 s
-/// long, or at 30 s outright. Under 0.25 s of speech (a click, a cough) and
-/// pure silence never make one.
+/// long, or at 30 s outright. Pure silence and a click under 100 ms never
+/// make one. Length alone never discards a segment: the speech classifier
+/// hears a word in 100 to 150 ms of it, so a one-word answer reaches it.
 struct SpeechSegmenter {
   static let sampleRate = 16_000
   /// 50 ms.
@@ -21,7 +22,6 @@ struct SpeechSegmenter {
   private static let longSegmentFrames = 300
   private static let longSilenceFrames = 6
   private static let maxFrames = 600
-  private static let minSpeechFrames = 5
   /// Silence kept after the last speech in a segment.
   private static let tailFrames = 4
   /// The noise floor is the quietest frame of the last 3 s: speech always
@@ -42,7 +42,6 @@ struct SpeechSegmenter {
   private var recent: [[Float]] = []
   private var onset = 0
   private var segment: [[Float]]?
-  private var speechFrames = 0
   private var silentRun = 0
   /// Frames in `segment` up to the end of its last speech.
   private var lastSpeech = 0
@@ -69,14 +68,14 @@ struct SpeechSegmenter {
     return out
   }
 
-  /// The segment in progress when listening stops, if it holds enough speech.
+  /// The segment in progress when listening stops.
   mutating func finish() -> [Float]? {
     defer {
       endSegment()
       partial = []
       recent = []
     }
-    guard segment != nil, speechFrames >= Self.minSpeechFrames else { return nil }
+    guard segment != nil else { return nil }
     return trimmed()
   }
 
@@ -93,7 +92,6 @@ struct SpeechSegmenter {
       guard onset >= Self.onsetFrames else { return nil }
       segment = recent
       recent = []
-      speechFrames = onset
       lastSpeech = segment!.count
       silentRun = 0
       onset = 0
@@ -101,7 +99,6 @@ struct SpeechSegmenter {
     }
     segment!.append(frame)
     if dB >= max(floor + Self.stayMargin, Self.quietest) {
-      speechFrames += 1
       silentRun = 0
       lastSpeech = segment!.count
     } else {
@@ -110,13 +107,13 @@ struct SpeechSegmenter {
     let length = segment!.count
     if length >= Self.maxFrames {
       // Cut mid-speech: all of it goes, and the next segment starts afresh.
-      let all = speechFrames >= Self.minSpeechFrames ? segment!.flatMap { $0 } : nil
+      let all = segment!.flatMap { $0 }
       endSegment()
       return all
     }
     let pause = length >= Self.longSegmentFrames ? Self.longSilenceFrames : Self.endSilenceFrames
     guard silentRun >= pause else { return nil }
-    let done = speechFrames >= Self.minSpeechFrames ? trimmed() : nil
+    let done = trimmed()
     endSegment()
     return done
   }
@@ -129,7 +126,6 @@ struct SpeechSegmenter {
 
   private mutating func endSegment() {
     segment = nil
-    speechFrames = 0
     silentRun = 0
     lastSpeech = 0
     onset = 0

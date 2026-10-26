@@ -25,14 +25,18 @@ struct TranscriptionFailure: Error, Equatable {
   var retriesByItself: Bool
 }
 
-/// Dictated segments in spoken order. Each is transcribed on its own, at
-/// once, and its text is typed only after every earlier segment's, so
+/// Dictated segments in spoken order. Each is transcribed on its own, two at
+/// a time, and its text is typed only after every earlier segment's, so
 /// replies that return out of order still type in order. A failed segment
-/// keeps its audio and its place until it succeeds or is discarded.
+/// keeps its audio and its place until it succeeds or is discarded; one that
+/// fails by itself goes again on its own schedule (2 s, then 4, 8 … up to a
+/// minute), which no other segment's answer moves.
 struct TranscriptQueue<Target> {
   enum Status: Equatable {
-    /// Waiting for its audio to be encoded.
+    /// Waiting for its audio to be encoded and spooled.
     case encoding
+    /// Spooled, waiting for a request slot.
+    case ready
     case sending
     /// Sent while the network was unreachable; it goes when the network returns.
     case waiting
@@ -45,10 +49,21 @@ struct TranscriptQueue<Target> {
     /// One listening session: context carries over within it, not across.
     let run: Int
     let target: Target
-    var audio: Data?
+    /// The m4a file the segment is spooled to.
+    var audio: URL?
     var status = Status.encoding
-    /// The prompt sent with the latest request, to recognise a reply that only echoes it.
-    var prompt = ""
+    /// Failures in a row that cleared up by themselves.
+    var failures = 0
+    /// When the latest such failure goes again.
+    var retryAt: ContinuousClock.Instant?
+  }
+
+  /// A segment to send now.
+  struct Request {
+    let id: Int
+    let audio: URL
+    /// What the run typed just before it, for spelling and context.
+    let prompt: String
   }
 
   /// A transcript ready to type, in spoken order.
@@ -57,13 +72,17 @@ struct TranscriptQueue<Target> {
     let text: String
   }
 
+  /// Requests in flight at once; the rest wait their turn in spoken order.
+  static var slots: Int { 2 }
+  /// The context sent with a request: the run's last 200 typed characters.
+  static var contextLength: Int { 200 }
+
   private(set) var entries: [Entry] = []
   private var nextID = 0
   /// What each run has typed so far, the tail of it.
   private var typedByRun: [Int: String] = [:]
-
-  /// The context sent with a request: the run's last 200 typed characters.
-  static var contextLength: Int { 200 }
+  /// Spool files of segments no longer queued, for the owner to delete.
+  private var released: [URL] = []
 
   var isEmpty: Bool { entries.isEmpty }
   /// Segments not typed yet.
@@ -81,6 +100,11 @@ struct TranscriptQueue<Target> {
     return nil
   }
 
+  /// The earliest time a failed segment goes again by itself.
+  var nextRetry: ContinuousClock.Instant? {
+    entries.lazy.filter { if case .failed = $0.status { true } else { false } }.compactMap(\.retryAt).min()
+  }
+
   /// Holds a segment's place in spoken order before its audio is ready.
   mutating func reserve(run: Int, target: Target) -> Int {
     defer { nextID += 1 }
@@ -88,19 +112,28 @@ struct TranscriptQueue<Target> {
     return nextID
   }
 
-  /// The encoded audio; the segment is then sent.
-  mutating func setAudio(_ audio: Data, for id: Int) {
-    guard let i = index(id) else { return }
+  /// The spooled audio: the segment waits for a request slot.
+  mutating func setAudio(_ audio: URL, for id: Int) {
+    guard let i = index(id), entries[i].status == .encoding else {
+      released.append(audio)
+      return
+    }
     entries[i].audio = audio
+    entries[i].status = .ready
   }
 
-  /// Marks the segment sent and returns its audio and the prompt to send with it.
-  mutating func send(_ id: Int) -> (audio: Data, prompt: String)? {
-    guard let i = index(id), let audio = entries[i].audio else { return nil }
-    let prompt = String((typedByRun[entries[i].run] ?? "").suffix(Self.contextLength))
-    entries[i].status = .sending
-    entries[i].prompt = prompt
-    return (audio, prompt)
+  /// Marks segments sent, earliest first, while a slot is free; returns their requests.
+  mutating func send() -> [Request] {
+    var free = Self.slots - entries.count { $0.status == .sending || $0.status == .waiting }
+    var requests: [Request] = []
+    for i in entries.indices where free > 0 && entries[i].status == .ready {
+      guard let audio = entries[i].audio else { continue }
+      entries[i].status = .sending
+      requests.append(Request(id: entries[i].id, audio: audio,
+                              prompt: String((typedByRun[entries[i].run] ?? "").suffix(Self.contextLength))))
+      free -= 1
+    }
+    return requests
   }
 
   /// The request is held until the network returns.
@@ -118,46 +151,70 @@ struct TranscriptQueue<Target> {
   mutating func complete(_ id: Int, reply: String) -> [Typed] {
     guard let i = index(id) else { return [] }
     let text = DictatedText.clean(reply)
-    let madeUp = DictatedText.isEcho(text, of: entries[i].prompt) || DictatedText.isOtherScript(text)
-    entries[i].status = .done(madeUp ? "" : text)
+    entries[i].status = .done(DictatedText.isOtherScript(text) ? "" : text)
     return popReady()
   }
 
-  mutating func fail(_ id: Int, _ failure: TranscriptionFailure) {
+  /// A failed request at `now`. One that clears up by itself goes again
+  /// after 2 s, doubling with each failure in a row, up to a minute.
+  mutating func fail(_ id: Int, _ failure: TranscriptionFailure, at now: ContinuousClock.Instant) {
     guard let i = index(id) else { return }
     entries[i].status = .failed(failure)
+    guard failure.retriesByItself else {
+      entries[i].retryAt = nil
+      return
+    }
+    entries[i].failures += 1
+    entries[i].retryAt = now + Self.retryDelay(after: entries[i].failures)
   }
 
-  /// Failed segments to send again: only those that clear up by themselves,
-  /// unless the user asked. Returns their ids, in order.
-  mutating func retry(all: Bool) -> [Int] {
-    entries.compactMap { entry in
-      guard case .failed(let failure) = entry.status, all || failure.retriesByItself else { return nil }
-      return entry.id
+  static func retryDelay(after failures: Int) -> Duration {
+    min(.seconds(2) * (1 << min(max(failures - 1, 0), 5)), .seconds(60))
+  }
+
+  /// Failed segments go again, ignoring their schedule: only those that clear
+  /// up by themselves, unless the user asked, whose retry also starts the schedule over.
+  mutating func retry(all: Bool) {
+    for i in entries.indices {
+      guard case .failed(let failure) = entries[i].status, all || failure.retriesByItself else { continue }
+      entries[i].status = .ready
+      if all { entries[i].failures = 0 }
+    }
+  }
+
+  /// Failed segments whose time to go again has come by `now`.
+  mutating func retryDue(at now: ContinuousClock.Instant) {
+    for i in entries.indices {
+      guard case .failed = entries[i].status, let at = entries[i].retryAt, at <= now else { continue }
+      entries[i].status = .ready
     }
   }
 
   /// Forgets every segment not typed yet; replies still on their way are ignored.
   mutating func discard() {
+    released += entries.compactMap(\.audio)
     entries.removeAll()
-  }
-
-  /// Drops segments whose target is gone (its tab closed); returns what can now be typed.
-  mutating func remove(where gone: (Target) -> Bool) -> [Typed] {
-    entries.removeAll { gone($0.target) }
-    return popReady()
   }
 
   /// Gives up one segment (its audio could not be encoded); returns what can now be typed.
   mutating func drop(_ id: Int) -> [Typed] {
-    entries.removeAll { $0.id == id }
+    guard let i = index(id) else { return [] }
+    if let audio = entries[i].audio { released.append(audio) }
+    entries.remove(at: i)
     return popReady()
+  }
+
+  /// Spool files no segment needs any more; each is returned once.
+  mutating func takeReleasedAudio() -> [URL] {
+    defer { released = [] }
+    return released
   }
 
   private mutating func popReady() -> [Typed] {
     var ready: [Typed] = []
     while let first = entries.first, case .done(let text) = first.status {
       entries.removeFirst()
+      if let audio = first.audio { released.append(audio) }
       guard !text.isEmpty else { continue }
       let before = typedByRun[first.run].map { $0 + " " } ?? ""
       typedByRun[first.run] = String((before + text).suffix(Self.contextLength))
@@ -191,14 +248,6 @@ enum DictatedText {
     return out
   }
 
-  /// OpenAI's models answer near-silence with their prompt; a reply that is
-  /// most of the prompt again is that, not speech.
-  static func isEcho(_ reply: String, of prompt: String) -> Bool {
-    let said = comparable(reply), context = comparable(prompt)
-    guard !said.isEmpty, !context.isEmpty else { return false }
-    return context.contains(said) && said.count * 10 >= context.count * 4
-  }
-
   /// With English fixed, a reply mostly in another script (Cyrillic,
   /// Japanese…) is the model making text up for noise, never what was said.
   static func isOtherScript(_ reply: String) -> Bool {
@@ -211,12 +260,5 @@ enum DictatedText {
   static func typed(_ text: String, continuing: Bool) -> String {
     guard continuing, let first = text.first, !",.;:!?)]}%…".contains(first) else { return text }
     return " " + text
-  }
-
-  private static func comparable(_ text: String) -> String {
-    text.lowercased().unicodeScalars
-      .filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }
-      .map(String.init).joined()
-      .split(separator: " ").joined(separator: " ")
   }
 }

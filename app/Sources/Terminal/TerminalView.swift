@@ -18,6 +18,8 @@ protocol TerminalViewDelegate: AnyObject {
     func terminalView(_ view: TerminalView, voiceNotice text: String)
     /// Settings › Voice, for a missing key or a failure fixed there.
     func terminalViewOpensVoiceSettings(_ view: TerminalView)
+    /// Where this terminal's input goes now, for dictation; nil at the local prompt.
+    func terminalViewDictationDestination(_ view: TerminalView) -> DictationDestination?
 }
 
 /// A terminal grid in cells, with the cell it was measured in (pixels).

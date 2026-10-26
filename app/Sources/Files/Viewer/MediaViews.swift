@@ -124,7 +124,8 @@ struct MediaPlayer: UIViewControllerRepresentable {
   let url: URL
 
   func makeUIViewController(context: Context) -> AVPlayerViewController {
-    try? AVAudioSession.sharedInstance().setCategory(.playback)
+    // On the audio queue: with rpc_timeout 0 a slow audio server would hold the main thread forever.
+    MicrophoneCapture.queue.async { try? AVAudioSession.sharedInstance().setCategory(.playback) }
     let controller = AVPlayerViewController()
     controller.player = AVPlayer(url: url)
     controller.view.backgroundColor = Chrome.UI.bg

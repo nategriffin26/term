@@ -90,6 +90,13 @@ enum AppDirectories {
   /// Saved mosh session state, one file per tab.
   static let sessions: URL = make("sessions")
 
+  /// Dictated speech waiting for its text (`SpeechSpool`), in Caches.
+  static let speech: URL = {
+    let url = URL.cachesDirectory.appending(path: "Speech", directoryHint: .isDirectory)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
+  }()
+
   private static func make(_ name: String) -> URL {
     let url = support.appending(path: name, directoryHint: .isDirectory)
     try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

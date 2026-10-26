@@ -191,6 +191,10 @@ extension TerminalView {
 }
 
 extension TerminalView: DictationTarget {
+    var dictationDestination: DictationDestination? {
+        delegate?.terminalViewDictationDestination(self)
+    }
+
     /// Typed as a paste (bracketed when the program asked), so a transcript
     /// is never run line by line; a space joins it to text dictated just before.
     func typeDictation(_ text: String) {

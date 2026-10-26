@@ -1,21 +1,33 @@
 import AVFoundation
+import Synchronization
 
 /// What `Dictation` listens with. Called on the main thread.
 protocol Microphone: AnyObject {
   /// Turns the microphone on; `done` comes back on the main actor with nil
   /// once samples will flow, or the error. It may take long, or never come,
-  /// while the audio server is slow to answer.
+  /// while the audio server is slow to answer; it never comes after `stop`.
   func start(_ done: @escaping @MainActor @Sendable (Error?) -> Void)
-  /// Turns it off, after any start still in progress.
+  /// Turns it off, without waiting for a start in progress.
   func stop()
 }
 
+/// The audio calls that turn the microphone on, each of which can wait long
+/// on a slow audio server. Used only on `MicrophoneCapture.queue`.
+protocol AudioInput: AnyObject {
+  /// The steps, in order.
+  var steps: [() throws -> Void] { get }
+  /// Gives back whatever the steps took.
+  func release()
+}
+
 /// The microphone as 16 kHz mono samples, delivered on the audio thread
-/// about every 100 ms. Every audio session and engine call runs on one
-/// serial queue, never the main thread: an audio server slow to answer
-/// holds up that queue, not the app.
+/// about every 100 ms. Every audio session and engine call, making the
+/// engine included, runs on one serial queue, never the main thread, so it
+/// all falls inside `Dictation`'s start deadline. Stopping does not wait
+/// for a start held up in a slow call: that start runs no further step and
+/// gives the microphone back as soon as the call returns. One start per capture.
 final class MicrophoneCapture: Microphone, @unchecked Sendable {
-  private static let queue = DispatchQueue(label: "MicrophoneCapture", qos: .userInitiated)
+  static let queue = DispatchQueue(label: "MicrophoneCapture", qos: .userInitiated)
 
   /// AudioToolbox aborts the app when the audio server takes longer than
   /// its `rpc_timeout` preference (9 s unless set) to answer starting the
@@ -27,50 +39,100 @@ final class MicrophoneCapture: Microphone, @unchecked Sendable {
     UserDefaults(suiteName: "com.apple.coreaudio")?.set(0, forKey: "rpc_timeout")
   }
 
-  // Touched only on `queue`.
-  private let engine = AVAudioEngine()
-  private var tapped = false
-  private var routeObserver: NSObjectProtocol?
-
-  private let onSamples: @Sendable ([Float]) -> Void
-  private let onFailure: @MainActor @Sendable () -> Void
+  /// Touched only on `queue`.
+  private let input: AudioInput
+  private let stopped = Atomic<Bool>(false)
 
   /// `onFailure`: listening stopped by itself (the input could not restart after a route change).
-  init(onSamples: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor @Sendable () -> Void) {
-    self.onSamples = onSamples
-    self.onFailure = onFailure
+  convenience init(onSamples: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor @Sendable () -> Void) {
+    self.init(input: EngineInput(onSamples: onSamples, onFailure: onFailure))
+  }
+
+  init(input: AudioInput) {
+    self.input = input
   }
 
   func start(_ done: @escaping @MainActor @Sendable (Error?) -> Void) {
     Self.queue.async { [self] in
       var failure: Error?
-      do {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
-        try session.setActive(true)
-        try tap()
-        // A new route (headphones, AirPods) stops the engine: start again in its format.
-        routeObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
-                                                               object: engine, queue: nil) { [weak self] _ in
-          Self.queue.async { self?.restart() }
+      for step in input.steps {
+        if stopped.load(ordering: .acquiring) { break }
+        do {
+          try step()
+        } catch {
+          failure = error
+          break
         }
-      } catch {
-        failure = error
-        release()
       }
+      if stopped.load(ordering: .acquiring) {
+        input.release()
+        return
+      }
+      if failure != nil { input.release() }
       DispatchQueue.main.async { [failure] in MainActor.assumeIsolated { done(failure) } }
     }
   }
 
   func stop() {
-    Self.queue.async { [self] in release() }
+    stopped.store(true, ordering: .releasing)
+    Self.queue.async { [self] in input.release() }
+  }
+}
+
+/// The real microphone: the shared audio session, and an engine tapping its input.
+private final class EngineInput: AudioInput, @unchecked Sendable {
+  private let onSamples: @Sendable ([Float]) -> Void
+  private let onFailure: @MainActor @Sendable () -> Void
+  // Touched only on `MicrophoneCapture.queue`.
+  private var engine: AVAudioEngine?
+  private var active = false
+  private var tapped = false
+  private var routeObserver: NSObjectProtocol?
+
+  init(onSamples: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor @Sendable () -> Void) {
+    self.onSamples = onSamples
+    self.onFailure = onFailure
   }
 
-  /// On `queue`.
+  var steps: [() throws -> Void] {
+    [
+      { self.engine = AVAudioEngine() },
+      {
+        try AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default,
+                                                        options: [.defaultToSpeaker, .allowBluetoothHFP])
+      },
+      {
+        try AVAudioSession.sharedInstance().setActive(true)
+        self.active = true
+      },
+      { try self.installTap() },
+      {
+        try self.run()
+        // A new route (headphones, AirPods) stops the engine: start again in its format.
+        self.routeObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
+                                                                    object: self.engine, queue: nil) { [weak self] _ in
+          MicrophoneCapture.queue.async { self?.restart() }
+        }
+      },
+    ]
+  }
+
+  func release() {
+    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+    routeObserver = nil
+    if tapped { engine?.inputNode.removeTap(onBus: 0) }
+    tapped = false
+    engine?.stop()
+    engine = nil
+    if active { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+    active = false
+  }
+
   private func restart() {
     guard tapped else { return }
     do {
-      try tap()
+      try installTap()
+      try run()
     } catch {
       release()
       let onFailure = onFailure
@@ -78,8 +140,9 @@ final class MicrophoneCapture: Microphone, @unchecked Sendable {
     }
   }
 
-  /// On `queue`: the tap in the input's current format, and the engine running.
-  private func tap() throws {
+  /// The tap in the input's current format.
+  private func installTap() throws {
+    guard let engine else { throw CocoaError(.featureUnsupported) }
     let input = engine.inputNode
     if tapped { input.removeTap(onBus: 0) }
     tapped = false
@@ -92,18 +155,12 @@ final class MicrophoneCapture: Microphone, @unchecked Sendable {
     input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 10), format: format,
                      block: Self.tap(converter: converter, target: target, deliver: onSamples))
     tapped = true
-    engine.prepare()
-    try engine.start()
   }
 
-  /// On `queue`: everything `start` took, given back.
-  private func release() {
-    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
-    routeObserver = nil
-    if tapped { engine.inputNode.removeTap(onBus: 0) }
-    tapped = false
-    engine.stop()
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  private func run() throws {
+    guard let engine else { throw CocoaError(.featureUnsupported) }
+    engine.prepare()
+    try engine.start()
   }
 
   /// Made outside any actor: the engine calls it on its own thread.

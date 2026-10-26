@@ -3,10 +3,10 @@ import Foundation
 
 /// Turns one spoken segment into text.
 protocol Transcriber: Sendable {
-  /// `audio` is m4a; `prompt` is what was typed just before it, for
+  /// `audio` is an m4a file; `prompt` is what was typed just before it, for
   /// spelling and context. `waiting` runs if the request is held until the
   /// network returns.
-  func transcribe(_ audio: Data, prompt: String,
+  func transcribe(_ audio: URL, prompt: String,
                   waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> String
 }
 
@@ -29,8 +29,11 @@ struct OpenRouterTranscriber: Transcriber {
     return URLSession(configuration: config)
   }()
 
-  func transcribe(_ audio: Data, prompt: String,
+  func transcribe(_ audio: URL, prompt: String,
                   waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> String {
+    guard let audio = try? Data(contentsOf: audio) else {
+      throw TranscriptionFailure(problem: .other("The recording is gone"), retriesByItself: false)
+    }
     let request = Self.request(audio: audio, prompt: prompt, model: model, key: key, baseURL: baseURL)
     let data: Data, response: URLResponse
     do {

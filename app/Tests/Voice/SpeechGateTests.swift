@@ -10,13 +10,26 @@ enum TestAudio {
   /// `text` spoken by the system's English voice at `dB` RMS, over a quiet
   /// room, with the 0.3 s before and 0.2 s after a segment keeps.
   static func speech(_ text: String, dB: Float = -24) async throws -> [Float] {
-    let voice = try await say(text)
-    let first = voice.firstIndex { abs($0) > 1e-3 } ?? 0, last = voice.lastIndex { abs($0) > 1e-3 } ?? 0
+    let spoken = try await voice(text, dB: dB)
     var rng = Seeded(1)
     let before = room(0.3, &rng), after = room(0.2, &rng)
-    let spoken = scaled(Array(voice[first...last]), to: dB)
     let floor = room(Double(spoken.count) / Double(rate), &rng)
     return before + zip(spoken, floor).map(+) + after
+  }
+
+  /// The voice alone at `dB` RMS, from its first sound to its last;
+  /// `voicedFrames` cuts it to its first frames (50 ms each), a word said short.
+  static func voice(_ text: String, dB: Float = -24, voicedFrames: Int? = nil) async throws -> [Float] {
+    let voice = try await say(text)
+    let first = voice.firstIndex { abs($0) > 1e-3 } ?? 0, last = voice.lastIndex { abs($0) > 1e-3 } ?? 0
+    let end = voicedFrames.map { min(last, first + $0 * SpeechSegmenter.frameLength - 1) } ?? last
+    return scaled(Array(voice[first...end]), to: dB)
+  }
+
+  /// A room's steady hiss at -55 dBFS: no frame of it is loud enough to count as speech.
+  static func room(seconds: Double) -> [Float] {
+    var rng = Seeded(4)
+    return scaled((0..<Int(seconds * Double(rate))).map { _ in Float.random(in: -1...1, using: &rng) }, to: -55)
   }
 
   /// A quiet room whose noise swells and falls, with knocks on the desk.

@@ -80,6 +80,13 @@ final class Tab {
     remote != nil || connecting != nil ? target?.alias : nil
   }
 
+  /// Where dictated text said here goes: the remote on screen, as its host
+  /// and tmux session; nil at the local prompt or while a preview shows.
+  var dictationDestination: DictationDestination? {
+    guard let remote, let target, view.session === remote else { return nil }
+    return DictationDestination(host: target.id, tmuxSession: tmuxSession, connection: remote)
+  }
+
   init?(id: UUID = UUID()) {
     guard let local = Session(localCols: 80, rows: 24) else { return nil }
     self.id = id
