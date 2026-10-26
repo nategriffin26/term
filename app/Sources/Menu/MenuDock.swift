@@ -11,7 +11,7 @@ final class MenuDock: UIView {
   private let glass = GlassView()
   private var buttons: [MenuTab: UIButton] = [:]
   /// Counts on icons (the tmux tab: sessions whose agent stopped for him).
-  private var badges: [MenuTab: UILabel] = [:]
+  private var badges: [MenuTab: DockBadge] = [:]
   private var selected: MenuTab?
 
   static let itemSize = CGSize(width: Chrome.Size.target, height: Chrome.Size.target)
@@ -50,33 +50,21 @@ final class MenuDock: UIView {
     for (tab, badge) in badges {
       guard let button = buttons[tab] else { continue }
       // On the glyph's top-right corner, its top on the capsule's.
-      let width = max(18, badge.intrinsicContentSize.width + 10)
-      badge.frame = CGRect(x: button.frame.midX + 11 - width / 2, y: glass.frame.minY, width: width, height: 16)
+      let size = badge.intrinsicContentSize
+      badge.frame = CGRect(x: button.frame.midX + 11 - size.width / 2, y: glass.frame.minY, width: size.width, height: size.height)
     }
   }
 
   /// Shows `count` on `tab`'s icon; nothing at zero.
   func setBadge(_ count: Int, on tab: MenuTab) {
     buttons[tab]?.accessibilityValue = count > 0 ? "\(count) new" : nil
-    guard count > 0 else {
-      badges[tab]?.isHidden = true
-      return
-    }
     let badge = badges[tab] ?? {
-      let label = UILabel()
-      label.font = Chrome.uiFont(.caption, .bold, size: .standard)  // sized to the dock's glyphs, which stay put
-      label.textAlignment = .center
-      label.backgroundColor = Chrome.UI.accent
-      label.textColor = Chrome.UI.onAccent
-      label.layer.cornerRadius = 8
-      label.clipsToBounds = true
-      label.isUserInteractionEnabled = false
-      addSubview(label)
-      badges[tab] = label
-      return label
+      let badge = DockBadge()
+      addSubview(badge)
+      badges[tab] = badge
+      return badge
     }()
-    badge.text = "\(count)"
-    badge.isHidden = false
+    badge.count = count
     setNeedsLayout()
   }
 
@@ -107,5 +95,35 @@ final class MenuDock: UIView {
     guard let button = buttons[tab], !isHidden, window != nil else { return nil }
     let glyph = CGRect(x: 0, y: 0, width: 34, height: 34)
     return button.convert(glyph.offsetBy(dx: (button.bounds.width - 34) / 2, dy: (button.bounds.height - 34) / 2), to: space)
+  }
+}
+
+/// The count on a dock icon: sessions whose agent stopped for him.
+@MainActor
+final class DockBadge: UILabel {
+  var count = 0 {
+    didSet {
+      text = "\(count)"
+      isHidden = count == 0
+      invalidateIntrinsicContentSize()
+    }
+  }
+
+  init() {
+    super.init(frame: .zero)
+    font = Chrome.uiFont(.caption, .bold, size: .standard)  // sized to the dock's glyphs, which stay put
+    textAlignment = .center
+    backgroundColor = Chrome.UI.accent
+    textColor = Chrome.UI.onAccent
+    layer.cornerRadius = 8
+    clipsToBounds = true
+    isUserInteractionEnabled = false
+    isHidden = true
+  }
+
+  required init?(coder: NSCoder) { fatalError("not used") }
+
+  override var intrinsicContentSize: CGSize {
+    CGSize(width: max(18, super.intrinsicContentSize.width + 10), height: 16)
   }
 }

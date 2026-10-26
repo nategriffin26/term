@@ -27,6 +27,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private let dock = MenuDock()
   private let hud = SessionHUD()
   private var dockItems: [MenuTab: UIBarButtonItem] = [:]
+  private let toolbarBadge = DockBadge()
   /// The terminal had the keyboard when the menu opened; it gets it back on close.
   private var menuRestoresFocus = false
   private lazy var inserter = Inserter(presenter: self)
@@ -376,14 +377,9 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     super.updateProperties()
     let count = TmuxStore.shared.unreadCount
     dock.setBadge(count, on: .tmux)
-    if count > 0 {
-      var badge = UIBarButtonItem.Badge.count(count)
-      badge.backgroundColor = Chrome.UI.accent
-      badge.foregroundColor = UIColor(Chrome.onAccent)
-      dockItems[.tmux]?.badge = badge
-    } else {
-      dockItems[.tmux]?.badge = nil
-    }
+    toolbarBadge.count = count
+    dockItems[.tmux]?.accessibilityValue = count > 0 ? "\(count) new" : nil
+    view.setNeedsLayout()
   }
 
   static func openWindow() {
@@ -858,6 +854,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   }
 
   private func layoutDock() {
+    placeToolbarBadge()
     let frame = bandDockFrame
     dock.isHidden = frame == nil
     guard let frame else { return }
@@ -883,6 +880,25 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       dockItems[tab] = item
       return item
     }
+  }
+
+  /// The tmux icon's count in the vertical bar, drawn here: the bar draws an
+  /// item's own badge only when it builds the bar, never when the count of
+  /// one it shows changes. It sits above the bar, on the icon's corner.
+  private func placeToolbarBadge() {
+    guard let nav = navigationController, !nav.isToolbarHidden, toolbarBadge.count > 0,
+          let item = dockItems[.tmux], let frame = item.frame(in: nav.view), frame.width > 0 else {
+      toolbarBadge.isHidden = true
+      return
+    }
+    if toolbarBadge.superview !== nav.view {
+      // zPosition keeps it above the bar however UIKit orders the bar's views.
+      toolbarBadge.layer.zPosition = 1000
+      nav.view.addSubview(toolbarBadge)
+    }
+    let size = toolbarBadge.intrinsicContentSize
+    toolbarBadge.frame = CGRect(x: frame.midX + 11 - size.width / 2, y: frame.minY - 2, width: size.width, height: size.height)
+    toolbarBadge.isHidden = false
   }
 }
 
