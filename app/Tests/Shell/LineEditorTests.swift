@@ -545,6 +545,24 @@ final class LineEditorTests: XCTestCase {
     XCTAssertEqual(h.editor.printAbove("hi\r\n"), "hi\r\n")
   }
 
+  /// Bug it catches (seen on the sim): a tab the tmux tab attached kept its
+  /// prompt in editing state, so when the session was closed the tab showed
+  /// "term> term> ". The command reads as typed, half-typed text and its
+  /// wrapped row are gone, and only the prompt after the command is drawn.
+  func testEnterShowsTheCommandAsTypedAndEndsTheLine() {
+    var h = PromptHarness(cols: 20)
+    h.type("abcdefghijklmnopqrstuvwxyz")
+    h.screen.feed(h.editor.enter("tmux e2em api"))
+    XCTAssertEqual(h.screen.lines, ["term> tmux e2em api"])
+    XCTAssertEqual(h.screen.cursor.row, 1)
+    XCTAssertEqual(h.screen.cursor.col, 0)
+    XCTAssertFalse(h.editor.isEditing)
+    XCTAssertEqual(h.editor.text, "")
+    h.screen.feed(h.editor.printAbove("Connection to e2em closed.\r\n"))
+    h.screen.feed(h.editor.begin())
+    XCTAssertEqual(h.screen.lines, ["term> tmux e2em api", "Connection to e2em closed.", "term>"])
+  }
+
   // MARK: - Resize
 
   func testRotatingNarrowerWrapsTheLineAndKeepsTheCursorAtItsEnd() {

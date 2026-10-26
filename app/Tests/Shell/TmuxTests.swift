@@ -202,6 +202,22 @@ final class TmuxTests: XCTestCase {
     XCTAssertEqual(Tmux.attachCommand("x; rm -rf ~"), "tmux new -A -s 'x; rm -rf ~'")
   }
 
+  /// Bug it catches (seen on the sim): a session closed while Term was in
+  /// the background came back empty when the tab reconnected, because the
+  /// new server ran `tmux new -A`. In Term's own attach a reconnect attaches
+  /// to exactly that session (or fails) and the probe asks tmux for exactly
+  /// it; a host's own command is left as configured.
+  func testReconnectAttachesOnlyToTheSameSession() {
+    XCTAssertEqual(Tmux.attachedSession(Tmux.attachCommand("my notes"), session: "my notes"), "my notes")
+    XCTAssertNil(Tmux.attachedSession("tmux -L work new -A -s main", session: "main"))
+    XCTAssertNil(Tmux.attachedSession(Tmux.attachCommand("api"), session: nil))
+    XCTAssertNil(Tmux.attachedSession(Tmux.attachCommand("api"), session: "web"))
+    XCTAssertNil(Tmux.attachedSession(nil, session: "api"))
+    XCTAssertEqual(try Command.tokenize(Tmux.reattachCommand("my notes")).get(), ["tmux", "attach", "-t", "=my notes"])
+    XCTAssertEqual(try Command.tokenize(Tmux.reattachCommand("it's")).get(), ["tmux", "attach", "-t", "=it's"])
+    XCTAssertEqual(Tmux.hasSessionCommand("my notes"), Tmux.path + "; tmux has-session -t '=my notes'")
+  }
+
   func testHistoryCommand() {
     XCTAssertEqual(Tmux.historyCommand(nil), "tmux capture-pane -p -e -J -S -3000")
     XCTAssertEqual(Tmux.historyCommand("main"), "tmux capture-pane -p -e -J -S -3000 -t main")

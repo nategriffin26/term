@@ -143,7 +143,8 @@ final class Tab {
   /// the banner's button and the automatic reconnect both come here.
   func reconnect() {
     guard let remote, let target, !reconnecting else { return }
-    let spec = Self.spec(for: target)
+    var spec = Self.spec(for: target)
+    if let name = Tmux.attachedSession(spec.command, session: tmuxSession) { spec.command = Tmux.reattachCommand(name) }
     reconnecting = true
     remote.reconnect(spec: spec, endOldServer: spec.runsInTmux)
     host?.tabDidChange(self)
@@ -188,9 +189,17 @@ final class Tab {
       return Self.spec(for: target).runsInTmux
     }
     autoReconnect.probe = { [weak self] in
-      guard let target = self?.target else { return false }
-      guard case .success(let out) = await RemoteExec.run(Self.spec(for: target), "true") else { return false }
-      return out.status == 0
+      guard let self, let target else { return false }
+      // In Term's own tmux attach the probe also asks whether the session is
+      // still there: one closed meanwhile ends the tab, as when tmux exits.
+      let session = Tmux.attachedSession(target.startupCommand, session: tmuxSession)
+      guard case .success(let out) = await RemoteExec.run(Self.spec(for: target), session.map(Tmux.hasSessionCommand) ?? "true")
+      else { return false }
+      if session != nil, out.status == 1, remote != nil {
+        closeRemote(reason: "")
+        return false
+      }
+      return true
     }
     autoReconnect.reconnect = { [weak self] in self?.reconnect() }
   }
@@ -362,6 +371,11 @@ final class Tab {
 
   func echo(_ text: String) {
     local.feed(Data(editor.printAbove(text).utf8))
+  }
+
+  /// Shows `line` entered at the prompt, for a connection the menu starts.
+  func enter(_ line: String) {
+    local.feed(Data(editor.enter(line).utf8))
   }
 
   func prompt() {

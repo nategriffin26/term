@@ -88,6 +88,19 @@ struct LineEditor {
     return out + refresh(clear: false)
   }
 
+  /// Ends the line as if `text` had been typed and entered, for a command
+  /// the menu runs from the prompt: the tab reads as if he typed it, and the
+  /// next prompt comes once, after the command.
+  mutating func enter(_ text: String) -> String {
+    guard isEditing else { return promptStyled + text + "\r\n" }
+    var out = ""
+    if cursorRow > 0 { out += "\u{1b}[\(cursorRow)A" }
+    isEditing = false
+    line = []
+    cursor = 0
+    return out + "\r\u{1b}[J" + promptStyled + text + "\r\n"
+  }
+
   mutating func feed(_ bytes: some Sequence<UInt8>) -> (output: String, events: [Event]) {
     var data = pending
     data.append(contentsOf: bytes)

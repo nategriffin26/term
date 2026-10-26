@@ -281,7 +281,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   func open(_ host: Host) {
     closeMenu()
     let tab = promptTab(focus: true)
-    tab?.echo("\(host.transport.rawValue) \(host.alias)\r\n")
+    tab?.enter("\(host.transport.rawValue) \(host.alias)")
     tab?.connect(host)
   }
 
@@ -317,7 +317,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     guard let tab else { return }
     var target = host
     target.startupCommand = Tmux.attachCommand(name)
-    tab.echo("tmux \(host.alias) \(name)\r\n")
+    tab.enter("tmux \(host.alias) \(name)")
     tab.connect(target, tmuxSession: name, preview: preview)
   }
 

@@ -126,6 +126,27 @@ enum Tmux {
     "tmux new -A -s \(Command.shellQuote(name))"
   }
 
+  /// The session a startup command is Term's own attach to, else nil: only
+  /// then may a reconnect assume what it runs (a host's own command, say
+  /// `tmux -L work new -A -s main`, is left as configured).
+  static func attachedSession(_ command: String?, session: String?) -> String? {
+    guard let session, command == attachCommand(session) else { return nil }
+    return session
+  }
+
+  /// What a reconnect's new server runs: attach only, so a session closed
+  /// meanwhile (from the tmux tab, the Mac) is not made again, empty, by
+  /// `new -A`.
+  static func reattachCommand(_ name: String) -> String {
+    "tmux attach -t \(Command.shellQuote("=" + name))"
+  }
+
+  /// Exits 0 while session `name` exists, 1 once it has ended or tmux has
+  /// stopped.
+  static func hasSessionCommand(_ name: String) -> String {
+    "\(path); tmux has-session -t \(Command.shellQuote("=" + name))"
+  }
+
   /// Ends each session; one that fails says why on its own line.
   static func killCommand(ids: [String]) -> String {
     ([path] + ids.map { "tmux kill-session -t \(Command.shellQuote($0)) 2>&1" }).joined(separator: "; ")
