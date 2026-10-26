@@ -45,6 +45,13 @@ final class MicrophoneCapture: Microphone, @unchecked Sendable {
 
   /// `onFailure`: listening stopped by itself (the input could not restart after a route change).
   convenience init(onSamples: @escaping @Sendable ([Float]) -> Void, onFailure: @escaping @MainActor @Sendable () -> Void) {
+    #if targetEnvironment(simulator)
+    // Simulator runs play a file in place of the Mac's microphone (SIMCTL_CHILD_TERM_VOICE_FILE).
+    if let path = ProcessInfo.processInfo.environment["TERM_VOICE_FILE"] {
+      self.init(input: FileInput(url: URL(filePath: path), onSamples: onSamples))
+      return
+    }
+    #endif
     self.init(input: EngineInput(onSamples: onSamples, onFailure: onFailure))
   }
 
@@ -76,6 +83,35 @@ final class MicrophoneCapture: Microphone, @unchecked Sendable {
   func stop() {
     stopped.store(true, ordering: .releasing)
     Self.queue.async { [self] in input.release() }
+  }
+}
+
+/// What `Dictation` hears: 16 kHz mono float samples.
+extension MicrophoneCapture {
+  static let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(SpeechSegmenter.sampleRate),
+                                    channels: 1, interleaved: false)!
+
+  /// Converts each buffer to `format` and delivers its samples. Made outside
+  /// any actor: the engine calls it on its own thread.
+  static func tap(converter: AVAudioConverter, deliver: @escaping @Sendable ([Float]) -> Void) -> AVAudioNodeTapBlock {
+    { buffer, _ in
+      let ratio = format.sampleRate / buffer.format.sampleRate
+      let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 32
+      guard let out = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return }
+      var fed = false
+      var error: NSError?
+      converter.convert(to: out, error: &error) { _, status in
+        if fed {
+          status.pointee = .noDataNow
+          return nil
+        }
+        fed = true
+        status.pointee = .haveData
+        return buffer
+      }
+      guard error == nil, out.frameLength > 0, let data = out.floatChannelData else { return }
+      deliver(Array(UnsafeBufferPointer(start: data[0], count: Int(out.frameLength))))
+    }
   }
 }
 
@@ -148,12 +184,10 @@ private final class EngineInput: AudioInput, @unchecked Sendable {
     tapped = false
     let format = input.outputFormat(forBus: 0)
     guard format.sampleRate > 0, format.channelCount > 0,
-          let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(SpeechSegmenter.sampleRate),
-                                     channels: 1, interleaved: false),
-          let converter = AVAudioConverter(from: format, to: target)
+          let converter = AVAudioConverter(from: format, to: MicrophoneCapture.format)
     else { throw CocoaError(.featureUnsupported) }
     input.installTap(onBus: 0, bufferSize: AVAudioFrameCount(format.sampleRate / 10), format: format,
-                     block: Self.tap(converter: converter, target: target, deliver: onSamples))
+                     block: MicrophoneCapture.tap(converter: converter, deliver: onSamples))
     tapped = true
   }
 
@@ -161,28 +195,5 @@ private final class EngineInput: AudioInput, @unchecked Sendable {
     guard let engine else { throw CocoaError(.featureUnsupported) }
     engine.prepare()
     try engine.start()
-  }
-
-  /// Made outside any actor: the engine calls it on its own thread.
-  private static func tap(converter: AVAudioConverter, target: AVAudioFormat,
-                          deliver: @escaping @Sendable ([Float]) -> Void) -> AVAudioNodeTapBlock {
-    { buffer, _ in
-      let ratio = target.sampleRate / buffer.format.sampleRate
-      let capacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 32
-      guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
-      var fed = false
-      var error: NSError?
-      converter.convert(to: out, error: &error) { _, status in
-        if fed {
-          status.pointee = .noDataNow
-          return nil
-        }
-        fed = true
-        status.pointee = .haveData
-        return buffer
-      }
-      guard error == nil, out.frameLength > 0, let data = out.floatChannelData else { return }
-      deliver(Array(UnsafeBufferPointer(start: data[0], count: Int(out.frameLength))))
-    }
   }
 }
