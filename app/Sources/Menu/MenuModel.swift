@@ -56,6 +56,7 @@ final class MenuModel {
   var sessionsPage = SessionsPage.grid
   var isOpen = false {
     didSet {
+      if !isOpen { tmuxTarget = nil }
       updateThumbnails()
       onChange?()
     }
@@ -75,7 +76,7 @@ final class MenuModel {
   /// The tmux tab's row snapshots, and the long-press preview's larger one.
   @ObservationIgnored let tmuxThumbnails = ThumbnailRenderer()
   @ObservationIgnored let tmuxPreviews = ThumbnailRenderer()
-  /// The host the tmux tab scrolls to when it shows (`tmux host` at the prompt).
+  /// The host the tmux tab lists first while open (`tmux host` at the prompt).
   var tmuxTarget: String?
   /// The tmux tab shows checkboxes, to close several sessions at once.
   var tmuxSelecting = false {

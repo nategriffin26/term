@@ -8,9 +8,8 @@ struct TmuxTab: View {
   let model: MenuModel
   @State private var confirming = false
   @State private var failure: String?
-  /// The host `tmux host` asked for, kept at the top until he scrolls.
-  @State private var reveal: String?
-  /// Bumped when the menu closes, so a row left swiped open is closed next time.
+  /// Bumped when the menu closes, so each opening starts at the top with no
+  /// row left swiped open.
   @State private var generation = 0
   @Environment(\.displayScale) private var displayScale
 
@@ -20,7 +19,7 @@ struct TmuxTab: View {
 
   var body: some View {
     let store = TmuxStore.shared
-    let hosts = TmuxList.servers(ConfigStore.shared.hosts)
+    let hosts = TmuxList.servers(ConfigStore.shared.hosts, first: model.tmuxTarget)
     VStack(spacing: 0) {
       if hosts.isEmpty {
         VStack(spacing: 14) {
@@ -60,47 +59,29 @@ struct TmuxTab: View {
 
   private func list(_ hosts: [Host], store: TmuxStore) -> some View {
     let fonts = rowFonts(hosts.flatMap { store.servers[$0.serverKey]?.sessions ?? [] })
-    return ScrollViewReader { proxy in
-      List {
-        ForEach(hosts) { host in
-          let server = store.servers[host.serverKey]
-          TmuxHostHead(host: host, server: server)
-            .id(host.serverKey)
+    return List {
+      ForEach(hosts) { host in
+        let server = store.servers[host.serverKey]
+        TmuxHostHead(host: host, server: server)
+          .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+          .listRowSeparator(.hidden)
+          .listRowBackground(Color.clear)
+        ForEach(server?.sessions ?? []) { session in
+          row(session, on: host, fonts: fonts, store: store)
+        }
+        if let server {
+          TmuxServerState(host: host, server: server)
             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
-          ForEach(server?.sessions ?? []) { session in
-            row(session, on: host, fonts: fonts, store: store)
-          }
-          if let server {
-            TmuxServerState(host: host, server: server)
-              .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-              .listRowSeparator(.hidden)
-              .listRowBackground(Color.clear)
-          }
         }
       }
-      .id(generation)
-      .listStyle(.plain)
-      .scrollContentBackground(.hidden)
-      .environment(\.defaultMinListRowHeight, 0)
-      .animation(Helm.ease(0.26), value: hosts.map { store.servers[$0.serverKey]?.sessions.map(\.id) ?? [] })
-      // Each opening starts at the top, or at the host `tmux host` asked
-      // for; closing forgets that host.
-      .onChange(of: model.isOpen ? model.tmuxTarget : nil, initial: true) { _, target in
-        reveal = target
-        if let target { proxy.scrollTo(target, anchor: .top) } else if !model.isOpen { model.tmuxTarget = nil }
-      }
-      // Sessions arrive after the tab opens and the keyboard resizes the
-      // panel: the host asked for stays at the top through both, until he
-      // scrolls himself.
-      .onScrollGeometryChange(for: CGSize.self, of: { CGSize(width: $0.containerSize.height, height: $0.contentSize.height) }) { _, _ in
-        if let reveal { proxy.scrollTo(reveal, anchor: .top) }
-      }
-      .onScrollPhaseChange { _, phase in
-        if phase == .interacting { reveal = nil }
-      }
     }
+    .id(generation)
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .environment(\.defaultMinListRowHeight, 0)
+    .animation(Helm.ease(0.26), value: hosts.map { store.servers[$0.serverKey]?.sessions.map(\.id) ?? [] })
   }
 
   private func row(_ session: Tmux.Session, on host: Host, fonts: FontSet?, store: TmuxStore) -> some View {
@@ -311,15 +292,18 @@ private struct TmuxServerState: View {
     case .failed(let text):
       line(text.isEmpty ? "tmux failed" : Tmux.readableError(text))
     case .unreachable(let message):
+      // The reason on its own line: cut beside the word, its useful end
+      // ("Connection refused") was lost on a phone.
       HStack(spacing: 10) {
-        Text("Unreachable")
-          .font(Helm.sans(13.5))
-          .foregroundStyle(Helm.fg2)
-          .layoutPriority(1)
-        Text(message)
-          .font(Helm.mono(11.5))
-          .foregroundStyle(Helm.muted)
-          .truncationMode(.tail)
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Unreachable")
+            .font(Helm.sans(13.5))
+            .foregroundStyle(Helm.fg2)
+          Text(message)
+            .font(Helm.mono(11.5))
+            .foregroundStyle(Helm.muted)
+            .lineLimit(2)
+        }
         Spacer(minLength: 0)
         Button("Retry") { TmuxStore.shared.refresh(host) }
           .font(Helm.sans(12.5, .medium))
@@ -330,7 +314,7 @@ private struct TmuxServerState: View {
           .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Helm.line2, lineWidth: 1))
           .buttonStyle(PressScale())
       }
-      .lineLimit(1)
+      .padding(.vertical, 6)
       .frame(minHeight: 44)
     }
   }

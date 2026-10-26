@@ -27,6 +27,20 @@ final class TmuxListTests: XCTestCase {
     XCTAssertEqual(TmuxList.servers([mosh, otherUser]).count, 2)
   }
 
+  /// Bug it catches (seen on the sim): `tmux e2em` opened the tab scrolled
+  /// part-way, e2em's head mid-screen (the List's scroll-to lands on
+  /// estimated row heights). The host asked for leads the list instead,
+  /// whichever of its aliases was typed; the rest keep their order.
+  func testTheHostAskedForLeads() {
+    let web = Host(alias: "web-box", hostname: "10.0.0.3", user: "dev")
+    XCTAssertEqual(TmuxList.servers([api, web, mosh], first: mosh.serverKey).map(\.alias), ["e2em", "api-box", "web-box"])
+    XCTAssertEqual(TmuxList.servers([api, ssh, web, mosh], first: mosh.serverKey).map(\.alias), ["e2e", "api-box", "web-box"])
+    XCTAssertEqual(TmuxList.servers([api, web], first: web.serverKey).map(\.alias), ["web-box", "api-box"])
+    XCTAssertEqual(TmuxList.servers([api, web], first: api.serverKey).map(\.alias), ["api-box", "web-box"])
+    XCTAssertEqual(TmuxList.servers([api, web], first: "nobody@nowhere:22").map(\.alias), ["api-box", "web-box"])
+    XCTAssertEqual(TmuxList.servers([api, web], first: nil).map(\.alias), ["api-box", "web-box"])
+  }
+
   /// Other clients = attached minus Term's tabs on it, never below zero:
   /// Detach Others shows only when there is someone else to detach.
   func testOthersCountsClientsBesidesTerms() {

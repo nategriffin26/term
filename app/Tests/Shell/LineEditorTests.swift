@@ -558,9 +558,9 @@ final class LineEditorTests: XCTestCase {
     XCTAssertEqual(h.screen.cursor.col, 0)
     XCTAssertFalse(h.editor.isEditing)
     XCTAssertEqual(h.editor.text, "")
-    h.screen.feed(h.editor.printAbove("Connection to e2em closed.\r\n"))
+    h.screen.feed(h.editor.printAbove("Closed.\r\n"))
     h.screen.feed(h.editor.begin())
-    XCTAssertEqual(h.screen.lines, ["term> tmux e2em api", "Connection to e2em closed.", "term>"])
+    XCTAssertEqual(h.screen.lines, ["term> tmux e2em api", "Closed.", "term>"])
   }
 
   // MARK: - Resize

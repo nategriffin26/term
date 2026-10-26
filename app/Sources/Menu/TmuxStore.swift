@@ -9,11 +9,14 @@ extension Host {
 
 /// What the tmux tab shows, pure so it is tested on its own.
 enum TmuxList {
-  /// One section per tmux server among the saved hosts, in their order:
-  /// hosts that reach the same server show once, as the first saved.
-  static func servers(_ hosts: [Host]) -> [Host] {
+  /// One section per tmux server among the saved hosts, in their order, the
+  /// server `first` (`tmux host` asked for it) leading: hosts that reach the
+  /// same server show once, as the first saved.
+  static func servers(_ hosts: [Host], first: String? = nil) -> [Host] {
     var seen = Set<String>()
-    return hosts.filter { seen.insert($0.serverKey).inserted }
+    var servers = hosts.filter { seen.insert($0.serverKey).inserted }
+    if let lead = servers.firstIndex(where: { $0.serverKey == first }) { servers.insert(servers.remove(at: lead), at: 0) }
+    return servers
   }
 
   /// Clients on `session` that are not Term's: the Mac, another phone.
