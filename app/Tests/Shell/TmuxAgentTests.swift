@@ -249,6 +249,42 @@ final class TmuxAgentTests: XCTestCase {
     XCTAssertEqual(o.agents, [:])
   }
 
+  /// Bug it catches: the overview carried no word on which server answered,
+  /// so two routes to one Mac could not be told from two Macs.
+  func testOverviewReadsTheServersIdentity() {
+    let identity = "box.example\t4242\t/private/tmp/tmux-501/default"
+    let out = "$0\t100\t1\t0\t50\t80\t24\t3\t5\tomp\t/home/u\toff\tapi\n"
+      + "\u{1d}\n\u{1f}\(identity)\n" + line(payload: payload(state: "done", stop: 1_792_987_200)) + "\n"
+      + "\u{1e}$0\nscreen row\n"
+    guard case .success(let o) = Tmux.parseOverview(status: 0, output: Data(out.utf8), now: now) else { return XCTFail() }
+    XCTAssertEqual(o.identity, identity)
+    XCTAssertEqual(o.agents["$0"]?.state, .done, "the identity line is not an agent")
+    XCTAssertEqual(o.screens, ["$0": "screen row"])
+    XCTAssertEqual(Tmux.parseIdentity(Tmux.agentSection(Data(("\u{1d}\n\u{1f}" + identity + "\n").utf8))), identity)
+  }
+
+  /// A host whose script predates the line, or whose tmux has no server to
+  /// answer, has no identity; its output still parses.
+  func testOverviewWithoutAnIdentityStillParses() {
+    let old = "$0\t100\t1\t0\t50\t80\t24\t3\t5\tzsh\t/home/u\toff\tapi\n\u{1d}\n\u{1e}$0\nrow\n"
+    guard case .success(let o) = Tmux.parseOverview(status: 0, output: Data(old.utf8)) else { return XCTFail() }
+    XCTAssertNil(o.identity)
+    XCTAssertEqual(o.sessions.count, 1)
+    guard case .success(let empty) = Tmux.parseOverview(status: 0, output: Data("$0\t100\t1\t0\t50\t80\t24\t3\t5\tzsh\t/home/u\toff\tapi\n\u{1d}\n\u{1f}\n".utf8)) else { return XCTFail() }
+    XCTAssertNil(empty.identity, "an empty answer is no identity")
+    XCTAssertNil(Tmux.parseIdentity(""))
+  }
+
+  /// The agents-only exec (the badge's check) reports it too: the badge must
+  /// see a duplicate route without the tab being open.
+  func testAgentsCommandReportsTheIdentityBeforeTheAgents() {
+    let command = Tmux.agentsCommand()
+    let identity = try! XCTUnwrap(command.range(of: "display-message -p '#{host}\t#{pid}\t#{socket_path}'"), command)
+    let panes = try! XCTUnwrap(command.range(of: "list-panes"))
+    XCTAssertLessThan(identity.upperBound, panes.lowerBound)
+    XCTAssertTrue(command.contains(#"printf '\037%s\n' "$(tmux display-message"#), command)
+  }
+
   func testAgentsCommandListsTheParsersFieldsInOrder() {
     let command = Tmux.agentsCommand()
     let format = command.components(separatedBy: "-F '")[1].components(separatedBy: "'")[0]

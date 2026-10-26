@@ -11,13 +11,41 @@ extension Host {
 /// What the tmux tab shows, pure so it is tested on its own.
 enum TmuxList {
   /// One section per tmux server among the saved hosts, in their order, the
-  /// server `first` (`tmux host` asked for it) leading: hosts that reach the
-  /// same server show once, as the first saved.
-  static func servers(_ hosts: [Host], first: String? = nil) -> [Host] {
+  /// server `first` (`tmux host` asked for it) leading. Hosts that reach the
+  /// same server show once, as the first saved: by address (`serverKey`), and
+  /// by the identity the server reported (`identities`, by serverKey), which
+  /// sees through a backup route to the same machine. A host whose identity
+  /// is shown by a reachable earlier one stays hidden; it shows only once that
+  /// one is `down` (its last answer failed), the backup case.
+  static func servers(_ hosts: [Host], first: String? = nil, identities: [String: String] = [:],
+                      down: Set<String> = []) -> [Host] {
     var seen = Set<String>()
-    var servers = hosts.filter { seen.insert($0.serverKey).inserted }
-    if let lead = servers.firstIndex(where: { $0.serverKey == first }) { servers.insert(servers.remove(at: lead), at: 0) }
+    var claimed = Set<String>()
+    var servers: [Host] = []
+    for host in hosts where seen.insert(host.serverKey).inserted {
+      let identity = identities[host.serverKey]
+      if let identity, claimed.contains(identity) { continue }
+      servers.append(host)
+      if let identity, !down.contains(host.serverKey) { claimed.insert(identity) }
+    }
+    let lead = first.flatMap { first in
+      servers.firstIndex { $0.serverKey == first || (identities[first] != nil && identities[$0.serverKey] == identities[first]) }
+    }
+    if let lead { servers.insert(servers.remove(at: lead), at: 0) }
     return servers
+  }
+
+  /// The shown host that speaks for `host`: the reachable one on the same
+  /// server (`host` itself when it is shown, or its server is not known to be shared).
+  static func speaker(for host: Host, among shown: [Host], identities: [String: String], down: Set<String> = []) -> Host {
+    guard let identity = identities[host.serverKey] else { return host }
+    return shown.first { identities[$0.serverKey] == identity && !down.contains($0.serverKey) } ?? host
+  }
+
+  /// Sessions whose agent stopped for him on the shown servers: a server
+  /// reached through two hosts counts once.
+  static func unread(_ agents: [String: [String: AgentInfo]], on shown: [Host]) -> Int {
+    shown.reduce(0) { $0 + (agents[$1.serverKey]?.values.count(where: \.unread) ?? 0) }
   }
 
   /// Clients on `session` that are not Term's: the Mac, another phone.
@@ -239,6 +267,13 @@ final class TmuxStore {
   private(set) var servers: [String: Server] = [:]
   /// Each session's agent, by server key, then session id.
   private(set) var agents: [String: [String: AgentInfo]] = [:]
+  /// Each host's tmux server identity as it last reported it (by server
+  /// key), kept across launches so a host that reaches a server already shown
+  /// stays hidden before it answers.
+  private(set) var identities: [String: String]
+  /// Hosts whose last answer failed, until one succeeds: a retry's loading
+  /// state does not make the backup route vanish.
+  private(set) var down: Set<String> = []
 
   /// One terminal engine per snapshot, fed each new capture.
   @ObservationIgnored private var engines: [String: Session] = [:]
@@ -263,12 +298,39 @@ final class TmuxStore {
   /// While it doesn't: the agent panes alone, to keep the badge true.
   static let agentInterval: Duration = .seconds(10)
 
-  private init() {}
+  @ObservationIgnored private let defaults: UserDefaults
+  private static let identitiesKey = "tmuxServerIdentities"
+
+  init(defaults: UserDefaults = .standard) {
+    self.defaults = defaults
+    identities = defaults.dictionary(forKey: Self.identitiesKey) as? [String: String] ?? [:]
+  }
+
+  /// `hosts` (the saved ones by default) as the tab lists them: one per tmux server.
+  func shownHosts(_ hosts: [Host]? = nil, first: String? = nil) -> [Host] {
+    TmuxList.servers(hosts ?? ConfigStore.shared.hosts, first: first, identities: identities, down: down)
+  }
+
+  /// The shown host that reaches `host`'s server: where its sessions are read and marked seen.
+  func speaker(for host: Host) -> Host {
+    TmuxList.speaker(for: host, among: shownHosts(), identities: identities, down: down)
+  }
+
+  /// Whether two hosts reach one tmux server, by address or by the identity it reported.
+  func sameServer(_ a: Host, _ b: Host) -> Bool {
+    a.serverKey == b.serverKey || identities[a.serverKey].map { $0 == identities[b.serverKey] } == true
+  }
+
+  private func remember(_ identity: String?, for key: String) {
+    guard let identity, identities[key] != identity else { return }
+    identities[key] = identity
+    defaults.set(identities, forKey: Self.identitiesKey)
+  }
 
   var hasSessions: Bool { servers.values.contains { !$0.sessions.isEmpty } }
 
   /// Sessions whose agent stopped for him since he last saw them: the tmux tab's badge.
-  var unreadCount: Int { agents.values.reduce(0) { $0 + $1.values.count(where: \.unread) } }
+  var unreadCount: Int { TmuxList.unread(agents, on: shownHosts()) }
 
   func agent(_ key: String, _ id: String) -> AgentInfo? { agents[key]?[id] }
 
@@ -286,7 +348,7 @@ final class TmuxStore {
     defer { watching = false }
     var first = true
     while !Task.isCancelled {
-      for host in hosts() {
+      for host in shownHosts(hosts()) {
         if !first, case .unreachable = servers[host.serverKey]?.status { continue }
         refresh(host)
       }
@@ -309,7 +371,7 @@ final class TmuxStore {
   /// unreachable hosts only on `retry` (Term coming to the front).
   func checkAgents(retry: Bool = false) {
     guard !watching else { return }
-    for host in TmuxList.servers(ConfigStore.shared.hosts) {
+    for host in shownHosts() {
       let key = host.serverKey
       guard !inFlight.contains(key), retry || servers[key]?.isUnreachable != true else { continue }
       inFlight.insert(key)
@@ -318,10 +380,13 @@ final class TmuxStore {
         inFlight.remove(key)
         switch result {
         case .success(let output):
+          down.remove(key)
+          remember(Tmux.parseIdentity(Tmux.agentSection(output.stdout)), for: key)
           if servers[key]?.isUnreachable == true { servers[key] = nil }
           let hidden = closing[key] ?? []
           setAgents(Tmux.parseAgents(output.stdout).filter { !hidden.contains($0.key) }, for: key)
         case .failure(let failure):
+          down.insert(key)
           servers[key] = Server(status: .unreachable(failure.message))
           setAgents([:], for: key)
         }
@@ -351,10 +416,13 @@ final class TmuxStore {
     var agents: [String: AgentInfo] = [:]
     switch result {
     case .failure(let failure):
+      down.insert(key)
       server = Server(status: .unreachable(failure.message))
     case .success(let output):
+      down.remove(key)
       switch Tmux.parseOverview(status: output.status, output: output.stdout) {
       case .success(let overview):
+        remember(overview.identity, for: key)
         let sessions = ordered.contains(key) ? TmuxList.keepOrder(servers[key]?.sessions ?? [], overview.sessions) : overview.sessions
         ordered.insert(key)
         server = Server(status: .ready, sessions: sessions)
@@ -409,7 +477,8 @@ final class TmuxStore {
   /// A session he is looking at (focused in a Term window in front) has
   /// nothing new for him.
   func seeViewed() {
-    for (host, name) in SpaceController.viewedTmuxSessions {
+    for (viewed, name) in SpaceController.viewedTmuxSessions {
+      let host = speaker(for: viewed)
       let ids = (agents[host.serverKey] ?? [:]).filter { $0.value.unread && $0.value.session == name }.map(\.key)
       if !ids.isEmpty { markSeen(ids, on: host) }
     }

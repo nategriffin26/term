@@ -140,7 +140,7 @@ final class MenuModel {
   /// Every window's tabs attached to tmux session `name` on `host`'s server.
   func tabs(on host: Host, session name: String) -> [Tab] {
     _ = revision
-    return SpaceController.live.flatMap(\.tabs).filter { $0.target?.serverKey == host.serverKey && $0.tmuxSession == name }
+    return SpaceController.live.flatMap(\.tabs).filter { $0.tmuxSession == name && $0.target.map { TmuxStore.shared.sameServer($0, host) } == true }
   }
 
   /// Files panes opened in this window, one per host, kept for its lifetime

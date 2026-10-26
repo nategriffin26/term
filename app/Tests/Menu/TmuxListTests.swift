@@ -41,6 +41,65 @@ final class TmuxListTests: XCTestCase {
     XCTAssertEqual(TmuxList.servers([api, web], first: nil).map(\.alias), ["api-box", "web-box"])
   }
 
+  // MARK: - One server reached through two hosts
+
+  private let mac = Host(alias: "mac", hostname: "mac.example", user: "u")
+  private let backup = Host(alias: "backup", hostname: "backup.example", user: "u")
+  private let sameServer = ["u@mac.example:22": "box\t100\t/tmp/tmux-1/default", "u@backup.example:22": "box\t100\t/tmp/tmux-1/default"]
+
+  /// Bug it catches: a backup route to the same Mac listed the Mac's sessions
+  /// a second time, and its agents counted twice in the badge.
+  func testHostsReportingOneServerShowOnceAsTheFirstSaved() {
+    XCTAssertEqual(TmuxList.servers([mac, backup], identities: sameServer).map(\.alias), ["mac"])
+    XCTAssertEqual(TmuxList.servers([backup, mac], identities: sameServer).map(\.alias), ["backup"])
+    // Another pid, socket or machine is another server.
+    var other = sameServer
+    other["u@backup.example:22"] = "box\t101\t/tmp/tmux-1/default"
+    XCTAssertEqual(TmuxList.servers([mac, backup], identities: other).map(\.alias), ["mac", "backup"])
+    // A host that has not answered yet is not known to share anything.
+    XCTAssertEqual(TmuxList.servers([mac, backup], identities: ["u@mac.example:22": "x"]).map(\.alias), ["mac", "backup"])
+    XCTAssertEqual(TmuxList.servers([mac, backup]).map(\.alias), ["mac", "backup"])
+  }
+
+  /// Bug it catches: with the Mac unreachable the backup stayed hidden, and no
+  /// sessions showed at all, which is what the backup is for.
+  func testTheBackupShowsWhileTheFirstIsDown() {
+    XCTAssertEqual(TmuxList.servers([mac, backup], identities: sameServer, down: ["u@mac.example:22"]).map(\.alias), ["mac", "backup"])
+    XCTAssertEqual(TmuxList.servers([mac, backup], identities: sameServer, down: ["u@backup.example:22"]).map(\.alias), ["mac"])
+    // A third route hides behind whichever shown one is up.
+    let third = Host(alias: "third", hostname: "third.example", user: "u")
+    var three = sameServer
+    three["u@third.example:22"] = sameServer["u@mac.example:22"]
+    XCTAssertEqual(TmuxList.servers([mac, backup, third], identities: three, down: ["u@mac.example:22"]).map(\.alias), ["mac", "backup"])
+  }
+
+  /// Bug it catches: `tmux backup` led nothing because that host was hidden.
+  func testAHiddenHostAskedForLeadsAsTheOneThatShowsItsServer() {
+    let web = Host(alias: "web-box", hostname: "10.0.0.3", user: "dev")
+    XCTAssertEqual(TmuxList.servers([web, mac, backup], first: backup.serverKey, identities: sameServer).map(\.alias), ["mac", "web-box"])
+  }
+
+  /// Bug it catches: the badge read 2 for one finished agent seen through two hosts.
+  func testAServerReachedTwiceCountsItsUnreadAgentsOnce() {
+    var done = AgentInfo(session: "api", state: .done)
+    done.unread = true
+    var seen = done
+    seen.unread = false
+    let agents = ["u@mac.example:22": ["$0": done, "$1": seen], "u@backup.example:22": ["$0": done, "$1": seen]]
+    XCTAssertEqual(TmuxList.unread(agents, on: TmuxList.servers([mac, backup], identities: sameServer)), 1)
+    XCTAssertEqual(TmuxList.unread(agents, on: [mac, backup]), 2)
+    XCTAssertEqual(TmuxList.unread([:], on: [mac]), 0)
+  }
+
+  /// The host that speaks for a hidden one is the shown host that is up.
+  func testTheSpeakerForAHostIsTheShownOneOnItsServer() {
+    let shown = [mac]
+    XCTAssertEqual(TmuxList.speaker(for: backup, among: shown, identities: sameServer).alias, "mac")
+    XCTAssertEqual(TmuxList.speaker(for: mac, among: shown, identities: sameServer).alias, "mac")
+    XCTAssertEqual(TmuxList.speaker(for: backup, among: shown, identities: [:]).alias, "backup")
+    XCTAssertEqual(TmuxList.speaker(for: mac, among: [mac, backup], identities: sameServer, down: ["u@mac.example:22"]).alias, "backup")
+  }
+
   /// Other clients = attached minus Term's tabs on it, never below zero:
   /// Detach Others shows only when there is someone else to detach.
   func testOthersCountsClientsBesidesTerms() {
@@ -280,5 +339,25 @@ final class TmuxListTests: XCTestCase {
     XCTAssertEqual(TmuxList.nameColumn(["fourteen-chars"]), 14)
     XCTAssertEqual(TmuxList.nameColumn(["fifteen-chars-x"]), 14)
     XCTAssertEqual(TmuxList.nameColumn(["café"]), 4, "counted in characters, not bytes")
+  }
+
+  // MARK: - Remembered identities
+
+  @MainActor
+  private func store(_ remembered: [String: String]) -> TmuxStore {
+    let defaults = UserDefaults(suiteName: "TmuxListTests.\(UUID().uuidString)")!
+    defaults.set(remembered, forKey: "tmuxServerIdentities")
+    return TmuxStore(defaults: defaults)
+  }
+
+  /// Bug it catches: after a relaunch both routes showed until the backup
+  /// answered, and its agents counted, because nothing remembered who it was.
+  @MainActor
+  func testARememberedIdentityHidesTheDuplicateBeforeItAnswers() {
+    let store = store(sameServer)
+    XCTAssertEqual(store.shownHosts([mac, backup]).map(\.alias), ["mac"])
+    XCTAssertTrue(store.sameServer(mac, backup))
+    XCTAssertFalse(self.store([:]).sameServer(mac, backup))
+    XCTAssertEqual(self.store([:]).shownHosts([mac, backup]).map(\.alias), ["mac", "backup"])
   }
 }

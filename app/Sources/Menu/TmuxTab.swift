@@ -21,7 +21,7 @@ struct TmuxTab: View {
 
   var body: some View {
     let store = TmuxStore.shared
-    let hosts = TmuxList.servers(ConfigStore.shared.hosts, first: model.tmuxTarget)
+    let hosts = store.shownHosts(first: model.tmuxTarget)
     VStack(spacing: 0) {
       if hosts.isEmpty {
         VStack(spacing: Chrome.Space.m) {
@@ -43,7 +43,7 @@ struct TmuxTab: View {
     }
     .task(id: model.isOpen && model.tab == .tmux) {
       guard model.isOpen, model.tab == .tmux else { return }
-      await store.watch { TmuxList.servers(ConfigStore.shared.hosts) }
+      await store.watch { ConfigStore.shared.hosts }
     }
     .onChange(of: model.isOpen) { _, open in
       if !open { generation += 1 }
@@ -187,14 +187,14 @@ struct TmuxTab: View {
 
   /// Every listed session's row id: what Select's All checks.
   static func rowIDs(_ store: TmuxStore) -> Set<String> {
-    Set(TmuxList.servers(ConfigStore.shared.hosts).flatMap { host in
+    Set(store.shownHosts().flatMap { host in
       (store.servers[host.serverKey]?.sessions ?? []).map { rowID(host, $0) }
     })
   }
 
   /// The checked sessions still listed, with their hosts.
   private func selected(_ store: TmuxStore) -> [(Host, [Tmux.Session])] {
-    TmuxList.servers(ConfigStore.shared.hosts).compactMap { host in
+    store.shownHosts().compactMap { host in
       let picked = (store.servers[host.serverKey]?.sessions ?? []).filter { model.tmuxSelection.contains(Self.rowID(host, $0)) }
       return picked.isEmpty ? nil : (host, picked)
     }

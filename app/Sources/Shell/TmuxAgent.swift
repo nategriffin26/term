@@ -86,6 +86,14 @@ extension Tmux {
   /// Starts the agent panes in an exec's output: ASCII group separator.
   static let agentMark: UInt8 = 0x1D
 
+  /// Starts the server's identity line in the agent section: ASCII unit separator.
+  static let identityMark = "\u{1F}"
+
+  /// Who the server is: host, pid and socket, which no two tmux servers share
+  /// however the phone reached them (a backup route to the same Mac reports the
+  /// same three).
+  static let identityFormat = "#{host}\t#{pid}\t#{socket_path}"
+
   /// Panes that publish `@agent`, or carry omp's title (`π > title`).
   static let agentFilter = "#{||:#{@agent},#{m:π *,#{pane_title}}}"
 
@@ -96,11 +104,12 @@ extension Tmux {
   /// A payload whose heartbeat (every 30 s) is older than this has stopped writing.
   static let agentStaleAfter: TimeInterval = 90
 
-  /// Prints the mark, then one line per agent pane. A tmux too old for
-  /// filters, or no server, prints no agents rather than failing the exec.
+  /// Prints the mark, the server's identity line, then one line per agent
+  /// pane. A tmux too old for filters, or no server, prints no agents (and an
+  /// empty identity) rather than failing the exec.
   static var agentsScript: String {
     let format = agentFields.map { "#{\($0)}" }.joined(separator: "\t")
-    return #"printf '\035\n'; tmux list-panes -a -f '\#(agentFilter)' -F '\#(format)' 2>/dev/null"#
+    return #"printf '\035\n'; printf '\037%s\n' "$(tmux display-message -p '\#(identityFormat)' 2>/dev/null)"; tmux list-panes -a -f '\#(agentFilter)' -F '\#(format)' 2>/dev/null"#
   }
 
   /// The agent panes alone: the badge's check while the tmux tab is closed.
@@ -131,8 +140,21 @@ extension Tmux {
   }
 
   static func parseAgents(_ output: Data, now: Date = .now) -> [String: AgentInfo] {
-    guard let mark = output.firstIndex(of: agentMark) else { return [:] }
-    return parseAgents(String(decoding: output[output.index(after: mark)...], as: UTF8.self), now: now)
+    parseAgents(agentSection(output), now: now)
+  }
+
+  /// What follows the agent mark; empty from a host that sent none.
+  static func agentSection(_ output: Data) -> String {
+    guard let mark = output.firstIndex(of: agentMark) else { return "" }
+    return String(decoding: output[output.index(after: mark)...], as: UTF8.self)
+  }
+
+  /// The server's identity from an agent section; nil when no server answered
+  /// or the host's script predates the line.
+  static func parseIdentity(_ section: String) -> String? {
+    let line = section.split(whereSeparator: \.isNewline).first { $0.hasPrefix(identityMark) }
+    let identity = line.map { String($0.dropFirst(identityMark.count)) }
+    return identity?.isEmpty == false ? identity : nil
   }
 
   private static func parseAgent(_ line: Substring, now: Date) -> (String, AgentInfo)? {

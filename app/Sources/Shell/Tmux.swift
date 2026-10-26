@@ -32,6 +32,8 @@ enum Tmux {
     var sessions: [Session]
     var screens: [String: String]
     var agents: [String: AgentInfo] = [:]
+    /// The server's own identity (see `identityFormat`), nil when it sent none.
+    var identity: String?
   }
 
   enum ListError: Error, Equatable {
@@ -91,7 +93,8 @@ enum Tmux {
       return .failure(.failed(status: status, output: list.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
     let sessions = list.split(whereSeparator: \.isNewline).compactMap(parseSession)
-    let agents = head.count > 1 ? parseAgents(String(decoding: head[1], as: UTF8.self), now: now) : [:]
+    let section = head.count > 1 ? String(decoding: head[1], as: UTF8.self) : ""
+    let agents = parseAgents(section, now: now)
     var screens: [String: String] = [:]
     for part in parts.dropFirst() {
       let text = String(decoding: part, as: UTF8.self)
@@ -100,7 +103,8 @@ enum Tmux {
       if screen.hasSuffix("\n") { screen = screen.dropLast() }
       screens[String(text[..<newline])] = String(screen)
     }
-    return .success(Overview(sessions: sessions.sorted { $0.lastActivity > $1.lastActivity }, screens: screens, agents: agents))
+    return .success(Overview(sessions: sessions.sorted { $0.lastActivity > $1.lastActivity }, screens: screens, agents: agents,
+                                     identity: parseIdentity(section)))
   }
 
   private static func parseSession(_ line: Substring) -> Session? {

@@ -308,7 +308,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   /// comes forward (from any window); otherwise a tab attaches to it,
   /// showing `preview` (the session's last captured screen) until it draws.
   func attach(_ host: Host, session name: String, preview: Data? = nil) {
-    if let open = Self.live.flatMap(\.tabs).first(where: { $0.target?.serverKey == host.serverKey && $0.tmuxSession == name }) {
+    if let open = Self.live.flatMap(\.tabs).first(where: { $0.tmuxSession == name && $0.target.map { TmuxStore.shared.sameServer($0, host) } == true }) {
       zoom(into: open, fromTile: false)
       return
     }
