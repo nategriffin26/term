@@ -26,7 +26,7 @@ struct FolderPage: View {
           }
           .overlay {
             if dropTargeted {
-              RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Helm.accent, lineWidth: 1.5).padding(6)
+              RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Chrome.accent, lineWidth: 1.5).padding(6)
                 .allowsHitTesting(false)
             }
           }
@@ -35,11 +35,11 @@ struct FolderPage: View {
     .safeAreaInset(edge: .top, spacing: 0) {
       if !searching {
         AddressBar(path: path, index: index, browser: browser, context: context, onHosts: onHosts) {
-          withAnimation(Helm.ease(0.2)) { searching = true }
+          withAnimation(Chrome.fade) { searching = true }
         }
       }
     }
-    .background(Helm.raised)
+    .background(Chrome.raised)
     .background(SwipeBack())
     .toolbar(.hidden, for: .navigationBar)
     .task(id: path) {
@@ -77,27 +77,27 @@ private struct FolderList: View {
     List(selection: selecting ? selection : nil) {
       if let error = listing.error {
         HStack(spacing: 10) {
-          Image(systemName: "exclamationmark.triangle").foregroundStyle(Helm.warn)
-          Text(entries.isEmpty ? error : "Couldn't refresh: \(error)").font(Helm.sans(12.5)).foregroundStyle(Helm.fg2).lineLimit(3)
+          Image(systemName: "exclamationmark.triangle").foregroundStyle(Chrome.warn)
+          Text(entries.isEmpty ? error : "Couldn't refresh: \(error)").font(Chrome.font(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(3)
           Spacer(minLength: 8)
-          Button("Retry") { Task { await browser.load(path) } }.buttonStyle(HelmButtonStyle())
+          Button("Retry") { Task { await browser.load(path) } }.buttonStyle(CapsuleButtonStyle())
         }
         .padding(.vertical, 10)
         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
         .listRowBackground(Color.clear)
-        .listRowSeparatorTint(Helm.line)
+        .listRowSeparatorTint(Chrome.line)
       }
       ForEach(entries, id: \.path) { entry in
         row(entry, selecting: selecting)
           .tag(entry.path)
           .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
           .listRowBackground(Color.clear)
-          .listRowSeparatorTint(Helm.line)
+          .listRowSeparatorTint(Chrome.line)
           .alignmentGuide(.listRowSeparatorLeading) { _ in 66 }
       }
       if !entries.isEmpty {
         Text(entries.count == 1 ? "1 item" : "\(entries.count) items")
-          .font(Helm.mono(11.5)).foregroundStyle(Helm.muted)
+          .font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
           .frame(maxWidth: .infinity)
           .padding(.vertical, 14)
           .listRowBackground(Color.clear)
@@ -109,7 +109,7 @@ private struct FolderList: View {
     .scrollContentBackground(.hidden)
     .environment(\.defaultMinListRowHeight, 1)
     .environment(\.editMode, .constant(selecting ? .active : .inactive))
-    .tint(Helm.accent)
+    .tint(Chrome.accent)
     .refreshable {
       await browser.load(path)
       await browser.refreshGit(path)
@@ -121,7 +121,7 @@ private struct FolderList: View {
     .overlay {
       if entries.isEmpty, listing.error == nil {
         if listing.loaded {
-          Text("Empty folder").font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg2)
+          Text("Empty folder").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg2)
             .frame(maxHeight: .infinity, alignment: .top).padding(.top, 72).allowsHitTesting(false)
         } else {
           Pending().frame(maxHeight: .infinity, alignment: .top).padding(.top, 80)
@@ -132,7 +132,7 @@ private struct FolderList: View {
 
   private func reveal(_ renaming: String?, _ proxy: ScrollViewProxy) {
     guard let renaming, FilePath.parent(renaming) == path else { return }
-    withAnimation(Helm.ease(0.2)) { proxy.scrollTo(renaming, anchor: .center) }
+    withAnimation(Chrome.fade) { proxy.scrollTo(renaming, anchor: .center) }
   }
 
   @ViewBuilder
@@ -149,7 +149,7 @@ private struct FolderList: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
           // The list's accent tint would otherwise paint it blue.
           Button(role: .destructive) { Task { await browser.delete([entry]) } } label: { Label("Delete", systemImage: "trash") }
-            .tint(Helm.bad)
+            .tint(Chrome.bad)
         }
         .onDrag { browser.dragProvider(entry) }
     }
@@ -162,7 +162,7 @@ private struct Pending: View {
   @State private var shown = false
 
   var body: some View {
-    ProgressView().tint(Helm.muted)
+    ProgressView().tint(Chrome.muted)
       .opacity(shown ? 1 : 0)
       .task {
         try? await Task.sleep(for: .milliseconds(300))
@@ -187,24 +187,24 @@ struct FileRow: View {
           RenameField(entry: entry, browser: browser)
         } else {
           Text(entry.name)
-            .font(Helm.sans(15, .medium))
-            .foregroundStyle(entry.isBroken ? Helm.muted : Helm.fg)
+            .font(Chrome.font(.body, .medium))
+            .foregroundStyle(entry.isBroken ? Chrome.muted : Chrome.fg)
             .lineLimit(1).truncationMode(.middle)
         }
         Text(meta ?? defaultMeta)
-          .font(Helm.mono(11.5)).foregroundStyle(Helm.muted).lineLimit(1)
+          .font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted).lineLimit(1)
           .truncationMode(meta == nil ? .tail : .head)
       }
       Spacer(minLength: 6)
       if let change {
         Text(change.letter)
-          .font(Helm.mono(11.5, .semibold))
+          .font(Chrome.mono(.caption, .semibold))
           .foregroundStyle(Self.tone(change))
           .frame(minWidth: 14)
           .accessibilityLabel("git \(String(describing: change))")
       }
       // Files keep the chevron's slot so git letters line up down the list.
-      Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Helm.faint)
+      Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Chrome.faint)
         .opacity(entry.isDirectory ? 1 : 0)
         .accessibilityHidden(true)
     }
@@ -223,9 +223,9 @@ struct FileRow: View {
 
   static func tone(_ change: GitStatus.Change) -> Color {
     switch change {
-    case .modified, .renamed: Helm.warn
-    case .added, .untracked: Helm.ok
-    case .deleted, .conflicted: Helm.bad
+    case .modified, .renamed: Chrome.warn
+    case .added, .untracked: Chrome.ok
+    case .deleted, .conflicted: Chrome.bad
     }
   }
 }
@@ -245,15 +245,15 @@ struct FileThumb: View {
       } else {
         Image(systemName: FileKind.of(entry).symbol)
           .font(.system(size: entry.isDirectory ? 24 : 20, weight: .regular))
-          .foregroundStyle(entry.isDirectory ? Helm.fg2 : Helm.muted)
+          .foregroundStyle(entry.isDirectory ? Chrome.fg2 : Chrome.muted)
           .symbolRenderingMode(.hierarchical)
       }
       if entry.isSymlink {
         Image(systemName: entry.isBroken ? "exclamationmark" : "arrow.turn.up.right")
           .font(.system(size: 8, weight: .bold))
-          .foregroundStyle(entry.isBroken ? Helm.bad : Helm.fg2)
+          .foregroundStyle(entry.isBroken ? Chrome.bad : Chrome.fg2)
           .padding(3)
-          .background(Helm.raised, in: Circle())
+          .background(Chrome.raised, in: Circle())
           .offset(x: 13, y: 13)
       }
     }
@@ -276,8 +276,8 @@ private struct RenameField: View {
 
   var body: some View {
     TextField("Name", text: $name, selection: $selection)
-      .font(Helm.sans(15, .medium))
-      .foregroundStyle(Helm.fg)
+      .font(Chrome.font(.body, .medium))
+      .foregroundStyle(Chrome.fg)
       .autocorrectionDisabled()
       .textInputAutocapitalization(.never)
       .submitLabel(.done)

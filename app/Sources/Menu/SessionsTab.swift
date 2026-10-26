@@ -17,7 +17,7 @@ struct SessionsTab: View {
           .transition(.move(edge: .trailing).combined(with: .opacity))
       }
     }
-    .animation(Helm.spring(0.4), value: model.sessionsPage)
+    .animation(Chrome.spring, value: model.sessionsPage)
   }
 }
 
@@ -53,8 +53,8 @@ struct SessionsOverview: View {
             VStack(alignment: .leading, spacing: 10) {
               if groups.count > 1 {
                 Text(group.space === model.space ? "This window" : "Other window")
-                  .font(Helm.sans(12.5, .semibold))
-                  .foregroundStyle(Helm.fg2)
+                  .font(Chrome.font(.secondary, .semibold))
+                  .foregroundStyle(Chrome.fg2)
               }
               LazyVGrid(columns: Array(repeating: GridItem(.fixed(grid.tileWidth), spacing: Self.spacing, alignment: .top),
                                        count: grid.columns),
@@ -75,7 +75,7 @@ struct SessionsOverview: View {
         .padding(Self.padding)
         // Mission Control: a grid that fits sits in the middle of the panel.
         .frame(minWidth: geo.size.width, minHeight: geo.size.height)
-        .animation(Helm.spring(0.35), value: model.revision)
+        .animation(Chrome.spring, value: model.revision)
       }
       .scrollIndicators(.hidden)
       .scrollBounceBehavior(.basedOnSize)
@@ -112,7 +112,7 @@ private struct SessionTile: View {
           .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
           .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-              .strokeBorder(isCurrent ? Helm.accent : Helm.line2, lineWidth: isCurrent ? 1.5 : 1)
+              .strokeBorder(isCurrent ? Chrome.accent : Chrome.line2, lineWidth: isCurrent ? 1.5 : 1)
           }
           .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
             model.tileFrames[tab.id] = frame
@@ -122,10 +122,10 @@ private struct SessionTile: View {
         } label: {
           Image(systemName: "xmark")
             .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(Helm.fg2)
+            .foregroundStyle(Chrome.fg2)
             .frame(width: 22, height: 22)
-            .background(Circle().fill(Helm.raised.opacity(0.92)))
-            .overlay(Circle().strokeBorder(Helm.line2, lineWidth: 1))
+            .background(Circle().fill(Chrome.raised.opacity(0.92)))
+            .overlay(Circle().strokeBorder(Chrome.line2, lineWidth: 1))
             .frame(width: 40, height: 40)
             .contentShape(Rectangle())
         }
@@ -135,15 +135,15 @@ private struct SessionTile: View {
       HStack(alignment: .center, spacing: 6) {
         VStack(alignment: .leading, spacing: 2) {
           Text(tab.sessionName)
-            .font(Helm.mono(12.5, .medium))
-            .foregroundStyle(isCurrent ? Helm.fg : Helm.fg2)
+            .font(Chrome.mono(.secondary, .medium))
+            .foregroundStyle(isCurrent ? Chrome.fg : Chrome.fg2)
           HStack(spacing: 5) {
             if let state = Self.state(of: tab) {
               Circle().fill(state).frame(width: 6, height: 6)
             }
             Text(tab.hostName ?? "local")
-              .font(Helm.mono(11))
-              .foregroundStyle(Helm.muted)
+              .font(Chrome.mono(.caption))
+              .foregroundStyle(Chrome.muted)
           }
         }
         .lineLimit(1)
@@ -154,7 +154,7 @@ private struct SessionTile: View {
           } label: {
             Image(systemName: "clock.arrow.trianglehead.counterclockwise.rotate.90")
               .font(.system(size: 13))
-              .foregroundStyle(Helm.muted)
+              .foregroundStyle(Chrome.muted)
               .frame(width: 36, height: 36)
               .contentShape(Rectangle())
           }
@@ -180,8 +180,8 @@ private struct SessionTile: View {
 
   /// Dot beside the host: connecting (accent) or out of contact (amber).
   static func state(of tab: Tab) -> Color? {
-    if tab.unreachable { return Helm.warn }
-    if tab.connecting != nil { return Helm.accent }
+    if tab.unreachable { return Chrome.warn }
+    if tab.connecting != nil { return Chrome.accent }
     return nil
   }
 }
@@ -194,10 +194,10 @@ private struct NewTile: View {
     Button(action: action) {
       Image(systemName: "plus")
         .font(.system(size: 20, weight: .light))
-        .foregroundStyle(Helm.muted)
+        .foregroundStyle(Chrome.muted)
         .frame(width: size.width, height: size.height)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Helm.hover))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Helm.line2, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Chrome.fill))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Chrome.line2, lineWidth: 1))
     }
     .buttonStyle(PressScale())
     .accessibilityLabel("New session")
@@ -239,28 +239,36 @@ private struct NewSessionPage: View {
     PageScaffold(title: "New", back: { model.sessionsPage = .grid }) {
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
-          Row(symbol: "apple.terminal", title: "Shell", mono: false) {
-            model.space?.newTabFromMenu()
-          }
-          GroupHead("Hosts")
-          let hosts = ConfigStore.shared.hosts
-          ForEach(hosts) { host in
-            Row(title: host.alias, detail: "\(host.user)@\(host.hostname)", mono: true) {
-              model.space?.open(host)
+          InsetGroup(dividerInset: Row.symbolInset) {
+            Row(symbol: "apple.terminal", title: "Shell", mono: false) {
+              model.space?.newTabFromMenu()
             }
           }
-          if hosts.isEmpty {
-            Row(symbol: "plus", title: "Add Host", mono: false) { model.tab = .settings }
+          .padding(.top, Chrome.Space.s)
+          GroupHead("Hosts")
+          let hosts = ConfigStore.shared.hosts
+          InsetGroup(dividerInset: hosts.isEmpty ? Row.symbolInset : Chrome.Space.l) {
+            ForEach(hosts) { host in
+              Row(title: host.alias, detail: "\(host.user)@\(host.hostname)", mono: true) {
+                model.space?.open(host)
+              }
+            }
+            if hosts.isEmpty {
+              Row(symbol: "plus", title: "Add Host", mono: false) { model.tab = .settings }
+            }
           }
           if sizeClass == .regular {
             GroupHead("Window")
-            Row(symbol: "macwindow.badge.plus", title: "New Window", mono: false) {
-              model.space?.closeMenu()
-              SpaceController.openWindow()
+            InsetGroup(dividerInset: Row.symbolInset) {
+              Row(symbol: "macwindow.badge.plus", title: "New Window", mono: false) {
+                model.space?.closeMenu()
+                SpaceController.openWindow()
+              }
+              TwoPanesRow()
             }
-            TwoPanesRow()
           }
         }
+        .padding(.bottom, Chrome.Space.l)
       }
       .scrollIndicators(.hidden)
     }
@@ -271,143 +279,19 @@ private struct TwoPanesRow: View {
   @Bindable private var settings = AppSettings.shared
 
   var body: some View {
-    HStack {
+    HStack(spacing: Chrome.Space.m) {
       Image(systemName: "rectangle.split.2x1")
-        .font(.system(size: 15))
-        .foregroundStyle(Helm.fg2)
+        .font(Chrome.symbol(.control))
+        .foregroundStyle(Chrome.fg2)
         .frame(width: 22)
       Text("Two Panes")
-        .font(Helm.sans(14, .medium))
-        .foregroundStyle(Helm.fg)
+        .font(Chrome.font(.body))
+        .foregroundStyle(Chrome.fg)
       Spacer()
-      Segmented(options: ["On", "Off"], selection: settings.splitWhenFlat ? 0 : 1) { settings.splitWhenFlat = $0 == 0 }
+      CapsuleSegmented(options: [(true, "On"), (false, "Off")], selection: settings.splitWhenFlat) { settings.splitWhenFlat = $0 }
+        .frame(width: 140)
     }
-    .padding(.horizontal, 16)
-    .frame(minHeight: 50)
-    .overlay(alignment: .bottom) { Rectangle().fill(Helm.line).frame(height: 1) }
-  }
-}
-
-/// Helm's segmented control: selected = sel fill and fg text, never accent.
-struct Segmented: View {
-  let options: [String]
-  let selection: Int
-  let choose: (Int) -> Void
-
-  var body: some View {
-    HStack(spacing: 0) {
-      ForEach(options.indices, id: \.self) { i in
-        Button { choose(i) } label: {
-          Text(options[i])
-            .font(Helm.sans(12.5, .medium))
-            .foregroundStyle(i == selection ? Helm.fg : Helm.muted)
-            .padding(.horizontal, 12)
-            .frame(height: 26)
-            .background {
-              if i == selection { RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Helm.sel) }
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-      }
-    }
-    .padding(2)
-    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Helm.line2, lineWidth: 1))
-  }
-}
-
-/// A page inside a tab: back chevron and title over the content.
-struct PageScaffold<Content: View>: View {
-  let title: String
-  let back: () -> Void
-  @ViewBuilder let content: Content
-
-  var body: some View {
-    VStack(spacing: 0) {
-      HStack(spacing: 2) {
-        Button(action: back) {
-          Image(systemName: "chevron.left")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(Helm.fg2)
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PressScale(0.92))
-        .accessibilityLabel("Back")
-        Text(title)
-          .font(Helm.sans(15, .semibold))
-          .foregroundStyle(Helm.fg)
-          .lineLimit(1)
-        Spacer()
-      }
-      .padding(.leading, 4)
-      .frame(height: 46)
-      content
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-  }
-}
-
-/// Group head: 12.5/600 in fg-2 (Helm).
-struct GroupHead: View {
-  let title: String
-  init(_ title: String) { self.title = title }
-
-  var body: some View {
-    Text(title)
-      .font(Helm.sans(12.5, .semibold))
-      .foregroundStyle(Helm.fg2)
-      .padding(.horizontal, 16)
-      .padding(.top, 18)
-      .padding(.bottom, 6)
-      .frame(maxWidth: .infinity, alignment: .leading)
-  }
-}
-
-/// A full-bleed row with a hairline below.
-struct Row: View {
-  var symbol: String?
-  let title: String
-  var detail: String?
-  var mono: Bool
-  var hairline = true
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      HStack(spacing: 12) {
-        if let symbol {
-          Image(systemName: symbol)
-            .font(.system(size: 15))
-            .foregroundStyle(Helm.fg2)
-            .frame(width: 22)
-        }
-        VStack(alignment: .leading, spacing: 2) {
-          Text(title)
-            .font(mono ? Helm.mono(13.5, .medium) : Helm.sans(14, .medium))
-            .foregroundStyle(Helm.fg)
-          if let detail {
-            Text(detail)
-              .font(Helm.mono(11.5))
-              .foregroundStyle(Helm.muted)
-          }
-        }
-        .lineLimit(1)
-        Spacer(minLength: 0)
-      }
-      .padding(.horizontal, 16)
-      .frame(minHeight: 50)
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(RowStyle())
-    .overlay(alignment: .bottom) { if hairline { Rectangle().fill(Helm.line).frame(height: 1) } }
-  }
-}
-
-/// Row press: the Helm `sel` wash.
-struct RowStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .background(configuration.isPressed ? Helm.sel : Color.clear)
+    .padding(.horizontal, Chrome.Space.l)
+    .frame(minHeight: Chrome.Size.row)
   }
 }

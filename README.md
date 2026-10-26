@@ -184,7 +184,6 @@ docs/                   README images
 - [resvg](https://github.com/linebender/resvg) rasterizes the diagrams Term draws (Apache-2.0 OR MIT).
 - [swift-cmark](https://github.com/swiftlang/swift-cmark) for Markdown (BSD-2-Clause).
 - [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and [Iosevka](https://github.com/be5invis/Iosevka) as patched by [Nerd Fonts](https://www.nerdfonts.com) (SIL OFL 1.1; licenses in [`app/Resources/Fonts`](app/Resources/Fonts)).
-- [Geist and Geist Mono](https://github.com/vercel/geist-font) for the app's chrome (SIL OFL 1.1; license in [`app/Sources/Menu/Fonts`](app/Sources/Menu/Fonts)).
 - [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) for the terminal themes, in Ghostty's format (MIT; license in [`app/Resources/Themes`](app/Resources/Themes)).
 
 ## License

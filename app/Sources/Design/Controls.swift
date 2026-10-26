@@ -1,0 +1,414 @@
+import SwiftUI
+
+// The controls every surface builds from, drawn in Chrome's tokens (see the
+// guide at the top of Chrome.swift).
+
+// MARK: - Lists and groups
+
+extension View {
+  /// A settings page: inset groups of `fill` on the panel's ground, body
+  /// type, switches in the accent. For the List at the root of a page.
+  func chromeList() -> some View {
+    listStyle(.insetGrouped)
+      .scrollContentBackground(.hidden)
+      .background(Chrome.raised)
+      .contentMargins(.horizontal, Chrome.Space.m, for: .scrollContent)
+      .listRowBackground(Chrome.fill)
+      .listRowSeparatorTint(Chrome.line)
+      .font(Chrome.font(.body))
+      .foregroundStyle(Chrome.fg)
+      .tint(Chrome.accent)
+      .preferredColorScheme(Chrome.colorScheme)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbarBackground(Chrome.raised, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
+      .toolbarColorScheme(Chrome.colorScheme, for: .navigationBar)
+  }
+}
+
+/// A list section: a quiet label over an inset group of rows.
+struct ListSection<Content: View, Footer: View>: View {
+  let title: String?
+  let content: Content
+  let footer: Footer
+
+  init(_ title: String? = nil, @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer) {
+    self.title = title
+    self.content = content()
+    self.footer = footer()
+  }
+
+  var body: some View {
+    Section {
+      content.listRowBackground(Chrome.fill)
+    } header: {
+      if let title { SectionLabel(title) }
+    } footer: {
+      footer
+    }
+  }
+}
+
+extension ListSection where Footer == EmptyView {
+  init(_ title: String? = nil, @ViewBuilder content: () -> Content) {
+    self.init(title, content: content, footer: { EmptyView() })
+  }
+}
+
+/// What a group of rows is: secondary type in muted, no capitals.
+struct SectionLabel: View {
+  let title: String
+  init(_ title: String) { self.title = title }
+
+  var body: some View {
+    Text(title)
+      .font(Chrome.font(.secondary, .medium))
+      .foregroundStyle(Chrome.muted)
+      .textCase(nil)
+  }
+}
+
+/// Rows outside a List as one inset group: a rounded card of `fill`, rows
+/// split by hairlines that start `dividerInset` in (where the rows' text starts).
+struct InsetGroup<Content: View>: View {
+  var dividerInset: CGFloat = Chrome.Space.l
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    VStack(spacing: 0) {
+      Group(subviews: content) { rows in
+        ForEach(rows) { row in
+          row
+          if row.id != rows.last?.id {
+            Rectangle().fill(Chrome.line).frame(height: 1).padding(.leading, dividerInset)
+          }
+        }
+      }
+    }
+    .background(Chrome.fill)
+    .clipShape(RoundedRectangle(cornerRadius: Chrome.Radius.group, style: .continuous))
+    .padding(.horizontal, Chrome.Space.m)
+  }
+}
+
+/// A group's label outside a List, lined up with its rows' text.
+struct GroupHead: View {
+  let title: String
+  init(_ title: String) { self.title = title }
+
+  var body: some View {
+    SectionLabel(title)
+      .padding(.horizontal, Chrome.Space.m + Chrome.Space.l)
+      .padding(.top, Chrome.Space.xl)
+      .padding(.bottom, Chrome.Space.s)
+      .frame(maxWidth: .infinity, alignment: .leading)
+  }
+}
+
+/// A tappable row in an InsetGroup: an optional symbol, a title in SF Pro
+/// or SF Mono, a machine fact under it.
+struct Row: View {
+  var symbol: String?
+  let title: String
+  var detail: String?
+  var mono: Bool
+
+  let action: () -> Void
+
+  /// Where the text starts in a row with a symbol: the divider inset for its group.
+  static let symbolInset = Chrome.Space.l + 22 + Chrome.Space.m
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: Chrome.Space.m) {
+        if let symbol {
+          Image(systemName: symbol)
+            .font(Chrome.symbol(.control))
+            .foregroundStyle(Chrome.fg2)
+            .frame(width: 22)
+        }
+        VStack(alignment: .leading, spacing: 2) {
+          Text(title)
+            .font(mono ? Chrome.mono(.body, .medium) : Chrome.font(.body))
+            .foregroundStyle(Chrome.fg)
+          if let detail {
+            Text(detail)
+              .font(Chrome.mono(.secondary))
+              .foregroundStyle(Chrome.muted)
+          }
+        }
+        .lineLimit(1)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, Chrome.Space.l)
+      .frame(minHeight: Chrome.Size.row)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(RowStyle())
+  }
+}
+
+/// Row press: a `fill2` wash.
+struct RowStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .background(configuration.isPressed ? Chrome.fill2 : Color.clear)
+  }
+}
+
+/// A machine fact on the right of a row: SF Mono (or SF Pro for words) in fg2.
+struct ValueText: View {
+  let text: String
+  var mono = true
+
+  init(_ text: String, mono: Bool = true) {
+    self.text = text
+    self.mono = mono
+  }
+
+  var body: some View {
+    Text(text).font(mono ? Chrome.mono(.secondary) : Chrome.font(.body)).foregroundStyle(Chrome.fg2)
+  }
+}
+
+/// Label left, value right.
+struct ValueRow: View {
+  let label: String
+  let value: String
+
+  init(_ label: String, _ value: String) {
+    self.label = label
+    self.value = value
+  }
+
+  var body: some View {
+    LabeledContent { ValueText(value) } label: { Text(label) }
+  }
+}
+
+/// A row title with its symbol.
+struct IconLabel: View {
+  let title: String
+  let symbol: String
+
+  init(_ title: String, symbol: String) {
+    self.title = title
+    self.symbol = symbol
+  }
+
+  var body: some View {
+    Label {
+      Text(title)
+    } icon: {
+      Image(systemName: symbol).font(Chrome.symbol(.control)).foregroundStyle(Chrome.fg2)
+    }
+  }
+}
+
+/// A setting row: label left, value in SF Mono right, the slider under them,
+/// its track filled in the text colour.
+struct SliderRow: View {
+  let label: String
+  @Binding var value: Double
+  let range: ClosedRange<Double>
+  let step: Double
+  let text: String
+
+  var body: some View {
+    VStack(spacing: Chrome.Space.xs) {
+      LabeledContent { ValueText(text) } label: { Text(label) }
+      Slider(value: $value, in: range, step: step).tint(Chrome.fg)
+    }
+  }
+}
+
+// MARK: - Controls
+
+/// The segmented control: a capsule track of `fill2`, the chosen segment a
+/// lens of `fill3` that slides to the next pick. Picking the chosen one again does nothing.
+struct CapsuleSegmented<Value: Hashable>: View {
+  let options: [(Value, String)]
+  let selection: Value
+  var busy = false
+  let pick: (Value) -> Void
+  @Namespace private var lens
+
+  var body: some View {
+    HStack(spacing: 0) {
+      ForEach(options.indices, id: \.self) { i in
+        let (value, label) = options[i]
+        let selected = value == selection
+        Button { if !selected { pick(value) } } label: {
+          Text(label)
+            .font(Chrome.font(.body, selected ? .semibold : .medium))
+            .foregroundStyle(selected ? Chrome.fg : Chrome.fg2)
+            .lineLimit(1)
+            .padding(.horizontal, Chrome.Space.l)
+            .frame(maxWidth: .infinity)
+            .frame(height: Chrome.Size.control - 6)
+            .background {
+              if selected {
+                Capsule().fill(Chrome.fill3)
+                  .overlay(Capsule().strokeBorder(Chrome.line2, lineWidth: 1))
+                  .matchedGeometryEffect(id: "lens", in: lens)
+              }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+      }
+    }
+    .padding(3)
+    .background(Capsule().fill(Chrome.fill2))
+    .animation(Chrome.spring, value: selection)
+    .disabled(busy)
+    .opacity(busy ? 0.5 : 1)
+  }
+}
+
+/// Capsule buttons: standard (a `fill2` capsule), plain (text only),
+/// prominent (the accent: it asks him), destructive (bad).
+struct CapsuleButtonStyle: ButtonStyle {
+  enum Kind { case standard, plain, prominent, destructive }
+  var kind = Kind.standard
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(Chrome.font(.body, .medium))
+      .foregroundStyle(foreground)
+      .lineLimit(1)
+      .padding(.horizontal, Chrome.Space.l)
+      .frame(height: Chrome.Size.control)
+      .background {
+        switch kind {
+        case .standard: Capsule().fill(Chrome.fill2)
+        case .plain: Color.clear
+        case .prominent: Capsule().fill(Chrome.accent)
+        case .destructive: Capsule().fill(Chrome.bad.opacity(0.14))
+        }
+      }
+      .contentShape(Capsule())
+      .scaleEffect(configuration.isPressed ? 0.96 : 1)
+      .opacity(configuration.isPressed ? 0.8 : 1)
+      .animation(Chrome.quick, value: configuration.isPressed)
+  }
+
+  @MainActor private var foreground: Color {
+    switch kind {
+    case .standard: Chrome.fg
+    case .plain: Chrome.fg2
+    case .prominent: Chrome.onAccent
+    case .destructive: Chrome.bad
+    }
+  }
+}
+
+/// A symbol in a 40 pt `fill2` circle (close, back), with a 44 pt target.
+struct CircleButton: View {
+  let symbol: String
+  let label: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Image(systemName: symbol)
+        .font(Chrome.symbol(.control))
+        .foregroundStyle(Chrome.fg)
+        .frame(width: Chrome.Size.circle, height: Chrome.Size.circle)
+        .background(Circle().fill(Chrome.fill2))
+        .frame(width: Chrome.Size.target, height: Chrome.Size.target)
+        .contentShape(Rectangle())
+    }
+    .buttonStyle(PressScale(0.92))
+    .accessibilityLabel(label)
+  }
+}
+
+/// Press feedback: a slight scale while held.
+struct PressScale: ButtonStyle {
+  var scale: CGFloat
+  init(_ scale: CGFloat = 0.97) { self.scale = scale }
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed ? scale : 1)
+      .animation(Chrome.quick, value: configuration.isPressed)
+  }
+}
+
+/// A page inside a tab: a back button and the title centred over the content.
+struct PageScaffold<Content: View>: View {
+  let title: String
+  let back: () -> Void
+  @ViewBuilder let content: Content
+
+  var body: some View {
+    VStack(spacing: 0) {
+      ZStack {
+        Text(title)
+          .font(Chrome.font(.title, .semibold))
+          .foregroundStyle(Chrome.fg)
+          .lineLimit(1)
+          .padding(.horizontal, Chrome.Size.target + Chrome.Space.m)
+        HStack {
+          CircleButton(symbol: "chevron.left", label: "Back", action: back)
+          Spacer()
+        }
+      }
+      .padding(.horizontal, Chrome.Space.s)
+      .frame(height: 52)
+      content
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+  }
+}
+
+// MARK: - State
+
+/// How many things wait on him: a count in an accent capsule.
+struct CountBadge: View {
+  let count: Int
+
+  var body: some View {
+    Text("\(count)")
+      .font(Chrome.font(.caption, .bold))
+      .monospacedDigit()
+      .foregroundStyle(Chrome.onAccent)
+      .padding(.horizontal, 5)
+      .frame(minWidth: 18, minHeight: 16)
+      .background(Capsule().fill(Chrome.needsYou))
+      .fixedSize()
+  }
+}
+
+/// Needs you: a word on an accent pill, the loudest thing on a row.
+struct NeedsYouPill: View {
+  let text: String
+
+  var body: some View {
+    Text(text)
+      .font(Chrome.font(.secondary, .semibold))
+      .foregroundStyle(Chrome.onAccent)
+      .padding(.horizontal, 10)
+      .frame(height: 24)
+      .background(Capsule().fill(Chrome.needsYou))
+      .fixedSize()
+  }
+}
+
+/// Working: a ring filled to the fraction done; with no fraction, a fixed arc that reads as busy.
+struct ProgressRing: View {
+  let fraction: Double?
+
+  var body: some View {
+    ZStack {
+      Circle().stroke(Chrome.fill3, lineWidth: 2)
+      Circle()
+        .trim(from: 0, to: max(fraction ?? 0.3, 0.04))
+        .stroke(Chrome.working, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        .rotationEffect(.degrees(-90))
+    }
+    .frame(width: 15, height: 15)
+  }
+}

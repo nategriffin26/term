@@ -2,7 +2,7 @@ import Foundation
 import cmark_gfm
 import cmark_gfm_extensions
 
-/// Markdown as a Helm-styled HTML page, rendered by cmark-gfm (GitHub's
+/// Markdown as an HTML page in the app's dark look, rendered by cmark-gfm (GitHub's
 /// renderer): tables, task lists, strikethrough, autolinks, footnotes, raw
 /// HTML with GitHub's tag filter (the page runs no JavaScript either way),
 /// heading anchors for in-page links, and YAML front matter as a table.
@@ -137,14 +137,11 @@ enum MarkdownPage {
     return text
   }
 
-  /// Helm, dark: Geist for prose, Geist Mono for code, hairlines, the
-  /// accent only on links.
+  /// Dark: SF Pro for prose, SF Mono for code, hairlines, the accent only on links.
   static let css = """
-    @font-face { font-family: Geist; src: url(termfs://app/GeistVariable.woff2) format("woff2"); font-weight: 100 900; }
-    @font-face { font-family: "Geist Mono"; src: url(termfs://app/GeistMonoVariable.woff2) format("woff2"); font-weight: 100 900; }
     :root { color-scheme: dark; }
     html { -webkit-text-size-adjust: 100%; }
-    body { margin: 0; padding: 14px 16px 56px; background: #121722; color: #a2abbf; font: 15px/1.6 Geist, -apple-system, sans-serif;
+    body { margin: 0; padding: 14px 16px 56px; background: #121722; color: #a2abbf; font: 15px/1.6 -apple-system, sans-serif;
       letter-spacing: -0.005em; overflow-wrap: break-word; -webkit-font-smoothing: antialiased; }
     body > :first-child { margin-top: 0; }
     h1, h2, h3, h4, h5, h6 { color: #e6eaf3; font-weight: 600; line-height: 1.3; margin: 1.5em 0 0.55em; letter-spacing: -0.01em; }
@@ -154,7 +151,7 @@ enum MarkdownPage {
     a { color: #6f8cff; text-decoration: none; }
     strong { color: #e6eaf3; font-weight: 600; }
     del { color: #7c85a1; }
-    code { font: 13px/1.5 "Geist Mono", ui-monospace, monospace; background: rgba(150,175,255,.08); border-radius: 5px; padding: 0.1em 0.35em; color: #e6eaf3; }
+    code { font: 13px/1.5 ui-monospace, monospace; background: rgba(150,175,255,.08); border-radius: 5px; padding: 0.1em 0.35em; color: #e6eaf3; }
     pre { background: #0a0d13; border: 1px solid rgba(150,175,255,.075); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
     pre code { background: none; padding: 0; border-radius: 0; font-size: 12.5px; color: #a2abbf; }
     blockquote { margin-left: 0; padding-left: 14px; border-left: 2px solid rgba(150,175,255,.14); color: #7c85a1; }
@@ -171,7 +168,7 @@ enum MarkdownPage {
     table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13.5px; }
     th, td { border-bottom: 1px solid rgba(150,175,255,.075); padding: 7px 14px 7px 0; text-align: left; vertical-align: top; }
     th { color: #e6eaf3; font-weight: 600; border-bottom-color: rgba(150,175,255,.14); }
-    table.front { font: 12px/1.5 "Geist Mono", ui-monospace, monospace; margin-bottom: 22px; }
+    table.front { font: 12px/1.5 ui-monospace, monospace; margin-bottom: 22px; }
     table.front th { color: #7c85a1; font-weight: 400; border-bottom-color: rgba(150,175,255,.075); white-space: nowrap; }
     table.front td { color: #a2abbf; }
     pre.front { font-size: 12px; color: #7c85a1; }

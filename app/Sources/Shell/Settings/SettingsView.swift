@@ -8,29 +8,29 @@ struct SettingsView: View {
   var body: some View {
     NavigationStack {
       List {
-        HelmSection("Connect") {
+        ListSection("Connect") {
           NavigationLink { HostsView() } label: {
-            LabeledContent { HelmValue("\(config.hosts.count)") } label: { HelmLabel("Hosts", symbol: "server.rack") }
+            LabeledContent { ValueText("\(config.hosts.count)") } label: { IconLabel("Hosts", symbol: "server.rack") }
           }
           NavigationLink { KeysView() } label: {
-            HelmLabel("Keys", symbol: "key")
+            IconLabel("Keys", symbol: "key")
           }
         }
-        HelmSection {
+        ListSection {
           NavigationLink { AppearanceView() } label: {
-            LabeledContent { HelmValue(settings.themeName) } label: { HelmLabel("Appearance", symbol: "paintpalette") }
+            LabeledContent { ValueText(settings.themeName) } label: { IconLabel("Appearance", symbol: "paintpalette") }
           }
           NavigationLink { KeyboardSettingsView() } label: {
-            HelmLabel("Keyboard", symbol: "keyboard")
+            IconLabel("Keyboard", symbol: "keyboard")
           }
         }
-        HelmSection {
+        ListSection {
           NavigationLink { AboutView() } label: {
-            LabeledContent { HelmValue(AboutView.version) } label: { HelmLabel("About", symbol: "info.circle") }
+            LabeledContent { ValueText(AboutView.version) } label: { IconLabel("About", symbol: "info.circle") }
           }
         }
       }
-      .helmList()
+      .chromeList()
       .navigationTitle("Settings")
       .toolbar(.hidden, for: .navigationBar)
     }
@@ -42,24 +42,24 @@ struct KeyboardSettingsView: View {
 
   var body: some View {
     List {
-      HelmSection("Key Repeat") {
-        HelmSlider(label: "Delay", value: $settings.keyRepeatDelay, range: AppSettings.keyRepeatDelayRange,
+      ListSection("Key Repeat") {
+        SliderRow(label: "Delay", value: $settings.keyRepeatDelay, range: AppSettings.keyRepeatDelayRange,
                      step: 0.05, text: String(format: "%.2f s", settings.keyRepeatDelay))
-        HelmSlider(label: "Rate", value: $settings.keyRepeatRate, range: AppSettings.keyRepeatRateRange,
+        SliderRow(label: "Rate", value: $settings.keyRepeatRate, range: AppSettings.keyRepeatRateRange,
                      step: 1, text: "\(Int(settings.keyRepeatRate)) /s")
       }
-      HelmSection("Smart Keys") {
+      ListSection("Smart Keys") {
         Toggle("Show with Hardware Keyboard", isOn: $settings.smartKeysWithHardwareKeyboard)
         Toggle("Key Clicks", isOn: $settings.keyClickSound)
       }
-      HelmSection("Shortcuts") {
-        HelmRow("New Shell", "⌘T")
-        HelmRow("Close Shell", "⌘W")
-        HelmRow("Next / Previous Shell", "⇧⌘] / ⇧⌘[")
-        HelmRow("Settings", "⌘,")
+      ListSection("Shortcuts") {
+        ValueRow("New Shell", "⌘T")
+        ValueRow("Close Shell", "⌘W")
+        ValueRow("Next / Previous Shell", "⇧⌘] / ⇧⌘[")
+        ValueRow("Settings", "⌘,")
       }
     }
-    .helmList()
+    .chromeList()
     .navigationTitle("Keyboard")
   }
 }
@@ -74,17 +74,17 @@ struct AboutView: View {
 
   var body: some View {
     List {
-      HelmRow("Version", Self.version)
-      HelmRow("Terminal Engine", "libghostty-vt cec8b92f")
-      HelmRow("Font", "JetBrains Mono, Iosevka (Nerd Fonts)")
-      HelmSection("Licenses") {
+      ValueRow("Version", Self.version)
+      ValueRow("Terminal Engine", "libghostty-vt cec8b92f")
+      ValueRow("Font", "JetBrains Mono, Iosevka (Nerd Fonts)")
+      ListSection("Licenses") {
         Text("JetBrains Mono, Iosevka: SIL Open Font License 1.1. Nerd Fonts glyphs: MIT and OFL. Ghostty: MIT. "
           + "Terminal themes: iTerm2-Color-Schemes, MIT; each theme belongs to its author.")
-          .font(Helm.sans(12))
-          .foregroundStyle(Helm.muted)
+          .font(Chrome.font(.secondary))
+          .foregroundStyle(Chrome.muted)
       }
     }
-    .helmList()
+    .chromeList()
     .navigationTitle("About")
   }
 }

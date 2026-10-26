@@ -29,7 +29,7 @@ final class SessionHUD: UIView {
     isAccessibilityElement = false
     alpha = 0
     bounds = CGRect(origin: .zero, size: Self.size)
-    backgroundColor = Helm.UI.raised.withAlphaComponent(0.94)
+    backgroundColor = Chrome.UI.raised.withAlphaComponent(0.94)
     layer.cornerRadius = 22
     layer.cornerCurve = .continuous
     layer.borderWidth = 0.5
@@ -42,7 +42,7 @@ final class SessionHUD: UIView {
     layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: 22).cgPath
 
     addSubview(dotsView)
-    highlight.backgroundColor = Helm.UI.accent
+    highlight.backgroundColor = Chrome.UI.accent
     highlight.bounds = CGRect(x: 0, y: 0, width: Self.dotSize + 1, height: Self.dotSize + 1)
     highlight.layer.cornerRadius = (Self.dotSize + 1) / 2
     dotsView.addSubview(highlight)
@@ -61,7 +61,7 @@ final class SessionHUD: UIView {
 
   /// A layer's CGColor does not follow the app theme by itself.
   private func updateBorder() {
-    layer.borderColor = Helm.UI.line2.resolvedColor(with: traitCollection).cgColor
+    layer.borderColor = Chrome.UI.line2.resolvedColor(with: traitCollection).cgColor
   }
 
   /// Shows the strip at `position` (a session index, fractional mid-swipe),
@@ -81,7 +81,7 @@ final class SessionHUD: UIView {
   /// capsule fades out.
   func settle(names: [String], index: Int, center: CGPoint) {
     setNames(names)
-    let animator = UIViewPropertyAnimator(duration: 0.4, timingParameters: Helm.springTiming)
+    let animator = UIViewPropertyAnimator(duration: 0.4, timingParameters: Chrome.springTiming)
     animator.addAnimations { self.layoutStrip(position: CGFloat(index), center: center, animateWindow: false) }
     animator.startAnimation()
     if alpha < 1 {
@@ -113,8 +113,8 @@ final class SessionHUD: UIView {
     labels = names.map { name in
       let label = UILabel()
       label.text = name
-      label.font = Helm.uiMono(12.5, .medium)
-      label.textColor = Helm.UI.fg
+      label.font = Chrome.uiMono(.secondary, .medium)
+      label.textColor = Chrome.UI.fg
       label.textAlignment = .center
       label.lineBreakMode = .byTruncatingMiddle
       label.bounds = CGRect(x: 0, y: 0, width: Self.namePitch - 10, height: namesView.bounds.height)
@@ -127,7 +127,7 @@ final class SessionHUD: UIView {
     let strip = DotStrip.layout(count: names.count, position: position)
     while dots.count < strip.dots.count {
       let dot = UIView()
-      dot.backgroundColor = Helm.UI.muted.withAlphaComponent(0.55)
+      dot.backgroundColor = Chrome.UI.muted.withAlphaComponent(0.55)
       dot.bounds = CGRect(x: 0, y: 0, width: Self.dotSize, height: Self.dotSize)
       dot.layer.cornerRadius = Self.dotSize / 2
       dotsView.insertSubview(dot, belowSubview: highlight)

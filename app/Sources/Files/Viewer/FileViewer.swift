@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// One file, pushed over its folder in the Files tab: a Helm header (back,
+/// One file, pushed over its folder in the Files tab: a header (back,
 /// the name, the rendered/source switch, Save while editing, the menu) and
 /// the file drawn for its kind. Text opens read-only until Edit; a save
 /// fails over to Overwrite / Reload / Compare when the host's copy changed
@@ -40,7 +40,7 @@ struct FileViewer: View {
 
   var body: some View {
     ZStack {
-      (onBlack ? Color.black : Helm.raised).ignoresSafeArea()
+      (onBlack ? Color.black : Chrome.raised).ignoresSafeArea()
       content
     }
     .safeAreaInset(edge: .top, spacing: 0) {
@@ -130,7 +130,7 @@ struct FileViewer: View {
   private func fileBody(_ url: URL) -> some View {
     switch model.kind {
     case .image:
-      ZoomableImage(url: url) { withAnimation(Helm.ease(0.2)) { chrome.toggle() } }
+      ZoomableImage(url: url) { withAnimation(Chrome.fade) { chrome.toggle() } }
         .ignoresSafeArea()
     case .video, .audio:
       MediaPlayer(url: url)
@@ -148,10 +148,10 @@ struct FileViewer: View {
           .buttonStyle(IconButtonStyle())
           .accessibilityLabel("Back")
         HStack(spacing: 6) {
-          Text(model.entry.name).font(Helm.sans(14.5, .medium)).foregroundStyle(Helm.fg)
+          Text(model.entry.name).font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg)
             .lineLimit(1).truncationMode(.middle)
           if dirty {
-            Circle().fill(Helm.accent).frame(width: 7, height: 7).accessibilityLabel("Unsaved")
+            Circle().fill(Chrome.accent).frame(width: 7, height: 7).accessibilityLabel("Unsaved")
           }
         }
         .padding(.horizontal, 6)
@@ -160,16 +160,16 @@ struct FileViewer: View {
           if dirty || saving {
             Button { save() } label: {
               Text("Save").opacity(saving ? 0 : 1)
-                .overlay { if saving { ProgressView().controlSize(.small).tint(Helm.onAccent) } }
+                .overlay { if saving { ProgressView().controlSize(.small).tint(Chrome.onAccent) } }
             }
-            .buttonStyle(HelmButtonStyle(kind: .primary))
+            .buttonStyle(CapsuleButtonStyle(kind: .prominent))
             .disabled(saving)
           }
           Button("Done") { editing = false }
-            .buttonStyle(HelmButtonStyle(kind: .ghost))
+            .buttonStyle(CapsuleButtonStyle(kind: .plain))
         } else if hasRendered, model.document != nil {
           Button {
-            withAnimation(Helm.ease(0.2)) {
+            withAnimation(Chrome.fade) {
               source.toggle()
               sourceShown = true
             }
@@ -182,23 +182,23 @@ struct FileViewer: View {
         Menu { menu } label: { glyph("ellipsis") }
           .accessibilityLabel("More")
       }
-      .foregroundStyle(Helm.fg)
+      .foregroundStyle(Chrome.fg)
       .padding(.horizontal, 3)
       .frame(height: 46)
-      .glassEffect(.regular.tint(Helm.bg.opacity(0.35)).interactive(), in: .capsule)
+      .glassEffect(.regular.tint(Chrome.bg.opacity(0.35)).interactive(), in: .capsule)
       .padding(.horizontal, 10)
       .padding(.top, 8)
       .padding(.bottom, 6)
-      .animation(Helm.ease(0.2), value: editing)
-      .animation(Helm.ease(0.2), value: dirty)
+      .animation(Chrome.fade, value: editing)
+      .animation(Chrome.fade, value: dirty)
       if let reason = model.document?.readOnlyReason {
-        Text(reason).font(Helm.mono(11.5)).foregroundStyle(Helm.muted)
+        Text(reason).font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
           .frame(maxWidth: .infinity)
           .padding(.bottom, 6)
       }
       if case .ready = model.phase, let progress = model.progress {
         GeometryReader { geometry in
-          Helm.accent.frame(width: geometry.size.width * progress)
+          Chrome.accent.frame(width: geometry.size.width * progress)
         }
         .frame(height: 2)
       }
@@ -256,12 +256,12 @@ struct FileViewer: View {
   @ViewBuilder
   private var toastView: some View {
     if let toast {
-      Text(toast.text).font(Helm.sans(13.5, .medium)).foregroundStyle(toast.isError ? Helm.bad : Helm.fg)
+      Text(toast.text).font(Chrome.font(.secondary, .medium)).foregroundStyle(toast.isError ? Chrome.bad : Chrome.fg)
         .lineLimit(2).multilineTextAlignment(.leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
-        .background(Helm.bg, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Helm.line2))
+        .background(Chrome.bg, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Chrome.line2))
         .shadow(color: .black.opacity(0.3), radius: 25, y: 18)
         .padding(.horizontal, 16)
         .padding(.bottom, 16)
@@ -269,7 +269,7 @@ struct FileViewer: View {
         .id(toast.id)
         .task(id: toast.id) {
           try? await Task.sleep(for: .seconds(toast.isError ? 4 : 1.6))
-          withAnimation(Helm.ease(0.25)) { self.toast = nil }
+          withAnimation(Chrome.fade) { self.toast = nil }
         }
     }
   }
@@ -288,7 +288,7 @@ struct FileViewer: View {
   }
 
   private func startEditing() {
-    withAnimation(Helm.ease(0.2)) {
+    withAnimation(Chrome.fade) {
       source = true
       sourceShown = true
       editing = true
@@ -387,7 +387,7 @@ struct FileViewer: View {
   }
 
   private func flash(_ text: String, error: Bool = false) {
-    withAnimation(Helm.ease(0.25)) { toast = ViewerToast(text: text, isError: error) }
+    withAnimation(Chrome.fade) { toast = ViewerToast(text: text, isError: error) }
   }
 }
 

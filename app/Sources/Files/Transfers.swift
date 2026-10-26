@@ -96,11 +96,11 @@ struct TransfersStrip: View {
       VStack(spacing: 0) {
         ForEach(transfers.items) { item in
           row(item)
-          if item.id != transfers.items.last?.id { Helm.line.frame(height: 1) }
+          if item.id != transfers.items.last?.id { Chrome.line.frame(height: 1) }
         }
       }
-      .background(Helm.bg.opacity(0.92))
-      .overlay(alignment: .top) { Helm.line2.frame(height: 1) }
+      .background(Chrome.bg.opacity(0.92))
+      .overlay(alignment: .top) { Chrome.line2.frame(height: 1) }
       .transition(.move(edge: .bottom).combined(with: .opacity))
     }
   }
@@ -109,24 +109,24 @@ struct TransfersStrip: View {
     HStack(spacing: 10) {
       Image(systemName: item.upload ? "arrow.up" : "arrow.down")
         .font(.system(size: 12, weight: .semibold))
-        .foregroundStyle(item.failure == nil ? Helm.fg2 : Helm.bad)
+        .foregroundStyle(item.failure == nil ? Chrome.fg2 : Chrome.bad)
         .frame(width: 16)
       VStack(alignment: .leading, spacing: 5) {
         HStack {
-          Text(item.name).font(Helm.sans(13, .medium)).foregroundStyle(Helm.fg).lineLimit(1).truncationMode(.middle)
+          Text(item.name).font(Chrome.font(.secondary, .medium)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
           Spacer(minLength: 8)
           if let failure = item.failure {
-            Text(failure).font(Helm.mono(11)).foregroundStyle(Helm.bad).lineLimit(1)
+            Text(failure).font(Chrome.mono(.caption)).foregroundStyle(Chrome.bad).lineLimit(1)
           } else {
             Text(item.running ? "\(Int((item.progress * 100).rounded()))%" : "Waiting")
-              .font(Helm.mono(11)).foregroundStyle(Helm.muted)
+              .font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
           }
         }
         if item.failure == nil {
           GeometryReader { geo in
             ZStack(alignment: .leading) {
-              Capsule().fill(Helm.line2)
-              Capsule().fill(Helm.fg2).frame(width: max(2, geo.size.width * item.progress))
+              Capsule().fill(Chrome.line2)
+              Capsule().fill(Chrome.fg2).frame(width: max(2, geo.size.width * item.progress))
             }
           }
           .frame(height: 2)
@@ -135,7 +135,7 @@ struct TransfersStrip: View {
       Button {
         if item.failure != nil { transfers.dismiss(item.id) } else { transfers.cancel(item.id) }
       } label: {
-        Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Helm.muted)
+        Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Chrome.muted)
           .frame(width: 30, height: 30).contentShape(Rectangle())
       }
       .buttonStyle(.plain)

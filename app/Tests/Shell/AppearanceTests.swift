@@ -139,9 +139,16 @@ final class AppearanceSettingsTests: XCTestCase {
     XCTAssertEqual(s.cursorShape, .block)
     XCTAssertEqual(s.cursorColor, .theme)
     XCTAssertTrue(s.cursorFollowsPrograms)
-    XCTAssertFalse(s.appMatchesTerminal)
+    XCTAssertTrue(s.appMatchesTerminal, "the app follows the terminal unless he turned Match off")
     XCTAssertNil(s.appAccent)
-    XCTAssertEqual(s.appTheme, AppTheme.standard, "today's look until Match Terminal is turned on")
+    XCTAssertEqual(s.appTheme.bg.rgb, 0x282A36, "Dracula's ground")
+  }
+
+  func testMatchTurnedOffStaysOff() {
+    defaults.set(false, forKey: "appMatchesTerminal")
+    let s = AppSettings(defaults: defaults)
+    XCTAssertFalse(s.appMatchesTerminal)
+    XCTAssertEqual(s.appTheme, AppTheme.fixed())
   }
 
   func testAFreshInstallBlinksAtTheDefaultTerm() {
@@ -210,8 +217,9 @@ final class AppearanceSettingsTests: XCTestCase {
 
   func testTheAccentCursorColourIsTheAppAccent() {
     let s = AppSettings(defaults: defaults)
+    s.appAccent = 0x7EF0DA
     s.cursorColor = .accent
-    XCTAssertEqual(s.termTheme.cursor, 0xFF00_0000 | 0x6F8CFF)
+    XCTAssertEqual(s.termTheme.cursor, 0xFF00_0000 | 0x7EF0DA)
   }
 
   func testProgramsMayChangeTheCursorUnlessTurnedOff() {
@@ -303,7 +311,28 @@ final class DerivedAppThemeTests: XCTestCase {
   func testAccentIsTheCursorIfItHasColourElseBrightYellowAndAPickedOneBeatsBoth() {
     XCTAssertEqual(AppTheme.derived(from: theme(cursor: 0x7EF0DA)).accent.rgb, 0x7EF0DA)
     XCTAssertEqual(AppTheme.derived(from: theme(cursor: 0xB0B0B0)).accent.rgb, 0xFFFFA5, "a grey cursor has no colour to lend")
-    XCTAssertEqual(AppTheme.derived(from: theme(cursor: 0x7EF0DA), accent: 0x123456).accent.rgb, 0x123456)
+    XCTAssertEqual(AppTheme.derived(from: theme(cursor: 0x7EF0DA), accent: 0xFF6B86).accent.rgb, 0xFF6B86)
+  }
+
+  /// Bug: Solarized Light's cursor and bright yellow are both greys, so the
+  /// needs-you pill came out grey, indistinguishable from the text.
+  func testWithoutAColouredCursorOrBrightYellowTheAccentIsTheNextColouredSlot() {
+    let solarized = Theme.named("Solarized Light")
+    XCTAssertLessThan(AppTheme.chroma(solarized.cursor), 0.25)
+    XCTAssertLessThan(AppTheme.chroma(solarized.palette[11]), 0.25)
+    let accent = AppTheme.derived(from: solarized).accent.rgb
+    XCTAssertGreaterThanOrEqual(AppTheme.chroma(accent), 0.25, String(format: "#%06X", accent))
+    XCTAssertGreaterThan(accent >> 16, accent & 0xFF, "yellow (ANSI 3), the next slot with colour")
+  }
+
+  /// Bug: a light theme with a pale cursor gave a needs-you colour that
+  /// vanished as text ("finished", the open tab's icon) on the ground.
+  func testTheAccentReadsAsTextOnTheGround() {
+    let pale = AppTheme.derived(from: theme(fg: 0x24292F, bg: 0xFFFFFF, cursor: 0xF5D547))
+    XCTAssertGreaterThanOrEqual(AppTheme.contrast(pale.accent.rgb, 0xFFFFFF), 3)
+    let picked = AppTheme.derived(from: theme(), accent: 0x000080)
+    XCTAssertGreaterThanOrEqual(AppTheme.contrast(picked.accent.rgb, 0x282A36), 3, "a picked accent too dark for the ground")
+    XCTAssertGreaterThan(picked.accent.rgb & 0xFF, picked.accent.rgb >> 16, "still blue")
   }
 
   func testSecondaryTextIsNudgedUntilItReads() {
@@ -322,8 +351,9 @@ final class DerivedAppThemeTests: XCTestCase {
   func testTextOnTheAccentReadsAtFourPointFive() {
     let onLight = AppTheme.derived(from: theme(), accent: 0xF5D547)
     XCTAssertEqual(onLight.onAccent.rgb, 0x282A36, "the ground reads on a light accent")
-    let onDark = AppTheme.derived(from: theme(), accent: 0x000080)
-    XCTAssertEqual(onDark.onAccent.rgb, 0xFFFFFF)
+    let onGrey = AppTheme.derived(from: theme(fg: 0x000000, bg: 0xE0E0E0), accent: 0x3A6AB8)
+    XCTAssertEqual(onGrey.accent.rgb, 0x3A6AB8, "reads on the ground at 4:1, kept")
+    XCTAssertEqual(onGrey.onAccent.rgb, 0xFFFFFF, "the ground (4:1) does not read on it; white (5.3:1) beats black (3.9:1)")
     let mid = AppTheme.derived(from: theme(), accent: 0x808080)
     XCTAssertEqual(mid.onAccent.rgb, 0x000000, "the ground (3.6:1) does not read on mid grey; black (5.3:1) beats white (3.9:1)")
   }
@@ -336,11 +366,15 @@ final class DerivedAppThemeTests: XCTestCase {
     XCTAssertEqual(AppTheme.contrast(0x777777, 0x777777), 1, accuracy: 0.001)
   }
 
-  func testTheFixedPaletteIsTodaysLookWithAnOptionalAccent() {
-    XCTAssertEqual(AppTheme.fixed(), AppTheme.standard)
-    let a = AppTheme.fixed(accent: 0xFF6B86)
-    XCTAssertEqual(a.accent.rgb, 0xFF6B86)
-    XCTAssertEqual(a.bg, AppTheme.standard.bg)
+  func testTheFixedPaletteIsTermsOwnDuskWithAnOptionalAccent() {
+    let a = AppTheme.fixed()
+    XCTAssertEqual(a.bg.rgb, 0x15121C)
+    XCTAssertEqual(a.fg.rgb, 0xF6F4FA)
+    XCTAssertEqual(a.accent.rgb, 0x7EF0DA)
+    XCTAssertEqual(a.bad.rgb, 0xFF6B86)
+    let picked = AppTheme.fixed(accent: 0xFF6B86)
+    XCTAssertEqual(picked.accent.rgb, 0xFF6B86)
+    XCTAssertEqual(picked.bg, a.bg)
   }
 }
 
@@ -359,7 +393,7 @@ final class AppThemeRefreshTests: XCTestCase {
   }
 
   private var other: AppTheme {
-    var t = AppTheme.standard
+    var t = AppTheme.fixed()
     t.name = "Test"
     t.bg = AppTheme.Tone(rgb: 0xFFFFFF)
     t.line2 = AppTheme.Tone(rgb: 0xFF0000)
@@ -371,7 +405,7 @@ final class AppThemeRefreshTests: XCTestCase {
     s.appMatchesTerminal = true
     s.themeName = "Term"
     nonisolated(unsafe) var fired = false
-    withObservationTracking { _ = Helm.bg } onChange: { fired = true }
+    withObservationTracking { _ = Chrome.bg } onChange: { fired = true }
     s.themeName = "Dracula"
     XCTAssertTrue(fired)
     XCTAssertEqual(s.appTheme.bg.rgb, 0x282A36)
@@ -382,7 +416,7 @@ final class AppThemeRefreshTests: XCTestCase {
     s.appMatchesTerminal = false
     s.themeName = "Dracula"
     nonisolated(unsafe) var fired = false
-    withObservationTracking { _ = Helm.bg } onChange: { fired = true }
+    withObservationTracking { _ = Chrome.bg } onChange: { fired = true }
     s.appMatchesTerminal = true
     XCTAssertTrue(fired)
   }
@@ -399,8 +433,8 @@ final class AppThemeRefreshTests: XCTestCase {
   func testUIKitColoursResolveAgainstTheTraitsAppTheme() {
     let custom = other
     let traits = UITraitCollection { $0[AppThemeTrait.self] = custom }
-    XCTAssertEqual(Helm.UI.bg.resolvedColor(with: traits).argb, 0xFFFF_FFFF)
-    XCTAssertEqual(Helm.UI.bg.resolvedColor(with: UITraitCollection()).argb, UIColor(rgb: 0x0A0D13).argb)
+    XCTAssertEqual(Chrome.UI.bg.resolvedColor(with: traits).argb, 0xFFFF_FFFF)
+    XCTAssertEqual(Chrome.UI.bg.resolvedColor(with: UITraitCollection()).argb, UIColor(rgb: 0x15121C).argb, "the fixed palette's ground")
   }
 
   private func borderRGB(_ view: UIView) -> UInt32 {
@@ -414,7 +448,7 @@ final class AppThemeRefreshTests: XCTestCase {
     window.addSubview(banner)
     window.addSubview(hud)
     window.layoutIfNeeded()
-    XCTAssertEqual(UIColor(cgColor: banner.layer.borderColor!).argb >> 24, 0x24, "today's hairline, 14% alpha")
+    XCTAssertEqual(UIColor(cgColor: banner.layer.borderColor!).argb >> 24, 0x2E, "the hairline: text at 18%")
 
     window.traitOverrides[AppThemeTrait.self] = other
     window.layoutIfNeeded()

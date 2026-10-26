@@ -18,23 +18,23 @@ struct DiffSheet: View {
             dismiss()
             actions.reload()
           }
-          .buttonStyle(HelmButtonStyle(kind: .ghost))
+          .buttonStyle(CapsuleButtonStyle(kind: .plain))
         }
-        Text(title).font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg).lineLimit(1).truncationMode(.middle)
+        Text(title).font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
           .frame(maxWidth: .infinity)
         if let actions {
           Button("Overwrite") {
             dismiss()
             actions.overwrite()
           }
-          .buttonStyle(HelmButtonStyle(kind: .primary))
+          .buttonStyle(CapsuleButtonStyle(kind: .prominent))
         }
       }
       .padding(.horizontal, 12)
       .frame(height: 52)
-      .overlay(alignment: .bottom) { Helm.line.frame(height: 1) }
+      .overlay(alignment: .bottom) { Chrome.line.frame(height: 1) }
       if rows.isEmpty {
-        Text("No changes").font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg2)
+        Text("No changes").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg2)
           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
           .padding(.top, 72)
       } else {
@@ -48,8 +48,8 @@ struct DiffSheet: View {
         }
       }
     }
-    .background(Helm.raised)
-    .presentationBackground(Helm.raised)
+    .background(Chrome.raised)
+    .presentationBackground(Chrome.raised)
     .presentationDragIndicator(.visible)
     .environment(\.colorScheme, .dark)
   }
@@ -61,14 +61,14 @@ private struct DiffRow: View {
   var body: some View {
     switch row.kind {
     case .hunk:
-      Text(row.text).font(Helm.mono(11.5)).foregroundStyle(Helm.muted)
+      Text(row.text).font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
         .lineLimit(1)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Helm.sel)
+        .background(Chrome.fill2)
     case .note:
-      Text(row.text).font(Helm.mono(11.5)).foregroundStyle(Helm.muted)
+      Text(row.text).font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
     default:
@@ -76,10 +76,10 @@ private struct DiffRow: View {
         number(row.old)
         number(row.new)
         Text(sign).foregroundStyle(tone).frame(width: 14)
-        Text(row.text.isEmpty ? " " : row.text).foregroundStyle(row.kind == .context ? Helm.fg2 : Helm.fg)
+        Text(row.text.isEmpty ? " " : row.text).foregroundStyle(row.kind == .context ? Chrome.fg2 : Chrome.fg)
           .frame(maxWidth: .infinity, alignment: .leading)
       }
-      .font(Helm.mono(12))
+      .font(Chrome.mono(.secondary))
       .padding(.vertical, 1.5)
       .padding(.trailing, 10)
       .background(fill)
@@ -87,7 +87,7 @@ private struct DiffRow: View {
   }
 
   private func number(_ n: Int?) -> some View {
-    Text(n.map(String.init) ?? "").foregroundStyle(Helm.faint).font(Helm.mono(10.5))
+    Text(n.map(String.init) ?? "").foregroundStyle(Chrome.faint).font(Chrome.mono(.caption))
       .frame(width: 34, alignment: .trailing)
       .padding(.trailing, 4)
   }
@@ -102,16 +102,16 @@ private struct DiffRow: View {
 
   private var tone: Color {
     switch row.kind {
-    case .added: Helm.ok
-    case .removed: Helm.bad
-    default: Helm.faint
+    case .added: Chrome.ok
+    case .removed: Chrome.bad
+    default: Chrome.faint
     }
   }
 
   private var fill: Color {
     switch row.kind {
-    case .added: Helm.ok.opacity(0.12)
-    case .removed: Helm.bad.opacity(0.12)
+    case .added: Chrome.ok.opacity(0.12)
+    case .removed: Chrome.bad.opacity(0.12)
     default: .clear
     }
   }
@@ -126,7 +126,7 @@ struct ViewerInfo: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text(entry.name).font(Helm.sans(17, .semibold)).foregroundStyle(Helm.fg).lineLimit(2).truncationMode(.middle)
+      Text(entry.name).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg).lineLimit(2).truncationMode(.middle)
         .padding(.horizontal, 16)
         .padding(.top, 22)
         .padding(.bottom, 14)
@@ -137,9 +137,9 @@ struct ViewerInfo: View {
       if let document { row("Format", format(document)) }
       Button(action: copyPath) {
         HStack(alignment: .firstTextBaseline) {
-          Text("Path").font(Helm.mono(12)).foregroundStyle(Helm.muted)
+          Text("Path").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
           Spacer(minLength: 16)
-          Text(entry.path).font(Helm.mono(12)).foregroundStyle(Helm.fg2).multilineTextAlignment(.trailing)
+          Text(entry.path).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).multilineTextAlignment(.trailing)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
@@ -149,9 +149,9 @@ struct ViewerInfo: View {
       Spacer(minLength: 0)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Helm.raised)
+    .background(Chrome.raised)
     .presentationDetents([.medium])
-    .presentationBackground(Helm.raised)
+    .presentationBackground(Chrome.raised)
     .presentationDragIndicator(.visible)
     .environment(\.colorScheme, .dark)
   }
@@ -172,13 +172,13 @@ struct ViewerInfo: View {
 
   private func row(_ label: String, _ value: String) -> some View {
     HStack {
-      Text(label).font(Helm.mono(12)).foregroundStyle(Helm.muted)
+      Text(label).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
       Spacer()
-      Text(value).font(Helm.mono(12)).foregroundStyle(Helm.fg2).lineLimit(1)
+      Text(value).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(1)
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 12)
-    .overlay(alignment: .bottom) { Helm.line.frame(height: 1) }
+    .overlay(alignment: .bottom) { Chrome.line.frame(height: 1) }
   }
 }
 
@@ -197,14 +197,14 @@ struct BinaryBody: View {
       let rows = HexDump.rows(head, width: width)
       ScrollView {
         VStack(spacing: 6) {
-          Image(systemName: "doc").font(.system(size: 44, weight: .ultraLight)).foregroundStyle(Helm.muted)
+          Image(systemName: "doc").font(.system(size: 44, weight: .ultraLight)).foregroundStyle(Chrome.muted)
             .padding(.bottom, 8)
-          Text(entry.name).font(Helm.sans(17, .semibold)).foregroundStyle(Helm.fg)
+          Text(entry.name).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg)
             .multilineTextAlignment(.center).lineLimit(3)
-          Text([kind, FileFormat.size(entry.size)].joined(separator: " · ")).font(Helm.mono(12)).foregroundStyle(Helm.muted)
+          Text([kind, FileFormat.size(entry.size)].joined(separator: " · ")).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
           HStack(spacing: 10) {
-            Button("Share", action: share).buttonStyle(HelmButtonStyle(kind: .primary))
-            Button("Save to Files", action: export).buttonStyle(HelmButtonStyle())
+            Button("Share", action: share).buttonStyle(CapsuleButtonStyle(kind: .prominent))
+            Button("Save to Files", action: export).buttonStyle(CapsuleButtonStyle())
           }
           .padding(.top, 14)
         }
@@ -213,13 +213,13 @@ struct BinaryBody: View {
         .padding(.bottom, 28)
         LazyVStack(alignment: .leading, spacing: 2) {
           ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-            Text(row).font(Helm.mono(11)).foregroundStyle(Helm.fg2).lineLimit(1).fixedSize()
+            Text(row).font(Chrome.mono(.caption)).foregroundStyle(Chrome.fg2).lineLimit(1).fixedSize()
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .overlay(alignment: .top) { Helm.line.frame(height: 1) }
+        .overlay(alignment: .top) { Chrome.line.frame(height: 1) }
         .padding(.bottom, 24)
       }
     }
@@ -245,29 +245,29 @@ struct LoadingBody: View {
         if let progress {
           GeometryReader { geometry in
             ZStack(alignment: .leading) {
-              Capsule().fill(onDark ? Color.white.opacity(0.18) : Helm.line2)
-              Capsule().fill(Helm.accent).frame(width: geometry.size.width * progress)
+              Capsule().fill(onDark ? Color.white.opacity(0.18) : Chrome.line2)
+              Capsule().fill(Chrome.accent).frame(width: geometry.size.width * progress)
             }
           }
           .frame(height: 4)
           HStack {
-            Text("\(Int(progress * 100))%").font(Helm.mono(13, .medium)).foregroundStyle(Helm.fg)
+            Text("\(Int(progress * 100))%").font(Chrome.mono(.secondary, .medium)).foregroundStyle(Chrome.fg)
             Spacer()
             Text("\(FileFormat.size(UInt64(Double(size) * progress))) of \(FileFormat.size(size))")
-              .font(Helm.mono(12)).foregroundStyle(Helm.muted)
+              .font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
           }
         } else {
-          ProgressView().tint(Helm.muted)
+          ProgressView().tint(Chrome.muted)
         }
       }
     }
     .frame(maxWidth: 300)
     .padding(.horizontal, 32)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .animation(Helm.ease(0.2), value: progress)
+    .animation(Chrome.fade, value: progress)
     .task {
       try? await Task.sleep(for: .milliseconds(300))
-      withAnimation(Helm.ease(0.2)) { due = true }
+      withAnimation(Chrome.fade) { due = true }
     }
   }
 }
@@ -280,10 +280,10 @@ struct FailedBody: View {
 
   var body: some View {
     VStack(spacing: 10) {
-      Text("Couldn't open \(name)").font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg)
+      Text("Couldn't open \(name)").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg)
         .multilineTextAlignment(.center)
-      Text(message).font(Helm.mono(12)).foregroundStyle(Helm.muted).multilineTextAlignment(.center)
-      Button("Retry", action: retry).buttonStyle(HelmButtonStyle()).padding(.top, 6)
+      Text(message).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).multilineTextAlignment(.center)
+      Button("Retry", action: retry).buttonStyle(CapsuleButtonStyle()).padding(.top, 6)
     }
     .padding(.horizontal, 32)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

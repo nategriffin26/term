@@ -22,7 +22,7 @@ final class AppSettings {
   static let keyRepeatDelayRange: ClosedRange<Double> = 0.1...1.0
   static let keyRepeatRateRange: ClosedRange<Double> = 2...60
 
-  var themeName: String { didSet { store(themeName, "themeName") } }
+  var themeName: String { didSet { store(themeName, "themeName"); refreshAppTheme() } }
   var fontFamily: String { didSet { store(fontFamily, "fontFamily") } }
   var fontSize: Double { didSet { store(fontSize, "fontSize") } }
   /// Cell height as a multiple of the font's line height.
@@ -35,13 +35,16 @@ final class AppSettings {
   var cursorFollowsPrograms: Bool { didSet { store(cursorFollowsPrograms, "cursorFollowsPrograms") } }
   var boldIsBright: Bool { didSet { store(boldIsBright, "boldIsBright") } }
   /// The app's colours follow the terminal theme; off, the fixed palette.
-  var appMatchesTerminal: Bool { didSet { store(appMatchesTerminal, "appMatchesTerminal") } }
+  var appMatchesTerminal: Bool { didSet { store(appMatchesTerminal, "appMatchesTerminal"); refreshAppTheme() } }
   /// 0xRRGGBB for the colour that marks what needs you; nil takes it from the theme.
   var appAccent: UInt32? {
     didSet {
       if let appAccent { store(Int(appAccent), "appAccent") } else { remove("appAccent") }
+      refreshAppTheme()
     }
   }
+  /// The app's colours, kept in step with the three settings above (every chrome colour reads it).
+  private(set) var appTheme = AppTheme.fixed()
   var smartKeysWithHardwareKeyboard: Bool { didSet { store(smartKeysWithHardwareKeyboard, "smartKeysWithHardwareKeyboard") } }
   var keyClickSound: Bool { didSet { store(keyClickSound, "keyClickSound") } }
   /// Inner display of iPhone Duo: two sessions side by side even when flat.
@@ -64,7 +67,7 @@ final class AppSettings {
     cursorColor = defaults.string(forKey: "cursorColor").flatMap(CursorColor.init(rawValue:)) ?? .theme
     cursorFollowsPrograms = (defaults.object(forKey: "cursorFollowsPrograms") as? Bool) ?? true
     boldIsBright = (defaults.object(forKey: "boldIsBright") as? Bool) ?? false
-    appMatchesTerminal = (defaults.object(forKey: "appMatchesTerminal") as? Bool) ?? false
+    appMatchesTerminal = (defaults.object(forKey: "appMatchesTerminal") as? Bool) ?? true
     appAccent = (defaults.object(forKey: "appAccent") as? Int).flatMap { UInt32(exactly: $0) }.map { $0 & 0xFFFFFF }
     smartKeysWithHardwareKeyboard = (defaults.object(forKey: "smartKeysWithHardwareKeyboard") as? Bool) ?? false
     keyClickSound = (defaults.object(forKey: "keyClickSound") as? Bool) ?? true
@@ -73,12 +76,13 @@ final class AppSettings {
       .clamped(to: Self.keyRepeatDelayRange)
     keyRepeatRate = ((defaults.object(forKey: "keyRepeatRate") as? Double) ?? 25)
       .clamped(to: Self.keyRepeatRateRange)
+    refreshAppTheme()
   }
 
   var theme: Theme { Theme.named(themeName) }
 
-  var appTheme: AppTheme {
-    appMatchesTerminal ? AppTheme.derived(from: theme, accent: appAccent) : AppTheme.fixed(accent: appAccent)
+  private func refreshAppTheme() {
+    appTheme = appMatchesTerminal ? AppTheme.derived(from: theme, accent: appAccent) : AppTheme.fixed(accent: appAccent)
   }
 
   /// What sessions draw with: the theme's colours, the cursor colour

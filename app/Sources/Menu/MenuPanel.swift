@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The floating menu: a Helm-ink card over the visible terminal (the safe
+/// The floating menu: a glass card over the visible terminal (the safe
 /// area above the keyboard), on a scrim. It grows out of the dock icon that
 /// opened it and collapses back into it; without an icon it scales in.
 @MainActor
@@ -49,18 +49,18 @@ final class MenuPanel: UIViewController {
 
   /// A layer's CGColor and the system controls' style do not follow the app theme by themselves.
   private func applyAppTheme() {
-    card.layer.borderColor = Helm.UI.line2.resolvedColor(with: traitCollection).cgColor
+    card.layer.borderColor = Chrome.UI.line2.resolvedColor(with: traitCollection).cgColor
     host.overrideUserInterfaceStyle = traitCollection[AppThemeTrait.self].isDark ? .dark : .light
   }
 
   override func viewDidLoad() {
     super.viewDidLoad()
-    scrim.backgroundColor = Helm.UI.overlay
+    scrim.backgroundColor = Chrome.UI.overlay
     scrim.alpha = 0
     scrim.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(scrimTapped)))
     view.addSubview(scrim)
 
-    card.backgroundColor = Helm.UI.raised
+    card.backgroundColor = Chrome.UI.raised
     card.layer.cornerCurve = .continuous
     registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.applyAppTheme() }
     applyAppTheme()
@@ -82,7 +82,7 @@ final class MenuPanel: UIViewController {
     clip.addSubview(host.view)
     host.didMove(toParent: self)
 
-    ghost.tintColor = Helm.UI.accent
+    ghost.tintColor = Chrome.UI.accent
     ghost.contentMode = .center
     ghost.alpha = 0
     card.addSubview(ghost)
@@ -181,7 +181,7 @@ final class MenuPanel: UIViewController {
       ghost.alpha = 0
     }
 
-    let animator = UIViewPropertyAnimator(duration: 0.45, timingParameters: Helm.springTiming)
+    let animator = UIViewPropertyAnimator(duration: 0.45, timingParameters: Chrome.springTiming)
     animator.addAnimations { [self] in
       card.transform = .identity
       card.alpha = 1
@@ -202,7 +202,7 @@ final class MenuPanel: UIViewController {
     if source != nil {
       UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) { self.ghost.alpha = 0 }
     }
-    let content = UIViewPropertyAnimator(duration: 0.3, timingParameters: Helm.easeTiming)
+    let content = UIViewPropertyAnimator(duration: 0.3, timingParameters: Chrome.fadeTiming)
     content.addAnimations { [self] in
       host.view.alpha = 1
       host.view.transform = .identity
@@ -221,13 +221,13 @@ final class MenuPanel: UIViewController {
     let tab = model.tab
     let end = openedFrom.flatMap { _ in iconFrame?(tab) }
 
-    let content = UIViewPropertyAnimator(duration: 0.14, timingParameters: Helm.easeTiming)
+    let content = UIViewPropertyAnimator(duration: 0.14, timingParameters: Chrome.fadeTiming)
     content.addAnimations { [self] in host.view.alpha = 0 }
     contentAnimator = content
     content.startAnimation()
 
     ghost.alpha = 0
-    let animator = UIViewPropertyAnimator(duration: end == nil ? 0.3 : 0.42, timingParameters: Helm.springTiming)
+    let animator = UIViewPropertyAnimator(duration: end == nil ? 0.3 : 0.42, timingParameters: Chrome.springTiming)
     animator.addAnimations { [self] in
       scrim.alpha = 0
       if let end {
@@ -267,7 +267,7 @@ final class MenuPanel: UIViewController {
     model.isOpen = false
     willClose?()
     stopAnimations()
-    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Helm.easeTiming)
+    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Chrome.fadeTiming)
     animator.addAnimations { [self] in
       scrim.alpha = 0
       card.alpha = 0
@@ -301,7 +301,7 @@ final class MenuPanel: UIViewController {
     ghost.alpha = 0
     card.transform = .identity
     card.alpha = 0
-    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Helm.easeTiming)
+    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Chrome.fadeTiming)
     animator.addAnimations { [self] in
       card.alpha = 1
       scrim.alpha = 1

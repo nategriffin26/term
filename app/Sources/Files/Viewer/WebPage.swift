@@ -3,8 +3,7 @@ import UniformTypeIdentifiers
 import WebKit
 
 /// termfs://file/<absolute path> names a file on the host for a web view (a
-/// Markdown file's relative images, an HTML page's stylesheets);
-/// termfs://app/<name> names a bundled resource (the Geist fonts).
+/// Markdown file's relative images, an HTML page's stylesheets).
 enum TermFSURL {
   static let scheme = "termfs"
 
@@ -32,7 +31,7 @@ enum TermFSURL {
   private static let pathAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "%;?#"))
 }
 
-/// Serves termfs:// to a web view: host files over SFTP, fonts from the bundle.
+/// Serves termfs:// to a web view: host files over SFTP.
 @MainActor
 final class TermFSSchemeHandler: NSObject, WKURLSchemeHandler {
   private let fs: RemoteFS
@@ -51,17 +50,8 @@ final class TermFSSchemeHandler: NSObject, WKURLSchemeHandler {
     running[id] = Task { [weak self] in
       let result: Result<Data, Error>
       do {
-        if url.host() == "app" {
-          let name = url.lastPathComponent as NSString
-          guard let file = Bundle.main.url(forResource: name.deletingPathExtension, withExtension: name.pathExtension) else {
-            throw URLError(.fileDoesNotExist)
-          }
-          result = .success(try Data(contentsOf: file))
-        } else if let path = TermFSURL.path(url) {
-          result = .success(try await fs.read(path, max: Self.maxBytes))
-        } else {
-          throw URLError(.badURL)
-        }
+        guard let path = TermFSURL.path(url) else { throw URLError(.badURL) }
+        result = .success(try await fs.read(path, max: Self.maxBytes))
       } catch {
         result = .failure(error)
       }
@@ -118,8 +108,8 @@ struct WebPage: UIViewRepresentable {
     configuration.dataDetectorTypes = []
     let view = WKWebView(frame: .zero, configuration: configuration)
     view.isOpaque = false
-    view.backgroundColor = Helm.UI.raised
-    view.scrollView.backgroundColor = Helm.UI.raised
+    view.backgroundColor = Chrome.UI.raised
+    view.scrollView.backgroundColor = Chrome.UI.raised
     view.scrollView.contentInsetAdjustmentBehavior = .never
     view.isFindInteractionEnabled = true
     view.navigationDelegate = context.coordinator

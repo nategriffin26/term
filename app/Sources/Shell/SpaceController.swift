@@ -377,8 +377,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     dock.setBadge(count, on: .tmux)
     if count > 0 {
       var badge = UIBarButtonItem.Badge.count(count)
-      badge.backgroundColor = Helm.UI.accent
-      badge.foregroundColor = UIColor(Helm.onAccent)
+      badge.backgroundColor = Chrome.UI.accent
+      badge.foregroundColor = UIColor(Chrome.onAccent)
       dockItems[.tmux]?.badge = badge
     } else {
       dockItems[.tmux]?.badge = nil
@@ -791,7 +791,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     morph.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0, 1)
     mask.add(morph, forKey: "path")
 
-    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Helm.springTiming)
+    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Chrome.springTiming)
     animator.addAnimations { container.transform = towardTile ? small : .identity }
     animator.addCompletion { [weak self] _ in
       guard let self else { return }
@@ -815,7 +815,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private func menuChanged() {
     let open = menu.isOpen ? menu.tab : nil
     dock.setSelected(open)
-    for (tab, item) in dockItems { item.tintColor = tab == open ? Helm.UI.accent : nil }
+    for (tab, item) in dockItems { item.tintColor = tab == open ? Chrome.UI.accent : nil }
   }
 
   /// A dock icon: opens the panel out of itself, switches to its tab when the

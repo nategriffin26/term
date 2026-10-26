@@ -17,7 +17,7 @@ struct KeysView: View {
         } label: {
           VStack(alignment: .leading, spacing: 2) {
             Text(key.name)
-            HelmValue(key.type)
+            ValueText(key.type)
           }
         }
       }
@@ -27,7 +27,7 @@ struct KeysView: View {
       }
       .listRowBackground(Color.clear)
     }
-    .helmList()
+    .chromeList()
     .overlay {
       if keys.isEmpty {
         ContentUnavailableView("No Keys", systemImage: "key",
@@ -77,9 +77,9 @@ struct KeyDetailView: View {
 
   var body: some View {
     List {
-      HelmSection("Public Key") {
+      ListSection("Public Key") {
         Text(key.publicKey)
-          .font(Helm.mono(12))
+          .font(Chrome.mono(.secondary))
           .textSelection(.enabled)
         Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc") {
           UIPasteboard.general.string = key.publicKey
@@ -89,19 +89,19 @@ struct KeyDetailView: View {
           Label("Share", systemImage: "square.and.arrow.up")
         }
       }
-      HelmSection {
-        HelmRow("Type", key.type)
+      ListSection {
+        ValueRow("Type", key.type)
         if let fingerprint = SSHKeys.fingerprint(key.publicKey) {
           LabeledContent("Fingerprint") {
-            Text(fingerprint).font(Helm.mono(12)).textSelection(.enabled)
+            Text(fingerprint).font(Chrome.mono(.secondary)).textSelection(.enabled)
           }
         }
       }
-      HelmSection {
+      ListSection {
         Button("Delete Key", role: .destructive) { confirmDelete = true }
       }
     }
-    .helmList()
+    .chromeList()
     .navigationTitle(key.name)
     .navigationBarTitleDisplayMode(.inline)
     .confirmationDialog("Delete \(key.name)?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -130,7 +130,7 @@ struct GenerateKeyView: View {
 
   var body: some View {
     List {
-      HelmSection {
+      ListSection {
         LabeledContent("Name") {
           TextField("Name", text: $name).multilineTextAlignment(.trailing)
         }
@@ -141,7 +141,7 @@ struct GenerateKeyView: View {
         if let error { Text(error).foregroundStyle(.red) }
       }
     }
-    .helmList()
+    .chromeList()
     .textInputAutocapitalization(.never)
     .autocorrectionDisabled()
     .navigationTitle("New Key")
@@ -188,14 +188,14 @@ struct ImportKeyView: View {
 
   var body: some View {
     List {
-      HelmSection {
+      ListSection {
         LabeledContent("Name") {
           TextField("Name", text: $name).multilineTextAlignment(.trailing)
         }
       }
-      HelmSection("OpenSSH Private Key") {
+      ListSection("OpenSSH Private Key") {
         TextEditor(text: $text)
-          .font(Helm.mono(12))
+          .font(Chrome.mono(.secondary))
           .frame(minHeight: 180)
         // The system paste control reads the pasteboard without the
         // "Allow Paste" prompt a programmatic read triggers.
@@ -206,7 +206,7 @@ struct ImportKeyView: View {
         if let error { Text(error).foregroundStyle(.red) }
       }
     }
-    .helmList()
+    .chromeList()
     .textInputAutocapitalization(.never)
     .autocorrectionDisabled()
     .navigationTitle("Import Key")

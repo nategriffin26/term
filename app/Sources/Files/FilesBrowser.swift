@@ -751,19 +751,19 @@ final class FilesBrowser {
   func flash(_ text: String, action: String? = nil, isError: Bool = false, perform: (() -> Void)? = nil) {
     toastTask?.cancel()
     toastAction = perform
-    withAnimation(Helm.spring(0.4)) { toast = Toast(text: text, action: action, isError: isError) }
+    withAnimation(Chrome.spring) { toast = Toast(text: text, action: action, isError: isError) }
     let id = toast?.id
     toastTask = Task { [weak self] in
       try? await Task.sleep(for: .seconds(action == nil ? 2.5 : 5))
       guard !Task.isCancelled, let self, self.toast?.id == id else { return }
-      withAnimation(Helm.ease(0.25)) { self.toast = nil }
+      withAnimation(Chrome.fade) { self.toast = nil }
     }
   }
 
   func toastTapped() {
     let action = toastAction
     toastAction = nil
-    withAnimation(Helm.ease(0.2)) { toast = nil }
+    withAnimation(Chrome.fade) { toast = nil }
     action?()
   }
 

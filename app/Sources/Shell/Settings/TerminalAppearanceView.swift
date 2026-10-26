@@ -9,7 +9,7 @@ struct PreviewPage<Content: View>: View {
   var body: some View {
     VStack(spacing: 0) {
       TerminalPreview().frame(height: 142)
-      Rectangle().fill(Helm.line2).frame(height: 1)
+      Rectangle().fill(Chrome.line2).frame(height: 1)
       content
     }
     .modifier(TitledPage(title: title))
@@ -21,7 +21,7 @@ private struct TitledPage: ViewModifier {
 
   func body(content: Content) -> some View {
     if let title {
-      content.helmList().navigationTitle(title)
+      content.chromeList().navigationTitle(title)
     } else {
       content
     }
@@ -62,25 +62,25 @@ struct TerminalAppearancePage: View {
           Toggle("Bold as Bright", isOn: $settings.boldIsBright)
         } header: {
           HStack {
-            Text("Theme").font(Helm.sans(12, .medium)).foregroundStyle(Helm.muted)
+            Text("Theme").font(Chrome.font(.secondary, .medium)).foregroundStyle(Chrome.muted)
             Spacer()
             NavigationLink("All") { ThemesView() }
-              .font(Helm.sans(12, .medium))
-              .foregroundStyle(Helm.accent)
+              .font(Chrome.font(.secondary, .medium))
+              .foregroundStyle(Chrome.accent)
           }
           .textCase(nil)
         }
         .listRowBackground(Color.clear)
-        HelmSection("Font") {
+        ListSection("Font") {
           NavigationLink { FontFamilyView() } label: {
-            LabeledContent { HelmValue(settings.fontFamily) } label: { Text("Family") }
+            LabeledContent { ValueText(settings.fontFamily) } label: { Text("Family") }
           }
-          HelmSlider(label: "Size", value: $settings.fontSize, range: AppSettings.fontSizeRange, step: 1,
+          SliderRow(label: "Size", value: $settings.fontSize, range: AppSettings.fontSizeRange, step: 1,
                      text: "\(Int(settings.fontSize)) pt")
-          HelmSlider(label: "Line Height", value: $settings.lineSpacing, range: AppSettings.lineSpacingRange,
+          SliderRow(label: "Line Height", value: $settings.lineSpacing, range: AppSettings.lineSpacingRange,
                      step: 0.05, text: String(format: "%.2f", settings.lineSpacing))
         }
-        HelmSection("Cursor") {
+        ListSection("Cursor") {
           LabeledContent {
             Picker("Shape", selection: $settings.cursorShape) {
               ForEach(CursorShape.allCases, id: \.self) { Text($0.rawValue.capitalized) }
@@ -115,10 +115,10 @@ private struct ThemeTile: View {
   var body: some View {
     VStack(spacing: 6) {
       ThemeThumbnail(theme: theme)
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Helm.accent, lineWidth: selected ? 2 : 0))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Chrome.accent, lineWidth: selected ? 2 : 0))
       Text(theme.name)
-        .font(Helm.sans(11, selected ? .semibold : .regular))
-        .foregroundStyle(selected ? Helm.fg : Helm.muted)
+        .font(Chrome.font(.caption, selected ? .semibold : .regular))
+        .foregroundStyle(selected ? Chrome.fg : Chrome.muted)
         .lineLimit(1)
     }
     .frame(width: 84)
@@ -142,7 +142,7 @@ struct ThemesView: View {
 
   @ViewBuilder private func section(_ title: String, _ themes: [Theme]) -> some View {
     if !themes.isEmpty {
-      HelmSection(title) {
+      ListSection(title) {
         ForEach(themes) { theme in
           Button {
             settings.themeName = theme.name
@@ -152,7 +152,7 @@ struct ThemesView: View {
               Text(theme.name)
               Spacer()
               if theme.name == settings.themeName {
-                Image(systemName: "checkmark").foregroundStyle(Helm.accent)
+                Image(systemName: "checkmark").foregroundStyle(Chrome.accent)
               }
             }
           }
@@ -175,7 +175,7 @@ struct ThemeThumbnail: View {
         Text("$ ls").foregroundStyle(color(theme.palette[2]))
         Rectangle().fill(color(theme.cursor)).frame(width: 5, height: 10).padding(.leading, 2)
       }
-      .font(Helm.mono(9.5, .medium))
+      .font(Chrome.mono(.caption, .medium))
       .foregroundStyle(color(theme.foreground))
       HStack(spacing: 2) {
         ForEach(1..<7, id: \.self) { i in
@@ -187,7 +187,7 @@ struct ThemeThumbnail: View {
     .padding(.vertical, 7)
     .frame(width: 80, alignment: .leading)
     .background(color(theme.background), in: RoundedRectangle(cornerRadius: 6))
-    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Helm.line2, lineWidth: 1))
+    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Chrome.line2, lineWidth: 1))
   }
 }
 
@@ -206,7 +206,7 @@ struct FontFamilyView: View {
               Text(family).font(.custom(family, size: 15))
               Spacer()
               if family == settings.fontFamily {
-                Image(systemName: "checkmark").foregroundStyle(Helm.accent)
+                Image(systemName: "checkmark").foregroundStyle(Chrome.accent)
               }
             }
           }

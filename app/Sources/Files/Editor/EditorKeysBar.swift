@@ -15,7 +15,7 @@ final class EditorKeysBar: UIInputView {
     self.textView = textView
     self.onFind = onFind
     super.init(frame: CGRect(x: 0, y: 0, width: 320, height: 44), inputViewStyle: .default)
-    backgroundColor = Helm.UI.raised
+    backgroundColor = Chrome.UI.raised
     allowsSelfSizing = true
 
     let keys = UIStackView()
@@ -41,7 +41,7 @@ final class EditorKeysBar: UIInputView {
     ])
     fixed.spacing = 2
     let hairline = UIView()
-    hairline.backgroundColor = Helm.UI.line2
+    hairline.backgroundColor = Chrome.UI.line2
 
     for v in [scroll, keys, fixed, hairline] { v.translatesAutoresizingMaskIntoConstraints = false }
     addSubview(scroll)
@@ -78,10 +78,10 @@ final class EditorKeysBar: UIInputView {
 
   private func button(text: String? = nil, symbol: String? = nil, label: String? = nil, _ action: @escaping () -> Void) -> UIButton {
     var config = UIButton.Configuration.plain()
-    config.baseForegroundColor = Helm.UI.fg2
+    config.baseForegroundColor = Chrome.UI.fg2
     config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
     if let text {
-      config.attributedTitle = AttributedString(text, attributes: AttributeContainer([.font: Helm.uiMono(17)]))
+      config.attributedTitle = AttributedString(text, attributes: AttributeContainer([.font: Chrome.uiMono(.title)]))
     }
     if let symbol {
       config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium))

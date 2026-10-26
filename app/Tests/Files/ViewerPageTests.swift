@@ -44,7 +44,7 @@ final class TermFSURLTests: XCTestCase {
   }
 
   func testOnlyFileURLsNameHostPaths() {
-    XCTAssertNil(TermFSURL.path(URL(string: "termfs://app/GeistVariable.woff2")!))
+    XCTAssertNil(TermFSURL.path(URL(string: "termfs://app/font.woff2")!))
     XCTAssertNil(TermFSURL.path(URL(string: "https://example.com/a.png")!))
   }
 }
@@ -90,11 +90,11 @@ final class MarkdownPageTests: XCTestCase {
   /// Bug: a SKILL.md's front matter renders as a rule and a big setext
   /// heading ("description: …" underlined by the closing ---).
   func testFrontMatterIsATable() {
-    let page = MarkdownPage.html("---\nname: helm\ndescription: \"The <default> look\"\n---\n# Helm\n")
-    XCTAssertTrue(page.contains("<table class=\"front\"><tr><th>name</th><td>helm</td></tr><tr><th>description</th><td>The &lt;default&gt; look</td></tr></table>"), page)
+    let page = MarkdownPage.html("---\nname: glass\ndescription: \"The <default> look\"\n---\n# Glass\n")
+    XCTAssertTrue(page.contains("<table class=\"front\"><tr><th>name</th><td>glass</td></tr><tr><th>description</th><td>The &lt;default&gt; look</td></tr></table>"), page)
     XCTAssertFalse(page.contains("<h2>"), page)
     XCTAssertFalse(page.contains("<hr"), page)
-    XCTAssertTrue(page.contains("Helm</h1>"), page)
+    XCTAssertTrue(page.contains("Glass</h1>"), page)
   }
 
   /// Nested YAML can't be a flat table: shown as its source. A lone "---"

@@ -18,7 +18,7 @@ final class MenuDock: UIView {
     for tab in MenuTab.allCases {
       var config = UIButton.Configuration.plain()
       config.image = UIImage(systemName: tab.symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .regular))
-      config.baseForegroundColor = Helm.UI.fg2
+      config.baseForegroundColor = Chrome.UI.fg2
       config.contentInsets = .zero
       let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in self?.onTap?(tab) })
       button.accessibilityLabel = tab.title
@@ -58,7 +58,7 @@ final class MenuDock: UIView {
     }
     let badge = badges[tab] ?? {
       let label = UILabel()
-      label.font = Helm.uiSans(10, .semibold)
+      label.font = Chrome.uiFont(.caption, .semibold)
       label.textAlignment = .center
       label.layer.cornerRadius = 8
       label.clipsToBounds = true
@@ -67,8 +67,8 @@ final class MenuDock: UIView {
       badges[tab] = label
       return label
     }()
-    badge.backgroundColor = Helm.UI.accent
-    badge.textColor = UIColor(Helm.onAccent)
+    badge.backgroundColor = Chrome.UI.accent
+    badge.textColor = UIColor(Chrome.onAccent)
     badge.text = "\(count)"
     badge.isHidden = false
     setNeedsLayout()
@@ -77,7 +77,7 @@ final class MenuDock: UIView {
   /// Draws `tab`'s icon in the accent (the open tab), the rest quiet.
   func setSelected(_ tab: MenuTab?) {
     for (t, button) in buttons {
-      button.configuration?.baseForegroundColor = t == tab ? Helm.UI.accent : Helm.UI.fg2
+      button.configuration?.baseForegroundColor = t == tab ? Chrome.UI.accent : Chrome.UI.fg2
     }
   }
 

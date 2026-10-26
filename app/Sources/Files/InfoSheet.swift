@@ -15,7 +15,7 @@ struct InfoSheet: View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 12) {
         FileThumb(entry: entry, browser: browser)
-        Text(entry.name).font(Helm.sans(17, .semibold)).foregroundStyle(Helm.fg).lineLimit(2).truncationMode(.middle)
+        Text(entry.name).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg).lineLimit(2).truncationMode(.middle)
       }
       .padding(.horizontal, 16)
       .padding(.top, 22)
@@ -25,16 +25,16 @@ struct InfoSheet: View {
         row("Size", size)
         row("Modified", entry.mtime.formatted(date: .abbreviated, time: .shortened))
         HStack {
-          Text("Permissions").font(Helm.mono(12)).foregroundStyle(Helm.muted)
+          Text("Permissions").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
           Spacer()
-          Text(FileFormat.permissions(entry.mode)).font(Helm.mono(12)).foregroundStyle(Helm.fg2)
+          Text(FileFormat.permissions(entry.mode)).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2)
         }
         .rowStyle()
         if !entry.isDirectory {
           HStack {
-            Text("Executable").font(Helm.mono(12)).foregroundStyle(Helm.muted)
+            Text("Executable").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
             Spacer()
-            HelmSeg(options: [(true, "On"), (false, "Off")], selection: entry.isExecutable, busy: changing) { on in
+            CapsuleSegmented(options: [(true, "On"), (false, "Off")], selection: entry.isExecutable, busy: changing) { on in
               changing = true
               Task {
                 if let updated = await browser.setExecutable(entry, on) { entry = updated }
@@ -47,17 +47,17 @@ struct InfoSheet: View {
         }
         if let change = browser.git[folder]?.change(at: entry.path, isDirectory: entry.isDirectory) {
           HStack {
-            Text("Git").font(Helm.mono(12)).foregroundStyle(Helm.muted)
+            Text("Git").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
             Spacer()
-            Text(String(describing: change)).font(Helm.mono(12)).foregroundStyle(FileRow.tone(change))
+            Text(String(describing: change)).font(Chrome.mono(.secondary)).foregroundStyle(FileRow.tone(change))
           }
           .rowStyle()
         }
         Button { browser.copyPath(entry.path) } label: {
           HStack(alignment: .firstTextBaseline) {
-            Text("Path").font(Helm.mono(12)).foregroundStyle(Helm.muted)
+            Text("Path").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
             Spacer(minLength: 16)
-            Text(entry.path).font(Helm.mono(12)).foregroundStyle(Helm.fg2).multilineTextAlignment(.trailing)
+            Text(entry.path).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).multilineTextAlignment(.trailing)
           }
           .rowStyle()
           .contentShape(Rectangle())
@@ -67,9 +67,9 @@ struct InfoSheet: View {
       Spacer(minLength: 0)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Helm.raised)
+    .background(Chrome.raised)
     .presentationDetents([.medium])
-    .presentationBackground(Helm.raised)
+    .presentationBackground(Chrome.raised)
     .presentationDragIndicator(.visible)
     .environment(\.colorScheme, .dark)
     .task {
@@ -95,45 +95,11 @@ struct InfoSheet: View {
 
   private func row(_ label: String, _ value: String) -> some View {
     HStack {
-      Text(label).font(Helm.mono(12)).foregroundStyle(Helm.muted)
+      Text(label).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
       Spacer()
-      Text(value).font(Helm.mono(12)).foregroundStyle(Helm.fg2).lineLimit(1)
+      Text(value).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(1)
     }
     .rowStyle()
-  }
-}
-
-/// Helm's segmented control: hairline track, the chosen segment lit with
-/// --sel. Picking the chosen one again does nothing.
-struct HelmSeg<Value: Hashable>: View {
-  let options: [(Value, String)]
-  let selection: Value
-  var busy = false
-  let pick: (Value) -> Void
-
-  var body: some View {
-    HStack(spacing: 2) {
-      ForEach(options.indices, id: \.self) { i in
-        let (value, label) = options[i]
-        let selected = value == selection
-        Button { if !selected { pick(value) } } label: {
-          Text(label).font(Helm.sans(12.5, .medium))
-            .foregroundStyle(selected ? Helm.fg : Helm.muted)
-            .padding(.horizontal, 12)
-            .frame(maxWidth: .infinity)
-            .frame(height: 24)
-            .background(selected ? Helm.sel : .clear, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
-      }
-    }
-    .padding(2)
-    .background(Helm.line, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Helm.line2))
-    .disabled(busy)
-    .opacity(busy ? 0.5 : 1)
   }
 }
 
@@ -142,6 +108,6 @@ private extension View {
   func rowStyle() -> some View {
     padding(.horizontal, 16)
       .frame(minHeight: 44)
-      .overlay(alignment: .top) { Helm.line.frame(height: 1) }
+      .overlay(alignment: .top) { Chrome.line.frame(height: 1) }
   }
 }

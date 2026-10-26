@@ -36,7 +36,7 @@ struct FilesPane: View {
         if let browser, browser.fs.spec.knownHostsKey == spec.knownHostsKey, browser.fs.spec.user == spec.user {
           BrowserView(browser: browser, context: context, onHosts: context.spec == nil ? { chosen = nil } : nil)
         } else {
-          Helm.raised.onAppear {
+          Chrome.raised.onAppear {
             let made = FilesBrowser(spec: spec)
             browser = made
             context.browserReady(made)
@@ -46,7 +46,7 @@ struct FilesPane: View {
         HostChooser { chosen = Tab.spec(for: $0) }
       }
     }
-    .background(Helm.raised)
+    .background(Chrome.raised)
     .environment(\.colorScheme, .dark)
   }
 }
@@ -59,8 +59,8 @@ private struct HostChooser: View {
   var body: some View {
     if config.hosts.isEmpty {
       VStack(spacing: 6) {
-        Text("No hosts").font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg)
-        Text("Add one in Settings › Hosts").font(Helm.sans(12)).foregroundStyle(Helm.muted)
+        Text("No hosts").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg)
+        Text("Add one in Settings › Hosts").font(Chrome.font(.secondary)).foregroundStyle(Chrome.muted)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
       .padding(.top, 72)
@@ -70,20 +70,20 @@ private struct HostChooser: View {
           ForEach(config.hosts) { host in
             Button { choose(host) } label: {
               HStack(spacing: 12) {
-                Image(systemName: "server.rack").font(.system(size: 17)).foregroundStyle(Helm.muted).frame(width: 38)
+                Image(systemName: "server.rack").font(.system(size: 17)).foregroundStyle(Chrome.muted).frame(width: 38)
                 VStack(alignment: .leading, spacing: 3) {
-                  Text(host.alias).font(Helm.sans(15, .medium)).foregroundStyle(Helm.fg)
-                  Text("\(host.user)@\(host.hostname)").font(Helm.mono(12)).foregroundStyle(Helm.muted).lineLimit(1)
+                  Text(host.alias).font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg)
+                  Text("\(host.user)@\(host.hostname)").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).lineLimit(1)
                 }
                 Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Helm.faint)
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Chrome.faint)
               }
               .padding(.horizontal, 16)
               .frame(height: 60)
               .contentShape(Rectangle())
             }
             .buttonStyle(RowPressStyle())
-            .overlay(alignment: .bottom) { Helm.line.frame(height: 1).padding(.leading, 66) }
+            .overlay(alignment: .bottom) { Chrome.line.frame(height: 1).padding(.leading, 66) }
           }
         }
       }
@@ -103,10 +103,10 @@ struct BrowserView: View {
     Group {
       if let error = browser.homeError {
         VStack(spacing: 10) {
-          Text("Can't reach \(browser.fs.spec.label)").font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg)
-          Text(error).font(Helm.mono(12)).foregroundStyle(Helm.muted).multilineTextAlignment(.center)
+          Text("Can't reach \(browser.fs.spec.label)").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg)
+          Text(error).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).multilineTextAlignment(.center)
           Button("Retry") { Task { await browser.retryStart() } }
-            .buttonStyle(HelmButtonStyle())
+            .buttonStyle(CapsuleButtonStyle())
             .padding(.top, 6)
         }
         .padding(.horizontal, 32)
@@ -132,11 +132,11 @@ struct BrowserView: View {
             }
             TransfersStrip(transfers: browser.transfers)
           }
-          .animation(Helm.spring(0.4), value: browser.transfers.items.map(\.id))
+          .animation(Chrome.spring, value: browser.transfers.items.map(\.id))
         }
         .overlay(alignment: .bottom) { ToastView(browser: browser).padding(.bottom, 64) }
       } else {
-        ProgressView().tint(Helm.muted).frame(maxWidth: .infinity, maxHeight: .infinity)
+        ProgressView().tint(Chrome.muted).frame(maxWidth: .infinity, maxHeight: .infinity)
       }
     }
     .task { await browser.start() }
@@ -201,16 +201,16 @@ private struct PickBar: View {
       let count = pick.entries.count == 1 ? pick.entries[0].name : "\(pick.entries.count) items"
       HStack(spacing: 10) {
         Text("\(pick.op == .move ? "Move" : "Copy") \(count)")
-          .font(Helm.sans(13, .medium)).foregroundStyle(Helm.fg2).lineLimit(1).truncationMode(.middle)
+          .font(Chrome.font(.secondary, .medium)).foregroundStyle(Chrome.fg2).lineLimit(1).truncationMode(.middle)
         Spacer(minLength: 8)
-        Button("Cancel") { browser.pick = nil }.buttonStyle(HelmButtonStyle(kind: .ghost))
+        Button("Cancel") { browser.pick = nil }.buttonStyle(CapsuleButtonStyle(kind: .plain))
         Button(pick.op == .move ? "Move Here" : "Copy Here") { Task { await browser.finishPick(into: here) } }
-          .buttonStyle(HelmButtonStyle(kind: .primary))
+          .buttonStyle(CapsuleButtonStyle(kind: .prominent))
       }
       .padding(.horizontal, 16)
       .frame(height: 52)
-      .background(Helm.bg.opacity(0.92))
-      .overlay(alignment: .top) { Helm.line2.frame(height: 1) }
+      .background(Chrome.bg.opacity(0.92))
+      .overlay(alignment: .top) { Chrome.line2.frame(height: 1) }
     }
   }
 }
@@ -226,8 +226,8 @@ private struct SelectBar: View {
         browser.selecting = false
         browser.selection = []
       }
-      .buttonStyle(HelmButtonStyle(kind: .ghost))
-      Text("\(chosen.count)").font(Helm.mono(12)).foregroundStyle(Helm.muted).padding(.leading, 4)
+      .buttonStyle(CapsuleButtonStyle(kind: .plain))
+      Text("\(chosen.count)").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).padding(.leading, 4)
       Spacer()
       icon("square.and.arrow.down", "Save to Files", chosen.contains(where: \.isDirectory) || chosen.isEmpty) {
         Task { await browser.export(chosen) }
@@ -242,8 +242,8 @@ private struct SelectBar: View {
     }
     .padding(.horizontal, 8)
     .frame(height: 52)
-    .background(Helm.bg.opacity(0.92))
-    .overlay(alignment: .top) { Helm.line2.frame(height: 1) }
+    .background(Chrome.bg.opacity(0.92))
+    .overlay(alignment: .top) { Chrome.line2.frame(height: 1) }
   }
 
   private var selected: [RemoteEntry] {
@@ -269,16 +269,16 @@ private struct ToastView: View {
     if let toast = browser.toast {
       Button { browser.toastTapped() } label: {
         HStack(spacing: 12) {
-          Text(toast.text).font(Helm.sans(13.5, .medium)).foregroundStyle(toast.isError ? Helm.bad : Helm.fg)
+          Text(toast.text).font(Chrome.font(.secondary, .medium)).foregroundStyle(toast.isError ? Chrome.bad : Chrome.fg)
             .lineLimit(2).multilineTextAlignment(.leading)
           if let action = toast.action {
-            Text(action).font(Helm.sans(13.5, .semibold)).foregroundStyle(Helm.accent)
+            Text(action).font(Chrome.font(.secondary, .semibold)).foregroundStyle(Chrome.accent)
           }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
-        .background(Helm.bg, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Helm.line2))
+        .background(Chrome.bg, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Chrome.line2))
         .shadow(color: .black.opacity(0.3), radius: 25, y: 18)
       }
       .buttonStyle(.plain)
@@ -291,43 +291,18 @@ private struct ToastView: View {
 
 // MARK: - Styles
 
-/// A row lit with --sel while pressed (lists, hosts).
+/// A row lit with fill2 while pressed (lists, hosts).
 struct RowPressStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
-    configuration.label.background(configuration.isPressed ? Helm.sel : .clear)
+    configuration.label.background(configuration.isPressed ? Chrome.fill2 : .clear)
   }
 }
 
 struct IconButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .foregroundStyle(configuration.isPressed ? Helm.fg : Helm.fg2)
-      .background(configuration.isPressed ? Helm.sel : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .foregroundStyle(configuration.isPressed ? Chrome.fg : Chrome.fg2)
+      .background(configuration.isPressed ? Chrome.fill2 : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
       .scaleEffect(configuration.isPressed ? 0.94 : 1)
-  }
-}
-
-/// Helm's 28 pt buttons: raised, ghost, or primary (accent: it asks him).
-struct HelmButtonStyle: ButtonStyle {
-  enum Kind { case raised, ghost, primary }
-  var kind = Kind.raised
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .font(Helm.sans(12.5, .medium))
-      .foregroundStyle(kind == .primary ? Helm.onAccent : kind == .ghost ? Helm.fg2 : Helm.fg)
-      .padding(.horizontal, 12)
-      .frame(height: 30)
-      .background {
-        switch kind {
-        case .primary: RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Helm.accent)
-        case .ghost: Color.clear
-        case .raised:
-          RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Helm.line)
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Helm.line2))
-        }
-      }
-      .scaleEffect(configuration.isPressed ? 0.97 : 1)
-      .opacity(configuration.isPressed ? 0.85 : 1)
   }
 }

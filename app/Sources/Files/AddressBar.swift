@@ -55,10 +55,10 @@ struct AddressBar: View {
       Menu { viewMenu } label: { glyph("ellipsis") }
         .accessibilityLabel("View options")
     }
-    .foregroundStyle(Helm.fg)
+    .foregroundStyle(Chrome.fg)
     .padding(.horizontal, 3)
     .frame(height: 46)
-    .glassEffect(.regular.tint(Helm.bg.opacity(0.35)).interactive(), in: .capsule)
+    .glassEffect(.regular.tint(Chrome.bg.opacity(0.35)).interactive(), in: .capsule)
     .padding(.horizontal, 10)
     .padding(.top, 8)
     .padding(.bottom, 6)
@@ -80,16 +80,16 @@ struct AddressBar: View {
     let leaf = cut.map { String(display[display.index(after: $0)...]) } ?? display
     let branch = browser.git[path]?.branch
     return VStack(spacing: 1) {
-      Text("\(Text(lead).foregroundStyle(Helm.muted))\(Text(leaf).foregroundStyle(Helm.fg))")
-        .font(Helm.sans(14.5, .medium))
+      Text("\(Text(lead).foregroundStyle(Chrome.muted))\(Text(leaf).foregroundStyle(Chrome.fg))")
+        .font(Chrome.font(.body, .medium))
         .lineLimit(1)
         .truncationMode(.head)
       if let branch, !branch.isEmpty {
         HStack(spacing: 3) {
           Image(systemName: "arrow.triangle.branch").font(.system(size: 9, weight: .semibold))
-          Text(branch).font(Helm.mono(10.5)).lineLimit(1).truncationMode(.middle)
+          Text(branch).font(Chrome.mono(.caption)).lineLimit(1).truncationMode(.middle)
         }
-        .foregroundStyle(Helm.muted)
+        .foregroundStyle(Chrome.muted)
       }
     }
     .padding(.horizontal, 6)
@@ -236,7 +236,7 @@ struct SearchResults: View {
   var body: some View {
     List {
       if let failure {
-        Text(failure).font(Helm.mono(12)).foregroundStyle(Helm.bad)
+        Text(failure).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.bad)
           .listRowBackground(Color.clear).listRowSeparator(.hidden)
       }
       ForEach(results?.hits ?? []) { hit in
@@ -251,12 +251,12 @@ struct SearchResults: View {
         .buttonStyle(RowPressStyle())
         .listRowInsets(EdgeInsets())
         .listRowBackground(Color.clear)
-        .listRowSeparatorTint(Helm.line)
+        .listRowSeparatorTint(Chrome.line)
         .alignmentGuide(.listRowSeparatorLeading) { _ in 66 }
       }
       if let results, results.stopped, !results.hits.isEmpty {
         Text("Stopped after \(FileSearch.seconds) s")
-          .font(Helm.mono(11.5)).foregroundStyle(Helm.muted)
+          .font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
           .frame(maxWidth: .infinity)
           .padding(.vertical, 14)
           .listRowBackground(Color.clear)
@@ -269,7 +269,7 @@ struct SearchResults: View {
     .environment(\.defaultMinListRowHeight, 1)
     .overlay {
       if let results, results.hits.isEmpty, running == nil, failure == nil, !query.trimmingCharacters(in: .whitespaces).isEmpty {
-        Text(results.stopped ? "No matches in \(FileSearch.seconds) s" : "No matches").font(Helm.sans(15, .semibold)).foregroundStyle(Helm.fg2)
+        Text(results.stopped ? "No matches in \(FileSearch.seconds) s" : "No matches").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg2)
           .frame(maxHeight: .infinity, alignment: .top).padding(.top, 72)
       }
     }
@@ -284,27 +284,27 @@ struct SearchResults: View {
     VStack(spacing: 8) {
       HStack(spacing: 10) {
         HStack(spacing: 6) {
-          Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(Helm.muted)
+          Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(Chrome.muted)
           TextField("Search \(dir == browser.home ? "Home" : FilePath.name(dir))", text: $query)
-            .font(Helm.sans(16))
-            .foregroundStyle(Helm.fg)
+            .font(Chrome.font(.title))
+            .foregroundStyle(Chrome.fg)
             .autocorrectionDisabled()
             .textInputAutocapitalization(.never)
             .submitLabel(.search)
             .focused($focused)
-          if running != nil { ProgressView().controlSize(.small).tint(Helm.muted) }
+          if running != nil { ProgressView().controlSize(.small).tint(Chrome.muted) }
         }
         .padding(.horizontal, 12)
         .frame(height: 40)
-        .glassEffect(.regular.tint(Helm.bg.opacity(0.35)), in: .capsule)
-        Button("Cancel", action: onCancel).font(Helm.sans(15)).foregroundStyle(Helm.accent)
+        .glassEffect(.regular.tint(Chrome.bg.opacity(0.35)), in: .capsule)
+        Button("Cancel", action: onCancel).font(Chrome.font(.body)).foregroundStyle(Chrome.accent)
       }
-      HelmSeg(options: FileSearch.Scope.allCases.map { ($0, $0.label) }, selection: scope) { scope = $0 }
+      CapsuleSegmented(options: FileSearch.Scope.allCases.map { ($0, $0.label) }, selection: scope) { scope = $0 }
     }
     .padding(.horizontal, 12)
     .padding(.top, 8)
     .padding(.bottom, 8)
-    .background(Helm.raised.opacity(0.94))
+    .background(Chrome.raised.opacity(0.94))
   }
 
   private func search() async {
@@ -345,19 +345,19 @@ private struct HitRow: View {
     HStack(spacing: 12) {
       Image(systemName: hit.isDirectory ? FileKind.folder.symbol : FileKind.of(name: name).symbol)
         .font(.system(size: hit.isDirectory ? 24 : 20))
-        .foregroundStyle(hit.isDirectory ? Helm.fg2 : Helm.muted)
+        .foregroundStyle(hit.isDirectory ? Chrome.fg2 : Chrome.muted)
         .frame(width: 38, height: 38)
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 0) {
-          Text(name).font(Helm.sans(15, .medium)).foregroundStyle(Helm.fg).lineLimit(1).truncationMode(.middle)
+          Text(name).font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
           if let line = hit.line {
-            Text(":\(line)").font(Helm.mono(12)).foregroundStyle(Helm.muted)
+            Text(":\(line)").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
           }
         }
         if let text = hit.text {
-          Text(text).font(Helm.mono(12)).foregroundStyle(Helm.fg2).lineLimit(1)
+          Text(text).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(1)
         }
-        Text(folder).font(Helm.mono(11.5)).foregroundStyle(Helm.muted).lineLimit(1).truncationMode(.head)
+        Text(folder).font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted).lineLimit(1).truncationMode(.head)
       }
       Spacer(minLength: 0)
     }

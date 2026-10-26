@@ -17,7 +17,7 @@ final class StatusBanner: UIView {
 
   override init(frame: CGRect) {
     super.init(frame: frame)
-    backgroundColor = Helm.UI.raised.withAlphaComponent(0.96)
+    backgroundColor = Chrome.UI.raised.withAlphaComponent(0.96)
     layer.cornerRadius = 9
     layer.cornerCurve = .continuous
     layer.borderWidth = 1
@@ -25,28 +25,28 @@ final class StatusBanner: UIView {
     registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.updateBorder() }
     updateBorder()
 
-    label.font = Helm.uiSans(12.5, .medium)
-    label.textColor = Helm.UI.fg2
+    label.font = Chrome.uiFont(.secondary, .medium)
+    label.textColor = Chrome.UI.fg2
     label.numberOfLines = 3
     label.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-    percent.font = Helm.uiMono(12)
-    percent.textColor = Helm.UI.muted
+    percent.font = Chrome.uiMono(.secondary)
+    percent.textColor = Chrome.UI.muted
     percent.setContentHuggingPriority(.required, for: .horizontal)
     percent.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-    dot.backgroundColor = Helm.UI.bad
+    dot.backgroundColor = Chrome.UI.bad
     dot.layer.cornerRadius = 3.5
     dot.translatesAutoresizingMaskIntoConstraints = false
 
     var config = UIButton.Configuration.plain()
-    config.attributedTitle = AttributedString("Reconnect", attributes: AttributeContainer([.font: Helm.uiSans(12.5, .medium)]))
-    config.baseForegroundColor = Helm.UI.accent
+    config.attributedTitle = AttributedString("Reconnect", attributes: AttributeContainer([.font: Chrome.uiFont(.secondary, .medium)]))
+    config.baseForegroundColor = Chrome.UI.accent
     config.contentInsets = .init(top: 4, leading: 8, bottom: 4, trailing: 0)
     button.configuration = config
     button.addAction(UIAction { [weak self] _ in self?.onReconnect?() }, for: .primaryActionTriggered)
 
-    bar.backgroundColor = Helm.UI.accent
+    bar.backgroundColor = Chrome.UI.accent
     addSubview(bar)
 
     let stack = UIStackView(arrangedSubviews: [dot, label, percent, button])
@@ -70,7 +70,7 @@ final class StatusBanner: UIView {
 
   /// A layer's CGColor does not follow the app theme by itself.
   private func updateBorder() {
-    layer.borderColor = Helm.UI.line2.resolvedColor(with: traitCollection).cgColor
+    layer.borderColor = Chrome.UI.line2.resolvedColor(with: traitCollection).cgColor
   }
 
   override func layoutSubviews() {
@@ -93,7 +93,7 @@ final class StatusBanner: UIView {
       text = notice?.text
     }
     label.text = text
-    label.textColor = notice?.failed == true ? Helm.UI.fg : Helm.UI.fg2
+    label.textColor = notice?.failed == true ? Chrome.UI.fg : Chrome.UI.fg2
     dot.isHidden = notice?.failed != true
     button.isHidden = tab.reconnecting || !tab.unreachable
     bar.isHidden = notice?.progress == nil

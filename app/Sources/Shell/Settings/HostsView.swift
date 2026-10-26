@@ -12,7 +12,7 @@ struct HostsView: View {
         } label: {
           VStack(alignment: .leading, spacing: 2) {
             Text(host.alias)
-            HelmValue(Self.summary(host))
+            ValueText(Self.summary(host))
           }
         }
       }
@@ -22,7 +22,7 @@ struct HostsView: View {
       .onMove { store.moveHosts(from: $0, to: $1) }
       .listRowBackground(Color.clear)
     }
-    .helmList()
+    .chromeList()
     .overlay {
       if store.hosts.isEmpty {
         ContentUnavailableView("No Hosts", systemImage: "server.rack",
@@ -69,7 +69,7 @@ struct HostEditor: View {
 
   var body: some View {
     List {
-      HelmSection {
+      ListSection {
         field("Alias", $host.alias, prompt: "Required")
         field("HostName", $host.hostname, prompt: "Host or IP", keyboard: .URL)
         field("Port", $port, prompt: "22", keyboard: .numberPad)
@@ -78,7 +78,7 @@ struct HostEditor: View {
         if let problem { Text(problem).foregroundStyle(.red) }
       }
 
-      HelmSection("Authentication") {
+      ListSection("Authentication") {
         Picker("Key", selection: $host.keyName) {
           Text(keys.isEmpty ? "None" : "Automatic").tag(String?.none)
           ForEach(keys) { key in Text(key.name).tag(Optional(key.name)) }
@@ -89,7 +89,7 @@ struct HostEditor: View {
         }
       }
 
-      HelmSection {
+      ListSection {
         Picker("Transport", selection: $host.transport) {
           Text("Mosh").tag(Host.Transport.mosh)
           Text("SSH").tag(Host.Transport.ssh)
@@ -98,7 +98,7 @@ struct HostEditor: View {
       }
 
       if host.transport == .mosh {
-        HelmSection("Mosh") {
+        ListSection("Mosh") {
           field("Server", $host.moshServer, prompt: "mosh-server")
           Picker("Prediction", selection: $host.prediction) {
             Text("Adaptive").tag(Host.Prediction.adaptive)
@@ -109,9 +109,9 @@ struct HostEditor: View {
       }
 
       if let pinnedKey {
-        HelmSection("Host Key") {
+        ListSection("Host Key") {
           Text(SSHKeys.fingerprint(pinnedKey) ?? pinnedKey)
-            .font(Helm.mono(12))
+            .font(Chrome.mono(.secondary))
             .textSelection(.enabled)
           Button("Forget Host Key", role: .destructive) {
             ConfigStore.shared.pinHostKey(nil, for: host.knownHostsKey)
@@ -120,7 +120,7 @@ struct HostEditor: View {
         }
       }
     }
-    .helmList()
+    .chromeList()
     .navigationTitle(isNew ? "New Host" : host.alias)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {

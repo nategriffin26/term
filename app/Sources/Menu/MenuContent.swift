@@ -10,7 +10,7 @@ struct MenuContent: View {
   var body: some View {
     VStack(spacing: 0) {
       header
-      Rectangle().fill(Helm.line).frame(height: 1)
+      Rectangle().fill(Chrome.line).frame(height: 1)
       ZStack {
         ForEach(MenuTab.allCases) { tab in
           let shown = model.tab == tab
@@ -21,12 +21,12 @@ struct MenuContent: View {
             .accessibilityHidden(!shown)
         }
       }
-      .animation(Helm.ease(0.2), value: model.tab)
+      .animation(Chrome.fade, value: model.tab)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .background(Helm.raised)
+    .background(Chrome.raised)
     .environment(\.colorScheme, .dark)
-    .tint(Helm.accent)
+    .tint(Chrome.accent)
   }
 
   private var header: some View {
@@ -42,10 +42,10 @@ struct MenuContent: View {
         let all = TmuxTab.rowIDs(TmuxStore.shared)
         let checkedAll = !all.isEmpty && model.tmuxSelection.isSuperset(of: all)
         Button(checkedAll ? "None" : "All") {
-          withAnimation(Helm.ease(0.15)) { model.tmuxSelection = checkedAll ? [] : all }
+          withAnimation(Chrome.quick) { model.tmuxSelection = checkedAll ? [] : all }
         }
-        .font(Helm.sans(13, .medium))
-        .foregroundStyle(Helm.fg2)
+        .font(Chrome.font(.secondary, .medium))
+        .foregroundStyle(Chrome.fg2)
         .padding(.horizontal, 8)
         .frame(height: 44)
         .contentShape(Rectangle())
@@ -54,10 +54,10 @@ struct MenuContent: View {
       }
       if model.tab == .tmux, model.tmuxSelecting || TmuxStore.shared.hasSessions {
         Button(model.tmuxSelecting ? "Done" : "Select") {
-          withAnimation(Helm.spring(0.4)) { model.tmuxSelecting.toggle() }
+          withAnimation(Chrome.spring) { model.tmuxSelecting.toggle() }
         }
-        .font(Helm.sans(13, .medium))
-        .foregroundStyle(model.tmuxSelecting ? Helm.accent : Helm.fg2)
+        .font(Chrome.font(.secondary, .medium))
+        .foregroundStyle(model.tmuxSelecting ? Chrome.accent : Chrome.fg2)
         .padding(.horizontal, 8)
         .frame(height: 44)
         .contentShape(Rectangle())
@@ -68,9 +68,9 @@ struct MenuContent: View {
       } label: {
         Image(systemName: "xmark")
           .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(Helm.fg2)
+          .foregroundStyle(Chrome.fg2)
           .frame(width: 30, height: 30)
-          .background(Circle().fill(Helm.sel))
+          .background(Circle().fill(Chrome.fill2))
           .frame(width: 44, height: 44)
           .contentShape(Rectangle())
       }
@@ -88,19 +88,19 @@ struct MenuContent: View {
         let selected = model.tab == tab
         let count = tab == .tmux ? TmuxStore.shared.unreadCount : 0
         Button {
-          withAnimation(Helm.spring(0.32)) { model.tab = tab }
+          withAnimation(Chrome.spring) { model.tab = tab }
         } label: {
           HStack(spacing: 6) {
             Image(systemName: tab.symbol)
               .font(.system(size: 14, weight: .regular))
-              .foregroundStyle(selected ? Helm.accent : Helm.muted)
+              .foregroundStyle(selected ? Chrome.accent : Chrome.muted)
               .overlay(alignment: .topTrailing) {
                 if count > 0, !titled(tab) { CountBadge(count: count).offset(x: 9, y: -8) }
               }
             if titled(tab) {
               Text(tab.title)
-                .font(Helm.sans(13, .medium))
-                .foregroundStyle(selected ? Helm.fg : Helm.muted)
+                .font(Chrome.font(.secondary, .medium))
+                .foregroundStyle(selected ? Chrome.fg : Chrome.muted)
                 .fixedSize()
               if count > 0 { CountBadge(count: count) }
             }
@@ -111,7 +111,7 @@ struct MenuContent: View {
           .background {
             if selected {
               RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Helm.sel)
+                .fill(Chrome.fill2)
                 .matchedGeometryEffect(id: "tab", in: indicator)
             }
           }
@@ -133,33 +133,6 @@ struct MenuContent: View {
     case .files: FilesTab(model: model)
     case .settings: SettingsView().id(model.settingsGeneration).scrollContentBackground(.hidden)
     }
-  }
-}
-
-/// How many sessions wait on him: a count in an accent disc.
-struct CountBadge: View {
-  let count: Int
-
-  var body: some View {
-    Text("\(count)")
-      .font(Helm.sans(10, .semibold))
-      .foregroundStyle(Helm.onAccent)
-      .padding(.horizontal, 4)
-      .frame(minWidth: 16, minHeight: 16)
-      .background(Capsule().fill(Helm.accent))
-      .fixedSize()
-  }
-}
-
-/// Helm press feedback: a slight scale while held.
-struct PressScale: ButtonStyle {
-  var scale: CGFloat
-  init(_ scale: CGFloat = 0.97) { self.scale = scale }
-
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label
-      .scaleEffect(configuration.isPressed ? scale : 1)
-      .animation(Helm.ease(0.15), value: configuration.isPressed)
   }
 }
 

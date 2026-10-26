@@ -108,8 +108,8 @@ final class EditorTheme: Runestone.Theme {
   @available(iOS 16, *)
   func highlightedRange(forFoundTextRange foundTextRange: NSRange, ofStyle style: UITextSearchFoundTextStyle) -> HighlightedRange? {
     switch style {
-    case .found: HighlightedRange(range: foundTextRange, color: Helm.UI.accent.withAlphaComponent(0.22))
-    case .highlighted: HighlightedRange(range: foundTextRange, color: Helm.UI.accent.withAlphaComponent(0.55))
+    case .found: HighlightedRange(range: foundTextRange, color: Chrome.UI.accent.withAlphaComponent(0.22))
+    case .highlighted: HighlightedRange(range: foundTextRange, color: Chrome.UI.accent.withAlphaComponent(0.55))
     default: nil
     }
   }

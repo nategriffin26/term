@@ -156,7 +156,7 @@ final class CodeEditorController: UIViewController, @preconcurrency TextViewDele
     let end = textView.location(at: TextLocation(lineNumber: index + 1, column: 0)) ?? (textView.text as NSString).length
     _ = textView.goToLine(index)
     textView.highlightedRanges = [HighlightedRange(range: NSRange(location: start, length: end - start),
-                                                    color: Helm.UI.accent.withAlphaComponent(0.2))]
+                                                    color: Chrome.UI.accent.withAlphaComponent(0.2))]
     lineMarked = true
   }
 

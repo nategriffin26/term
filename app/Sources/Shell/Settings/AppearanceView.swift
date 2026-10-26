@@ -19,7 +19,7 @@ struct AppearanceView: View {
       case .app: AppAppearancePage()
       }
     }
-    .helmList()
+    .chromeList()
     .navigationTitle("Appearance")
   }
 }
