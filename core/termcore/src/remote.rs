@@ -455,7 +455,9 @@ pub(crate) fn connect(params: Result<ConnectParams, String>, cb: TermCallbacks) 
         Err(_) => (Transport::Ssh, 80, 24, mosh::PredictionMode::Adaptive),
     };
     let scrollback = if transport == Transport::Mosh { 0 } else { SCROLLBACK };
-    let Ok(term) = vt::Terminal::new(cols, rows, scrollback) else { return std::ptr::null() };
+    let Ok(mut term) = vt::Terminal::new(cols, rows, scrollback) else { return std::ptr::null() };
+    // A reader arriving during the first SSH burst still gets a complete frame.
+    if transport == Transport::Ssh && term.update_frame().is_err() { return std::ptr::null() }
     let (remote, input) = match transport {
         Transport::Mosh => (Remote::Mosh(Mosh::new(mode, None)), None),
         Transport::Ssh => {
@@ -546,7 +548,23 @@ async fn ssh_loop(s: Arc<Session>, mut shell: ssh::Shell, mut input: mpsc::Unbou
         }
     }));
     let reason = loop {
-        match shell.recv().await {
+        let deadline = s.lock().frame_wakeup();
+        let event = tokio::select! {
+            event = shell.recv() => event,
+            _ = async {
+                if let Some(deadline) = deadline {
+                    tokio::time::sleep_until(deadline.into()).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {
+                s.update(|st, ev| {
+                    if st.network_epoch == epoch { st.wake_frame(ev); }
+                });
+                continue;
+            }
+        };
+        match event {
             Some(ssh::ShellEvent::Output(bytes)) => s.update(|st, ev| {
                 if st.network_epoch == epoch { st.ssh_output(&bytes, ev); }
             }),

@@ -35,6 +35,7 @@ try:
             "xcodebuild", "test-without-building", "-project", "app/Term.xcodeproj", "-scheme", "Term",
             "-destination", f"platform=iOS Simulator,id={args.simulator}",
             "-derivedDataPath", args.derived_data, "-parallel-testing-enabled", "NO",
+            "-collect-test-diagnostics", "never",
             "-only-testing:TermTests/DiagramScrollRecordingTests",
         ], cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT)
         deadline = time.monotonic() + 150

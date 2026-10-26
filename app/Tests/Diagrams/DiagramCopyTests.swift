@@ -49,4 +49,17 @@ final class DiagramCopyTests: XCTestCase {
     let next = DiagramOverlay.Drawing(top: 21, bottom: 25, hash: "n", source: "pie\n  \"a\" : 1")
     XCTAssertEqual(copy(10, 0, 25, 9, [flow, next]), "\(fencedFlow)\n```mermaid\npie\n  \"a\" : 1\n```")
   }
+  func testSplitBlockCopiesOnceAndKeepsChangedRowsBetweenItsFragments() {
+    var first = flow
+    first.bottom = 13
+    first.blockTop = 10
+    var second = flow
+    second.top = 16
+    second.blockTop = 10
+    XCTAssertEqual(copy(10, 0, 20, 50, [first, second]), "\(fencedFlow)\n[14:0-15:50]")
+    var repeated = flow
+    repeated.top = 22
+    repeated.bottom = 25
+    XCTAssertEqual(copy(10, 0, 25, 50, [flow, repeated]), "\(fencedFlow)\n[21:0-21:50]\n\(fencedFlow)")
+  }
 }

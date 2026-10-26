@@ -196,10 +196,10 @@ final class TmuxTests: XCTestCase {
   }
 
   func testAttachCommandCreatesOrAttachesByName() {
-    XCTAssertEqual(Tmux.attachCommand("main"), "tmux new -A -s main")
-    XCTAssertEqual(Tmux.attachCommand("my work"), "tmux new -A -s 'my work'")
-    XCTAssertEqual(Tmux.attachCommand("it's"), #"tmux new -A -s 'it'\''s'"#)
-    XCTAssertEqual(Tmux.attachCommand("x; rm -rf ~"), "tmux new -A -s 'x; rm -rf ~'")
+    XCTAssertEqual(Tmux.clientArguments(Tmux.attachCommand("main")), ["tmux", "new", "-A", "-s", "main"])
+    XCTAssertEqual(Tmux.clientArguments(Tmux.attachCommand("my work")), ["tmux", "new", "-A", "-s", "my work"])
+    XCTAssertEqual(Tmux.clientArguments(Tmux.attachCommand("it's")), ["tmux", "new", "-A", "-s", "it's"])
+    XCTAssertEqual(Tmux.clientArguments(Tmux.attachCommand("x; rm -rf ~")), ["tmux", "new", "-A", "-s", "x; rm -rf ~"])
   }
 
   /// Bug it catches (seen on the sim): a session closed while Term was in
@@ -213,12 +213,12 @@ final class TmuxTests: XCTestCase {
     XCTAssertNil(Tmux.attachedSession(Tmux.attachCommand("api"), session: nil))
     XCTAssertNil(Tmux.attachedSession(Tmux.attachCommand("api"), session: "web"))
     XCTAssertNil(Tmux.attachedSession(nil, session: "api"))
-    XCTAssertEqual(try Command.tokenize(Tmux.reattachCommand("my notes")).get(), ["tmux", "attach", "-t", "=my notes"])
-    XCTAssertEqual(try Command.tokenize(Tmux.reattachCommand("it's")).get(), ["tmux", "attach", "-t", "=it's"])
+    XCTAssertEqual(Tmux.clientArguments(Tmux.reattachCommand("my notes")), ["tmux", "attach", "-t", "=my notes"])
+    XCTAssertEqual(Tmux.clientArguments(Tmux.reattachCommand("it's")), ["tmux", "attach", "-t", "=it's"])
     XCTAssertEqual(Tmux.hasSessionCommand("my notes"), Tmux.path + "; tmux has-session -t '=my notes'")
     // A plain name too: zsh would expand an unquoted `=diag`.
     XCTAssertEqual(Tmux.hasSessionCommand("diag"), Tmux.path + "; tmux has-session -t '=diag'")
-    XCTAssertEqual(Tmux.reattachCommand("diag"), "tmux attach -t '=diag'")
+    XCTAssertEqual(Tmux.clientArguments(Tmux.reattachCommand("diag")), ["tmux", "attach", "-t", "=diag"])
   }
 
   /// Bug it catches: History on a tab outside tmux captured whichever session
@@ -239,6 +239,7 @@ final class TmuxTests: XCTestCase {
     XCTAssertEqual(Tmux.sessionName(inCommand: "tmux new-session -A -s main"), "main")
     XCTAssertEqual(Tmux.sessionName(inCommand: "tmux -L work new -A -s main -d"), "main")
     XCTAssertEqual(Tmux.sessionName(inCommand: "tmux new -A -s 'my work'"), "my work")
+    XCTAssertEqual(Tmux.sessionName(inCommand: Tmux.attachCommand("my work")), "my work")
   }
 
   func testSessionNameNilWhenThereIsNoneToFind() {

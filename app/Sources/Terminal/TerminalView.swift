@@ -178,6 +178,7 @@ final class TerminalView: UIView {
         metalLayer.isOpaque = true
         metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         metalLayer.maximumDrawableCount = 3
+        metalLayer.presentsWithTransaction = true
 
         keyboardSpacer.isHidden = true
         keyboardSpacer.isUserInteractionEnabled = false
@@ -430,6 +431,9 @@ final class TerminalView: UIView {
 
     func render() {
         guard let renderer, window != nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         var frame = TermFrame()
         if session.frame(after: haveGeneration, into: &frame) {
             haveGeneration = frame.generation
@@ -451,8 +455,11 @@ final class TerminalView: UIView {
         guard let drawable = metalLayer.nextDrawable(),
               let cb = renderer.encode(into: drawable.texture, placement: p) else { return }
         drawnCursorAlpha = p.cursorAlpha
-        cb.present(drawable)
         cb.commit()
+        // Present on this thread's transaction, not Metal's scheduled-handler
+        // thread, so the grid and its diagram tiles reach the screen together.
+        cb.waitUntilScheduled()
+        drawable.present()
     }
 
     var placement: Renderer.Placement {

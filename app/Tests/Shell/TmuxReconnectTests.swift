@@ -230,6 +230,20 @@ final class TmuxReconnectTests: XCTestCase {
     try await capture("mosh-automatic")
   }
 
+  func testAttachEnablesSyncOnlyOnSupportedTmuxVersions() async throws {
+    _ = try await connect(.ssh)
+    for (version, features) in [("tmux 3.1c", ""), ("tmux 3.2", "<-T><sync>"),
+                                ("tmux 3.2a", "<-T><sync>"), ("tmux 3.10", "<-T><sync>"),
+                                ("tmux 4.0", "<-T><sync>"), ("unknown", "")] {
+      let executable = "#!/bin/sh\nif [ \"$1\" = -V ]; then printf '%s\\n' \(Command.shellQuote(version)); else printf '<%s>' \"$@\"; fi\n"
+      let setup = "d=$(mktemp -d); trap 'rm -rf \"$d\"' EXIT; printf %s \(Command.shellQuote(executable)) > \"$d/tmux\"; chmod +x \"$d/tmux\"; PATH=\"$d:$PATH\"; "
+      let output = try await execute(setup + Tmux.reattachCommand("it's work"))
+      XCTAssertEqual(output.status, 0, version)
+      XCTAssertEqual(String(decoding: output.stdout, as: UTF8.self),
+                     features + "<attach><-t><=it's work>", version)
+    }
+  }
+
   func testGoneManualSessionFallsBackToShellWithoutRecreatingIt() async throws {
     let tab = try await connect(.mosh)
     try await attach(tab)

@@ -38,6 +38,11 @@ struct DiagramPlacement: Equatable {
 /// What a selection copies where it crosses drawn diagrams: each diagram's
 /// Mermaid source, fenced, once, in place of its drawing's rows.
 enum DiagramCopy {
+  private struct Location: Hashable {
+    var top: Int
+    var hash: String
+  }
+
   static func fenced(_ source: String) -> String { "```mermaid\n\(source)\n```" }
 
   /// `drawings`: rows from the top of scrollback, like the selection's.
@@ -45,10 +50,13 @@ enum DiagramCopy {
   static func text(from start: GridPoint, to end: GridPoint, cols: Int,
                    drawings: [DiagramOverlay.Drawing], text: (GridPoint, GridPoint) -> String) -> String {
     var parts: [String] = []
+    var copied: Set<Location> = []
     var from = start
     for d in drawings.sorted(by: { $0.top < $1.top }) where d.bottom >= from.row && d.top <= end.row {
       if from.row < d.top { parts.append(text(from, GridPoint(row: d.top - 1, col: max(cols - 1, 0)))) }
-      parts.append(fenced(d.source))
+      if copied.insert(Location(top: d.blockTop ?? d.top, hash: d.hash)).inserted {
+        parts.append(fenced(d.source))
+      }
       from = GridPoint(row: d.bottom + 1, col: 0)
     }
     if from <= end { parts.append(text(from, end)) }
@@ -70,6 +78,8 @@ final class DiagramOverlay: UIView {
     var bottom: Int
     var hash: String
     var source: String
+    /// Shared by verified fragments of one block; nil when the drawing is whole.
+    var blockTop: Int? = nil
   }
 
   /// A diagram on screen, for taps and the long-press menu.
@@ -120,7 +130,7 @@ final class DiagramOverlay: UIView {
       let (m, _) = clipping(m)
       return source?.source(m.hash).map {
         Drawing(top: max(m.top, m.clipTop ?? m.top) + rowsTop,
-                bottom: min(m.bottom, m.clipBottom ?? m.bottom) + rowsTop, hash: m.hash, source: $0)
+                bottom: min(m.bottom, m.clipBottom ?? m.bottom) + rowsTop, hash: m.hash, source: $0, blockTop: m.top + rowsTop)
       }
     }
   }
@@ -304,6 +314,18 @@ final class DiagramOverlay: UIView {
     if let bottom = match.clipBottom, let rect = suffix(bottom + 1) {
       match.clipBottom = bottom + 1
       cutouts.append(rect)
+    }
+    // During a partial tmux redraw the counter can sit one row inside the
+    // verified block rather than immediately outside its clipped edge.
+    func preserveCounter(at row: Int) {
+      guard row >= max(match.top, match.clipTop ?? 0),
+            row <= min(match.bottom, match.clipBottom ?? s.rows - 1),
+            let rect = suffix(row), !cutouts.contains(rect) else { return }
+      cutouts.append(rect)
+    }
+    for edge in 0...DiagramMatcher.maxTrim {
+      preserveCounter(at: edge)
+      preserveCounter(at: s.rows - edge - 1)
     }
     return (match, cutouts)
   }

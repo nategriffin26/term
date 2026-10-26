@@ -10,6 +10,7 @@
 use std::cell::RefCell;
 use std::ptr;
 use std::sync::{Condvar, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use crate::abi::{TermCallbacks, TermFrame, TermStatus, event, status};
 use crate::remote::{Mosh, Ssh};
@@ -53,6 +54,54 @@ pub(crate) struct PredictedCell {
     pub(crate) flags: u16,
 }
 
+/// SSH is a byte stream, not a sequence of complete redraws. Keep ordinary
+/// bursts together without delaying continuous output beyond one frame.
+#[derive(Default)]
+struct FrameSchedule {
+    pending: Option<(Instant, Instant)>,
+    synchronized_since: Option<Instant>,
+    released: bool,
+    notified: bool,
+}
+
+impl FrameSchedule {
+    const IDLE: Duration = Duration::from_millis(4);
+    const MAX_BURST: Duration = Duration::from_millis(16);
+    const MAX_SYNCHRONIZED: Duration = Duration::from_millis(150);
+
+    fn input(&mut self, now: Instant, synchronized: bool) {
+        let pending = self.pending.get_or_insert((now, now));
+        pending.1 = now;
+        self.notified = false;
+        if synchronized {
+            if self.synchronized_since.is_none() {
+                self.synchronized_since = Some(now);
+            }
+            self.released = false;
+        } else {
+            self.released |= self.synchronized_since.take().is_some();
+        }
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        let (first, last) = self.pending?;
+        Some(if let Some(start) = self.synchronized_since {
+            start + Self::MAX_SYNCHRONIZED
+        } else if self.released {
+            last
+        } else {
+            (last + Self::IDLE).min(first + Self::MAX_BURST)
+        })
+    }
+
+    fn exported(&mut self) {
+        self.synchronized_since = None;
+        self.pending = None;
+        self.released = false;
+        self.notified = false;
+    }
+}
+
 pub(crate) struct State {
     pub(crate) term: vt::Terminal,
     pub(crate) remote: Remote,
@@ -61,6 +110,7 @@ pub(crate) struct State {
     pub(crate) stopped: bool,
     /// A FRAME event fired and term_session_frame has not run since.
     frame_pending: bool,
+    frame_schedule: FrameSchedule,
     bells: u32,
     title: String,
     status: u32,
@@ -82,6 +132,7 @@ impl State {
             reconnecting: false,
             stopped: false,
             frame_pending: false,
+            frame_schedule: FrameSchedule::default(),
             bells,
             title: String::new(),
             status,
@@ -94,6 +145,9 @@ impl State {
 
     /// Something visible may have changed: one FRAME until the app reads it.
     pub(crate) fn frame_changed(&mut self, ev: &mut Vec<Event>) {
+        if self.frame_schedule.deadline().is_some_and(|deadline| deadline > Instant::now()) {
+            return;
+        }
         if !self.frame_pending {
             self.frame_pending = true;
             ev.push(Event::new(event::FRAME, Vec::new()));
@@ -131,6 +185,10 @@ impl State {
             return;
         }
         self.status = kind;
+        if kind == status::CLOSED && self.frame_schedule.pending.is_some() {
+            self.frame_schedule = FrameSchedule::default();
+            self.frame_changed(ev);
+        }
         let data = if kind == status::CLOSED { reason.as_bytes().to_vec() } else { Vec::new() };
         ev.push(Event::new(event::STATUS, data));
     }
@@ -138,6 +196,7 @@ impl State {
     /// A successful replacement may reopen a remotely closed session.
     pub(crate) fn reconnect_status(&mut self, kind: u32, ev: &mut Vec<Event>) {
         self.status = kind;
+        self.frame_schedule = FrameSchedule::default();
         self.prediction = Prediction::default();
         ev.push(Event::new(event::STATUS, Vec::new()));
         self.frame_changed(ev);
@@ -166,7 +225,9 @@ impl State {
 
     /// Host output from an SSH shell; the terminal's replies go back to it.
     pub(crate) fn ssh_output(&mut self, bytes: &[u8], ev: &mut Vec<Event>) {
+        if bytes.is_empty() { return; }
         self.term.write(bytes);
+        self.frame_schedule.input(Instant::now(), self.term.mode(2026, false));
         self.effects(ev);
         let replies = self.term.take_responses();
         if let Remote::Ssh(r) = &self.remote
@@ -174,6 +235,15 @@ impl State {
         {
             r.send(replies);
         }
+    }
+
+    pub(crate) fn frame_wakeup(&self) -> Option<Instant> {
+        if self.frame_schedule.notified { None } else { self.frame_schedule.deadline() }
+    }
+
+    pub(crate) fn wake_frame(&mut self, ev: &mut Vec<Event>) {
+        self.frame_schedule.notified = true;
+        self.frame_changed(ev);
     }
 
     /// User input bytes for the remote end. Input snaps the viewport to live.
@@ -235,9 +305,19 @@ impl State {
 
     /// term_session_frame: refreshes the export and points `out` into it.
     pub(crate) fn frame(&mut self, have: u64, out: &mut TermFrame) -> bool {
+        self.frame_at(have, out, Instant::now())
+    }
+
+    fn frame_at(&mut self, have: u64, out: &mut TermFrame, now: Instant) -> bool {
         self.frame_pending = false;
-        if self.term.update_frame().is_err() {
-            return false;
+        if self.frame_schedule.deadline().is_none_or(|deadline| deadline <= now) {
+            if self.frame_schedule.synchronized_since.is_some() && self.term.end_synchronized_output().is_err() {
+                return false;
+            }
+            self.frame_schedule.exported();
+            if self.term.update_frame().is_err() {
+                return false;
+            }
         }
         let Some(f) = self.term.frame() else { return false };
         if f.generation != self.built_from.0 || self.prediction != self.built_from.1 {
@@ -379,5 +459,88 @@ impl Session {
         while g.inflight > own {
             g = self.idle.wait(g).unwrap_or_else(|e| e.into_inner());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_frame_waits_for_the_rest_of_an_input_burst() {
+        let mut state = State::new(vt::Terminal::new(40, 10, 0).unwrap(), Remote::Local, status::CONNECTED);
+        let mut frame = TermFrame::default();
+        assert!(state.frame(0, &mut frame));
+        let generation = frame.generation;
+        state.ssh_output(b"first ", &mut Vec::new());
+        let start = state.frame_schedule.pending.unwrap().0;
+        assert!(!state.frame_at(generation, &mut frame, start), "an SSH chunk is not a complete redraw");
+        state.ssh_output(b"second", &mut Vec::new());
+        let last = state.frame_schedule.pending.unwrap().1;
+        assert!(!state.frame_at(generation, &mut frame, last + Duration::from_micros(3999)));
+        assert!(state.frame_at(generation, &mut frame, last + Duration::from_millis(4)));
+        assert!(state.term.frame().unwrap().row_text(0).starts_with("first second"));
+    }
+
+    #[test]
+    fn ssh_synchronized_output_holds_until_reset() {
+        let mut state = State::new(vt::Terminal::new(40, 10, 0).unwrap(), Remote::Local, status::CONNECTED);
+        let mut frame = TermFrame::default();
+        assert!(state.frame(0, &mut frame));
+        let generation = frame.generation;
+        state.ssh_output(b"\x1b[?2026hfirst ", &mut Vec::new());
+        let start = state.frame_schedule.pending.unwrap().0;
+        assert!(!state.frame_at(generation, &mut frame, start + Duration::from_millis(5)),
+                "synchronized output must not expose an unfinished redraw");
+        state.ssh_output(b"second\x1b[?2026l", &mut Vec::new());
+        assert!(state.frame(generation, &mut frame), "reset releases the complete redraw immediately");
+        assert!(state.term.frame().unwrap().row_text(0).starts_with("first second"));
+    }
+
+    #[test]
+    fn continuous_input_cannot_postpone_a_frame_past_sixteen_milliseconds() {
+        let start = Instant::now();
+        let mut schedule = FrameSchedule::default();
+        schedule.input(start, false);
+        assert_eq!(schedule.deadline(), Some(start + Duration::from_millis(4)));
+        for milliseconds in 1..=17 {
+            schedule.input(start + Duration::from_millis(milliseconds), false);
+            assert_eq!(schedule.deadline(), Some(start + Duration::from_millis((milliseconds + 4).min(16))));
+        }
+    }
+
+    #[test]
+    fn missing_sync_reset_expires_once_without_dropping_bytes() {
+        let mut state = State::new(vt::Terminal::new(40, 10, 0).unwrap(), Remote::Local, status::CONNECTED);
+        let mut frame = TermFrame::default();
+        assert!(state.frame(0, &mut frame));
+        let generation = frame.generation;
+        state.ssh_output(b"\x1b[?2026hfirst ", &mut Vec::new());
+        let start = state.frame_schedule.pending.unwrap().0;
+        state.ssh_output(b"second", &mut Vec::new());
+        assert!(!state.frame_at(generation, &mut frame, start + Duration::from_micros(149999)));
+        assert!(state.frame_at(generation, &mut frame, start + Duration::from_millis(150)));
+        assert!(state.term.frame().unwrap().row_text(0).starts_with("first second"));
+        assert!(!state.term.mode(2026, false), "timeout resets the mode so the next transaction can start");
+        assert!(state.frame_wakeup().is_none());
+        state.ssh_output(b" third", &mut Vec::new());
+        let last = state.frame_schedule.pending.unwrap().1;
+        assert_eq!(state.frame_wakeup(), Some(last + Duration::from_millis(4)));
+        assert!(state.frame_at(frame.generation, &mut frame, last + Duration::from_millis(4)));
+        state.ssh_output(b"\x1b[?2026l\x1b[?2026hfourth", &mut Vec::new());
+        let next = state.frame_schedule.pending.unwrap().1;
+        assert_eq!(state.frame_wakeup(), Some(next + Duration::from_millis(150)));
+    }
+
+    #[test]
+    fn ssh_close_flushes_the_last_unfinished_update() {
+        let mut state = State::new(vt::Terminal::new(40, 10, 0).unwrap(), Remote::Local, status::CONNECTED);
+        state.ssh_output(b"\x1b[?2026hfinal output", &mut Vec::new());
+        let mut events = Vec::new();
+        state.set_status(status::CLOSED, "", &mut events);
+        assert!(events.iter().any(|event| event.kind == event::FRAME));
+        let mut frame = TermFrame::default();
+        assert!(state.frame(0, &mut frame));
+        assert!(state.term.frame().unwrap().row_text(0).starts_with("final output"));
     }
 }

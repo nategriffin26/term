@@ -31,21 +31,21 @@ final class TmuxAttachmentTests: XCTestCase {
   func testManualReconnectAttachesExactlyAndReturnsToLoginShell() throws {
     let work = try XCTUnwrap(TmuxAttachment.reconnectCommand(startup: nil, session: "my work"))
     XCTAssertEqual(try Command.tokenize(work).get(),
-                   ["sh", "-c", Tmux.path + "; tmux attach -t '=my work'; exec \"$SHELL\" -l"])
+                   ["sh", "-c", Tmux.path + "; " + Tmux.reattachCommand("my work") + "; exec \"$SHELL\" -l"])
     let quote = try XCTUnwrap(TmuxAttachment.reconnectCommand(startup: nil, session: "it's"))
     XCTAssertEqual(try Command.tokenize(quote).get(),
-                   ["sh", "-c", Tmux.path + "; tmux attach -t '=it'\\''s'; exec \"$SHELL\" -l"])
+                   ["sh", "-c", Tmux.path + "; " + Tmux.reattachCommand("it's") + "; exec \"$SHELL\" -l"])
     XCTAssertNil(TmuxAttachment.reconnectCommand(startup: nil, session: nil))
   }
 
   func testConfiguredAttachRemainsAttachOnlyAndNeverCreatesMissingSession() {
-    XCTAssertEqual(TmuxAttachment.reconnectCommand(startup: Tmux.attachCommand("work"), session: "work"),
-                   "tmux attach -t '=work'")
+    let command = TmuxAttachment.reconnectCommand(startup: Tmux.attachCommand("work"), session: "work")
+    XCTAssertEqual(command.flatMap(Tmux.clientArguments), ["tmux", "attach", "-t", "=work"])
     XCTAssertEqual(TmuxAttachment.reconnectCommand(startup: "exec htop", session: nil), "exec htop")
   }
 
   func testConfiguredAttachCannotCreateAfterAnEmptyObservation() {
-    XCTAssertEqual(TmuxAttachment.reconnectCommand(startup: Tmux.attachCommand("work"), session: nil),
-                   "tmux attach -t '=work'")
+    let command = TmuxAttachment.reconnectCommand(startup: Tmux.attachCommand("work"), session: nil)
+    XCTAssertEqual(command.flatMap(Tmux.clientArguments), ["tmux", "attach", "-t", "=work"])
   }
 }

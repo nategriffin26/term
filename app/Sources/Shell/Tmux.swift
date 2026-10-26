@@ -130,15 +130,35 @@ enum Tmux {
 
   // MARK: - Actions
 
+  /// `-T` is a per-client feature declaration, available since tmux 3.2.
+  /// Keep TERM and the server's configuration unchanged, including on older hosts.
+  static let clientScript = [
+    path,
+    #"v=$(tmux -V 2>/dev/null); v=${v#tmux }"#,
+    #"case "$v" in [0-9]*.[0-9]*) major=${v%%.*}; minor=${v#*.}; minor=${minor%%[!0-9]*}; case "$major:$minor" in *[!0-9:]*|:*|*:) ;; *) if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 2 ]; }; then set -- -T sync "$@"; fi;; esac;; esac"#,
+    #"exec tmux "$@""#,
+  ].joined(separator: "; ")
+
+  private static func clientCommand(_ arguments: String) -> String {
+    "sh -c \(Command.shellQuote(clientScript)) tmux \(arguments)"
+  }
+
+  static func clientArguments(_ command: String) -> [String]? {
+    guard case .success(var words) = Command.tokenize(command) else { return nil }
+    if words.starts(with: ["sh", "-c", clientScript]) { words.removeFirst(3) }
+    return words.first == "tmux" ? words : nil
+  }
+
   static func attachCommand(_ name: String) -> String {
-    "tmux new -A -s \(Command.shellQuote(name))"
+    clientCommand("new -A -s \(Command.shellQuote(name))")
   }
 
   /// The session a startup command is Term's own attach to, else nil: only
   /// then may a reconnect assume what it runs (a host's own command, say
   /// `tmux -L work new -A -s main`, is left as configured).
   static func attachedSession(_ command: String?, session: String?) -> String? {
-    guard let session, command == attachCommand(session) else { return nil }
+    guard let session, let command,
+          clientArguments(command) == ["tmux", "new", "-A", "-s", session] else { return nil }
     return session
   }
 
@@ -146,7 +166,7 @@ enum Tmux {
   /// meanwhile (from the tmux tab, the Mac) is not made again, empty, by
   /// `new -A`.
   static func reattachCommand(_ name: String) -> String {
-    "tmux attach -t \(Command.shellQuote("=" + name))"
+    clientCommand("attach -t \(Command.shellQuote("=" + name))")
   }
 
   /// Exits 0 while session `name` exists, 1 once it has ended or tmux has
@@ -194,7 +214,7 @@ enum Tmux {
   /// `tmux new -As NAME`, `tmux attach -t NAME`, `tmux a -tNAME`), so history
   /// knows its target. Flags are read the way tmux's getopt reads them.
   static func sessionName(inCommand command: String) -> String? {
-    guard case .success(let words) = Command.tokenize(command), words.first == "tmux" else { return nil }
+    guard let words = clientArguments(command) else { return nil }
     // Flags of new-session/attach-session that take a value.
     let takesValue: Set<Character> = ["c", "e", "f", "F", "n", "s", "t", "x", "y"]
     var found: [Character: String] = [:]

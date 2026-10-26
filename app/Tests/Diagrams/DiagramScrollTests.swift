@@ -109,4 +109,40 @@ final class DiagramScrollTests: XCTestCase {
     XCTAssertTrue(path.contains(CGPoint(x: 5, y: 5), using: .evenOdd))
     XCTAssertFalse(path.contains(CGPoint(x: view.cellSizePoints.width * 38, y: 5), using: .evenOdd))
   }
+  func testCopyCounterInsideVerifiedEdgeRowsKeepsItsOwnCells() async throws {
+    let view = try terminal()
+    frame(["intro", ""] + box + ["", "following text", "more text", "last line"], in: view)
+    try await settle(view)
+    for (i, scalar) in "[3/99]".unicodeScalars.enumerated() {
+      let cell = 2 * view.snapshot.cols + view.snapshot.cols - 6 + i
+      view.snapshot.cells[cell].ch = scalar.value
+      view.snapshot.cells[cell].bg = 0xFF12_3456
+    }
+    view.diagramOverlay.layoutTiles()
+    let shown = try XCTUnwrap(view.diagramOverlay.shown.first)
+    let mask = try XCTUnwrap(shown.tile.layer.mask as? CAShapeLayer,
+                             "A partially delivered copy counter can be inside an otherwise verified block")
+    let path = try XCTUnwrap(mask.path)
+    XCTAssertFalse(path.contains(CGPoint(x: view.cellSizePoints.width * 38, y: 5), using: .evenOdd))
+  }
+
+  func testTerminalPresentationSharesTheDiagramLayerTransaction() throws {
+    let view = try terminal()
+    XCTAssertTrue(view.metalLayer.presentsWithTransaction,
+                  "The grid must not show an older frame beneath already-moved diagram tiles")
+  }
+
+  func testLastKnownRowBesideCopyCounterRemainsCovered() async throws {
+    let view = try terminal()
+    let content = ["intro", ""] + box + ["", "following text", "more text", "last line"]
+    frame(["status", "position 0"] + content, in: view)
+    try await settle(view)
+    let marker = "[9/99]"
+    let row = box[6] + String(repeating: " ", count: 40 - box[6].count - marker.count)
+      + "\u{1B}[7m" + marker + "\u{1B}[0m"
+    frame(["status", row] + Array(content.dropFirst(9)), in: view)
+    XCTAssertEqual(view.diagramOverlay.shown.count, 1, "The last known row must not be dropped before the counter cutout is applied")
+    XCTAssertEqual(view.diagramOverlay.drawings.first?.top, 1)
+    XCTAssertEqual(view.diagramOverlay.drawings.first?.bottom, 1)
+  }
 }

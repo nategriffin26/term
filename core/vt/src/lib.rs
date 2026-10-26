@@ -468,6 +468,14 @@ impl Terminal {
         self.get(sys::GHOSTTY_TERMINAL_DATA_MODE, &mut m).is_ok() && m.value
     }
 
+    /// Release a synchronized update whose sender omitted its reset.
+    pub fn end_synchronized_output(&mut self) -> Result<(), Error> {
+        let mode = sys::GhosttyTerminalModeConfig { mode: 2026, value: false };
+        check(unsafe {
+            sys::ghostty_terminal_set(self.raw, sys::GHOSTTY_TERMINAL_OPT_MODE, &mode as *const _ as *const c_void)
+        })
+    }
+
     pub fn alt_screen(&self) -> bool {
         let mut s: sys::GhosttyTerminalScreen = 0;
         let _ = self.get(sys::GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN, &mut s);
