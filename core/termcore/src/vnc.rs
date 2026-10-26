@@ -96,7 +96,13 @@ pub unsafe extern "C" fn term_vnc_connect(c: *const TermConnect, target: *const 
                             match input {
                                 Input::Pointer(x,y,buttons) => state.client.pointer(x,y,buttons),
                                 Input::Key(key,down) => state.client.key(key,down),
-                                Input::Pause(paused) => state.client.pause(paused),
+                                Input::Pause(paused) => {
+                                    if state.client.pause(paused) && !paused {
+                                        // The host surface may not have consumed an in-flight
+                                        // VNC frame. Its notification must not hide the refresh.
+                                        state.frame_pending = false;
+                                    }
+                                }
                             }
                             state.client.output()
                         };

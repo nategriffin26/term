@@ -223,12 +223,14 @@ impl Client {
     }
     /// Keeps authentication and input active while stopping framebuffer requests.
     /// Responses to requests already sent are still decoded.
-    pub fn pause(&mut self, paused: bool) {
-        if self.paused == paused { return; }
+    /// Returns whether the pause state changed.
+    pub fn pause(&mut self, paused: bool) -> bool {
+        if self.paused == paused { return false; }
         self.paused = paused;
         if !paused && matches!(self.state, State::Message | State::Rect(_) | State::Pixels(..)) {
             self.request(false);
         }
+        true
     }
     pub fn pointer(&mut self, x: u16, y: u16, buttons: u8) {
         if !matches!(self.state, State::Message | State::Rect(_) | State::Pixels(..)) { return; }

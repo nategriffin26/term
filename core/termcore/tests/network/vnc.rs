@@ -149,3 +149,28 @@ fn vnc_pause_keeps_ssh_and_input_alive_and_resumes_with_a_full_request() {
     log.wait(4,1);
     unsafe { term_vnc_free(v) };
 }
+
+#[test]
+fn vnc_resume_notifies_a_new_frame_when_the_paused_frame_was_not_consumed() {
+    let sshd = Sshd::start(); let params = Params::new(&sshd,transport::SSH);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let target = CString::new(listener.local_addr().unwrap().to_string()).unwrap();
+    let server = std::thread::spawn(move || {
+        let mut s = listener.accept().unwrap().0; handshake(&mut s);
+        assert_eq!(read::<6>(&mut s), [5,0,0,1,0,1]);
+        s.write_all(&[0,0,0,1,0,0,0,0,0,1,0,1,0,0,0,0,1,2,3,0]).unwrap();
+        assert_eq!(read::<10>(&mut s), [3,0,0,0,0,0,0,4,0,4]);
+        rect(&mut s,0,0,1,1,0,&[4,5,6,0]);
+    });
+    let log = Box::<VncLog>::default();
+    let v = unsafe { term_vnc_connect(&params.raw(),target.as_ptr(),std::ptr::null(),std::ptr::null(),log.callbacks()) };
+    log.wait(1,1);
+    unsafe { term_vnc_pause(v,true); term_vnc_pointer(v,1,1,0); }
+    log.wait(2,1);
+    // Host video owns the surface, so the paused VNC frame is not locked.
+    unsafe { term_vnc_pause(v,false); }
+    log.wait(2,2);
+    assert_eq!(&frame(v).1[..4], &[4,5,6,255]);
+    server.join().unwrap();
+    unsafe { term_vnc_free(v) };
+}
