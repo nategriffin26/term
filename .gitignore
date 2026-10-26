@@ -8,3 +8,4 @@ xcuserdata/
 app/Term.xcodeproj/
 app/Info.plist
 app/Config/Local.xcconfig
+.build/

@@ -41,6 +41,8 @@ targets:
       # Pele 1.10.0 (pinned: term-pele.js reads its private CSS variables) and its glue.
       - path: Resources/Diagrams
         type: folder
+      # The Screen's wire contract, shared verbatim with Term Screen Host on the Mac.
+      - path: ../mac/ScreenHost/Sources/ScreenProtocol
     info:
       path: Info.plist
       properties:

@@ -429,6 +429,99 @@ int32_t term_svg_render(const uint8_t *svg, size_t len, uint32_t width_px, uint3
 // Frees *img's pixels and zeroes it; NULL, a zeroed image or a second call is a no-op.
 void term_svg_free(TermSvgImage *img);
 
+// ---------------------------------------------------------------- tunnels
+//
+// A byte stream to a socket on the host's side of an SSH connection. `target`
+// is "HOST:PORT" for TCP from the host (direct-tcpip; "127.0.0.1:5900" is a
+// Mac's Screen Sharing) or a path for a Unix socket there (direct-streamlocal;
+// a leading "~/" is the login directory). Each tunnel has its own SSH
+// connection, so it never queues behind a file transfer.
+
+typedef struct TermTunnel TermTunnel;
+
+// The `kind` of a tunnel's events. OPEN fires once, then DATA for each chunk,
+// then CLOSED once; a tunnel that cannot connect fires only CLOSED.
+typedef enum {
+  TERM_TUNNEL_OPEN = 1,    // connected: writes reach the socket from now on
+  TERM_TUNNEL_DATA = 2,    // data = bytes from the socket, in order
+  TERM_TUNNEL_CLOSED = 3,  // ended, nothing follows: data = UTF-8 reason, len 0 = the socket closed
+} TermTunnelEvent;
+
+// Starts connecting with c's host, port, user, key or password and host_key
+// (a mismatch closes it with a reason naming both keys; NULL accepts any, as
+// term_exec does); c's other fields are ignored. The core reads the next chunk
+// only after cb.event returns.
+TermTunnel *term_tunnel_open(const TermConnect *c, const char *target, TermCallbacks cb);
+
+// Queues bytes for the socket: kept until OPEN, dropped after CLOSED.
+void term_tunnel_write(TermTunnel *t, const uint8_t *bytes, size_t len);
+
+// Closes the tunnel and its SSH connection. No callback for t runs after this returns.
+void term_tunnel_free(TermTunnel *t);
+
+// ---------------------------------------------------------------- VNC
+//
+// An RFB 3.8 client (Apple's 3.889 included) through a tunnel. It signs in
+// with Apple Remote Desktop authentication (security type 30: user and
+// password) when the server offers it, else the VNC password (type 2), else
+// none (type 1). It keeps the remote framebuffer as 32-bit BGRA (alpha 255),
+// draws the pointer's shape separately (the cursor pseudo-encoding), and asks
+// for the next update as each one lands.
+
+typedef struct TermVnc TermVnc;
+
+// The `kind` of a VNC client's events.
+typedef enum {
+  TERM_VNC_CONNECTED = 1,  // signed in; frames follow
+  TERM_VNC_FRAME = 2,      // pixels or the size changed (coalesced): call term_vnc_lock
+  TERM_VNC_CURSOR = 3,     // the pointer's shape changed: call term_vnc_cursor
+  TERM_VNC_CLOSED = 4,     // ended, nothing follows: data = UTF-8 reason a person can read
+                           // ("The Mac refused the user name or password."), len 0 = the server closed it
+} TermVncEvent;
+
+// Connects through a tunnel to `target` (as term_tunnel_open) and signs in as
+// user/password (either may be NULL when the server needs none).
+TermVnc *term_vnc_connect(const TermConnect *c, const char *target, const char *user,
+                          const char *password, TermCallbacks cb);
+
+typedef struct {
+  const uint8_t *pixels;        // BGRA; row r starts at pixels + r * stride
+  uint32_t width, height;       // framebuffer pixels
+  uint32_t stride;              // bytes per row
+  // What changed since the previous lock: all of it on the first lock and
+  // after a size change; width 0 when nothing did.
+  uint32_t dirty_x, dirty_y, dirty_w, dirty_h;
+} TermVncFrame;
+
+// Holds the framebuffer still and describes it in *out: no pixel changes
+// until term_vnc_unlock, which must follow promptly (copy the dirty rectangle
+// out, then unlock). Returns false, holding nothing, before the first frame.
+bool term_vnc_lock(TermVnc *v, TermVncFrame *out);
+void term_vnc_unlock(TermVnc *v);
+
+typedef struct {
+  const uint8_t *pixels;        // BGRA premultiplied, width * 4 bytes per row
+  uint32_t width, height;       // 0 x 0: the server hides the pointer
+  uint32_t hot_x, hot_y;        // the pixel that points
+} TermVncCursor;
+
+// The pointer's current shape; *out stays valid until the next call or
+// term_vnc_free. Returns false before the server has sent one.
+bool term_vnc_cursor(TermVnc *v, TermVncCursor *out);
+
+// The pointer at framebuffer pixel (x, y) with `buttons` held: RFB's mask,
+// bit 0 left, 1 middle, 2 right, 3/4 wheel up/down, 5/6 wheel left/right.
+// One wheel step is a call with its bit set, then one without.
+void term_vnc_pointer(TermVnc *v, uint16_t x, uint16_t y, uint8_t buttons);
+
+// A key down or up as an X11 keysym: XK_Super_L for ⌘, XK_Alt_L for ⌥,
+// 0x01000000 | code point for other Unicode. The core maps modifiers the way
+// Apple's server expects.
+void term_vnc_key(TermVnc *v, uint32_t keysym, bool down);
+
+// Disconnects. No callback for v runs after this returns.
+void term_vnc_free(TermVnc *v);
+
 #ifdef __cplusplus
 }
 #endif
