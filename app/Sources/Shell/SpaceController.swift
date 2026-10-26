@@ -161,8 +161,9 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       if drag?.pane !== pane { pane.tab.view.frame = pane.container.bounds }
     }
     if case .sideBySide(let a, let b) = layout, !foldActive {
+      // A hairline in the middle of the gap, between the bars rather than across the dock band.
       divider.isHidden = false
-      divider.frame = CGRect(x: a.maxX, y: a.minY, width: max(b.minX - a.maxX, 1), height: a.height)
+      divider.frame = CGRect(x: ((a.maxX + b.minX) / 2 - 0.5).rounded(), y: safe.minY, width: 1, height: safe.height)
     } else {
       divider.isHidden = true
     }

@@ -14,8 +14,9 @@ enum SpaceLayout: Equatable {
 
   /// Narrowest pane worth splitting for when the device lies flat (about 40 columns).
   static let minimumSplitPaneWidth: CGFloat = 320
-  /// Hairline between panes when split without a fold.
-  static let splitGap: CGFloat = 1
+  /// Gap between panes split without a fold: a hairline with 6 pt either side
+  /// so neither pane's text runs into it.
+  static let splitGap: CGFloat = 13
 
   /// - Parameters:
   ///   - bounds: the view's bounds.

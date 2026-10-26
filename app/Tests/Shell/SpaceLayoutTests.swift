@@ -45,27 +45,33 @@ final class SpaceLayoutTests: XCTestCase {
                    .single(outerPortrait))
   }
 
-  // Bug: the vertical bar's width taken out of one pane only, or no hairline gap.
-  func testTwoPanesHalveTheSafeAreaWithAHairline() {
+  // Bug: the vertical bar's width taken out of one pane only, or text run up against the hairline.
+  func testTwoPanesHalveTheSafeAreaAroundAGap() {
     let layout = SpaceLayout.compute(bounds: innerLandscape, safe: innerLandscapeSafe, division: nil,
                                      splitWhenFlat: true, regularWidth: true)
-    XCTAssertEqual(layout, .sideBySide(CGRect(x: 0, y: 0, width: 433, height: 669),
-                                       CGRect(x: 434, y: 0, width: 517, height: 669)))
-    // Both panes keep 433 pt of safe width; the right one runs on under the bar.
-    XCTAssertEqual(layout.panes[0].intersection(innerLandscapeSafe).width, 433)
-    XCTAssertEqual(layout.panes[1].intersection(innerLandscapeSafe).width, 433)
+    XCTAssertEqual(layout, .sideBySide(CGRect(x: 0, y: 0, width: 427, height: 669),
+                                       CGRect(x: 440, y: 0, width: 511, height: 669)))
+    // Both panes keep 427 pt of safe width; the right one runs on under the bar.
+    XCTAssertEqual(layout.panes[0].intersection(innerLandscapeSafe).width, 427)
+    XCTAssertEqual(layout.panes[1].intersection(innerLandscapeSafe).width, 427)
   }
 
   // Bug: splitting into panes too narrow to use (under 320 pt each).
   func testTwoPanesNeedRoomForTwo320PointPanes() {
     let bounds = CGRect(x: 0, y: 0, width: 700, height: 600)
-    let narrow = SpaceLayout.compute(bounds: bounds, safe: CGRect(x: 0, y: 0, width: 640, height: 600), division: nil,
+    let narrow = SpaceLayout.compute(bounds: bounds, safe: CGRect(x: 0, y: 0, width: 652, height: 600), division: nil,
                                      splitWhenFlat: true, regularWidth: true)
     XCTAssertEqual(narrow, .single(bounds))
-    let enough = SpaceLayout.compute(bounds: bounds, safe: CGRect(x: 0, y: 0, width: 641, height: 600), division: nil,
+    let enough = SpaceLayout.compute(bounds: bounds, safe: CGRect(x: 0, y: 0, width: 653, height: 600), division: nil,
                                      splitWhenFlat: true, regularWidth: true)
     XCTAssertEqual(enough.panes.count, 2)
-    XCTAssertEqual(enough.panes.map(\.width), [320, 379])
+    XCTAssertEqual(enough.panes.map(\.width), [320, 367])
+  }
+
+  // Bug: Two Panes lost on the inner display held upright (669 pt wide, as the user holds it).
+  func testTwoPanesFitTheInnerDisplayInPortrait() {
+    XCTAssertEqual(SpaceLayout.compute(bounds: innerPortrait, safe: innerPortraitSafe, division: nil,
+                                       splitWhenFlat: true, regularWidth: true).panes.count, 2)
   }
 
   // Bug: Two Panes on the compact outer display.
