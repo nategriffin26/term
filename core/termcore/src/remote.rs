@@ -128,6 +128,8 @@ enum SshInput {
 pub(crate) struct Ssh {
     input: mpsc::UnboundedSender<SshInput>,
     task: Option<AbortHandle>,
+    /// The per-connection sshd process, learned on a separate exec channel.
+    process_id: Option<u32>,
 }
 
 impl Ssh {
@@ -272,6 +274,14 @@ impl Mosh {
 }
 
 impl State {
+    pub(crate) fn process_id(&self) -> u32 {
+        match &self.remote {
+            Remote::Ssh(r) => r.process_id,
+            Remote::Mosh(m) => m.server_pid,
+            Remote::Local => None,
+        }.unwrap_or(0)
+    }
+
     /// After term_session_free: stop the network task. A live mosh session
     /// tells the server it is over first; a suspended one stays alive on the
     /// server for term_session_restore.
@@ -450,7 +460,7 @@ pub(crate) fn connect(params: Result<ConnectParams, String>, cb: TermCallbacks) 
         Transport::Mosh => (Remote::Mosh(Mosh::new(mode, None)), None),
         Transport::Ssh => {
             let (tx, rx) = mpsc::unbounded_channel();
-            (Remote::Ssh(Ssh { input: tx, task: None }), Some(rx))
+            (Remote::Ssh(Ssh { input: tx, task: None, process_id: None }), Some(rx))
         }
     };
     let s = Arc::new(Session::new(State::new(term, remote, status::CONNECTING), cb));
@@ -495,8 +505,17 @@ async fn run(s: Arc<Session>, params: Result<ConnectParams, String>, input: Opti
     }
 }
 
+/// An exec channel shares the shell's sshd parent without writing to its PTY.
+async fn ssh_process_id(conn: &ssh::Connection) -> Option<u32> {
+    let out = conn.exec("printf '%s\\n' \"$PPID\"").await.ok()?;
+    if out.exit_status != 0 { return None; }
+    let pid = std::str::from_utf8(&out.stdout).ok()?.trim().parse::<u32>().ok()?;
+    (pid > 1).then_some(pid)
+}
+
 async fn ssh_shell(s: Arc<Session>, conn: ssh::Connection, command: Option<&str>, input: mpsc::UnboundedReceiver<SshInput>, epoch: u64) {
     let (cols, rows) = s.lock().term.size();
+    let process_id = ssh_process_id(&conn).await;
     let shell = match conn.shell(TERM, cols as u32, rows as u32, command).await {
         Ok(shell) => shell,
         Err(e) => return close(&s, epoch, &e.to_string()),
@@ -504,6 +523,7 @@ async fn ssh_shell(s: Arc<Session>, conn: ssh::Connection, command: Option<&str>
     drop(conn);
     let active = s.update(|st, ev| {
         if st.stopped || st.network_epoch != epoch { return false; }
+        if let Remote::Ssh(r) = &mut st.remote { r.process_id = process_id; }
         st.set_status(status::CONNECTED, "", ev);
         true
     });
@@ -705,6 +725,7 @@ async fn replace_remote(s: &Arc<Session>, params: Result<ConnectParams, String>,
         }
         Transport::Ssh => {
             let (cols, rows) = s.lock().term.size();
+            let process_id = ssh_process_id(&conn).await;
             let shell = conn.shell(TERM, cols as u32, rows as u32, p.command.as_deref()).await.map_err(|e| e.to_string())?;
             s.update(|st, ev| {
                 if st.stopped { return Err("session closed".to_string()); }
@@ -713,7 +734,7 @@ async fn replace_remote(s: &Arc<Session>, params: Result<ConnectParams, String>,
                 let _ = tx.send(SshInput::Resize(cols, rows));
                 abort_remote(&mut st.remote);
                 st.network_epoch += 1;
-                st.remote = Remote::Ssh(Ssh { input: tx, task: None });
+                st.remote = Remote::Ssh(Ssh { input: tx, task: None, process_id });
                 st.reconnect_status(status::CONNECTED, ev);
                 let epoch = st.network_epoch;
                 let task = runtime().spawn(ssh_loop(s.clone(), shell, rx, epoch));

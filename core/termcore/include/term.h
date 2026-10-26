@@ -243,6 +243,10 @@ typedef struct {
 // differs from c->host_key closes the session with a message naming both.
 TermSession *term_session_connect(const TermConnect *c, TermCallbacks cb);
 
+// Remote process whose descendants contain this tab's shell/tmux client:
+// mosh-server, or the SSH connection's server process. 0 when not known.
+uint32_t term_session_process_id(TermSession *s);
+
 // Mosh sessions survive app termination: save before the app may be killed
 // (after term_session_suspend) and restore on next launch. save returns the
 // blob length (call with cap 0 to size it); 0 = nothing to save.

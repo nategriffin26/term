@@ -67,6 +67,16 @@ pub unsafe extern "C" fn term_session_reconnect(s: *const Session, c: *const Ter
     remote::reconnect(s, unsafe { ConnectParams::from_c(c) }, end_old_server);
 }
 
+/// term.h `term_session_process_id`.
+///
+/// # Safety
+/// `s` is NULL or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn term_session_process_id(s: *const Session) -> u32 {
+    let Some(s) = (unsafe { session(s) }) else { return 0 };
+    s.lock().process_id()
+}
+
 /// term.h `term_session_save`: the mosh client state, self-sufficient for
 /// term_session_restore. SSH and local sessions save nothing.
 ///

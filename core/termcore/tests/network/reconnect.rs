@@ -219,3 +219,31 @@ fn suspend_save_during_reconnect_keeps_the_checkpoint_server_alive() {
     drop(restored_live);
     wait_gone(old_pid);
 }
+
+#[test]
+fn remote_process_identity_contains_hand_attached_tmux_client_on_both_transports() {
+    for transport in [transport::SSH, transport::MOSH] {
+        let sshd = Sshd::start();
+        let p = Params::new(&sshd, transport);
+        let rec = Recorder::new();
+        let s = p.connect(&rec);
+        rec.wait_status(status::CONNECTED, 20 * SEC);
+        let root = unsafe { term_session_process_id(s) };
+        let tmux = Tmux { session: format!("identity-{}-{transport}", std::process::id()) };
+        write(s, &format!("{}\r", tmux.command().to_str().unwrap()));
+        write(s, "echo attached-$((6*7))\r");
+        wait_screen(s, "attached-42", 10 * SEC);
+        let clients = Command::new("/opt/homebrew/bin/tmux")
+            .args(["-L", "corefiles", "list-clients", "-t", &tmux.session, "-F", "#{client_pid}"])
+            .output().unwrap();
+        let client: u32 = String::from_utf8(clients.stdout).unwrap().trim().parse().unwrap();
+        let mut ancestor = client;
+        while ancestor > 1 && ancestor != root {
+            let out = Command::new("/bin/ps").args(["-p", &ancestor.to_string(), "-o", "ppid="]).output().unwrap();
+            ancestor = String::from_utf8(out.stdout).unwrap().trim().parse().unwrap_or(0);
+        }
+        unsafe { term_session_free(s) };
+        assert!(root > 1, "transport {transport} did not publish its process identity");
+        assert_eq!(ancestor, root, "transport {transport} selected another connection's process");
+    }
+}

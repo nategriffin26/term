@@ -170,6 +170,9 @@ final class Session {
 
     var status: TermStatus { term_session_status(core) }
 
+    /// Remote ancestor of this tab's shell and any tmux client it starts.
+    var processID: UInt32 { term_session_process_id(core) }
+
     // ------------------------------------------------------------ lifecycle
 
     /// Serialized session for `init(restore:)`; nil when there is nothing to save.
@@ -188,9 +191,8 @@ final class Session {
     func suspend() { term_session_suspend(core) }
     func resume() { term_session_resume(core) }
 
-    /// Replaces a mosh session's server (an SSH session's shell) in place, same
-    /// screen. With `endOldServer` the old mosh-server is ended first; its tmux
-    /// session survives. A call while one runs is ignored. The outcome arrives
+    /// Replaces a remote in place. With `endOldServer`, retire the old
+    /// mosh-server only after installing its replacement. The outcome arrives
     /// on `onReconnect`.
     func reconnect(spec: ConnectSpec, endOldServer: Bool) {
         spec.withTermConnect(cols: cols, rows: rows) { term_session_reconnect(core, $0, endOldServer) }
