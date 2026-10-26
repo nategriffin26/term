@@ -10,8 +10,15 @@
 //   turn ran) · stop {at, why} (the last time it stopped for you) · model · think · ctx (% of the context window) ·
 //   cost (USD, subagents included) · subs (subagents running) · cwd · branch
 // Strings are cut short and non-ASCII is \u-escaped, so the value survives a tmux without a UTF-8 locale.
+//
+// It also keeps the Mermaid sources of this session's answers in the pane option `@diagrams`, so Term can draw the
+// ASCII diagrams omp prints as real diagrams: {"v":1,"d":[{"h":sha256 of the source, 12 hex, "t":unix s,"src":…}]},
+// newest last, written as soon as a ```mermaid fence closes and again when the message ends, at most 12 KB (oldest
+// dropped first; tmux refuses an option value near 17 KB), \u-escaped the same way. It outlives omp: its ASCII stays
+// in the pane's history. And it tells the model, in the system prompt, how to draw diagrams that read on a phone.
 // @ts-nocheck
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 
 const HEARTBEAT_MS = 30_000;
@@ -20,6 +27,20 @@ const PROGRESS_MS = 2_000;
 /** After a turn ends, how long to wait for omp to go idle before calling it a stop. */
 const SETTLE_POLL_MS = 250;
 const SETTLE_MAX_MS = 10_000;
+/** Largest `@diagrams` value written. */
+const DIAGRAMS_CAP = 12_000;
+
+const DIAGRAMS = [
+  "# Diagrams",
+  "The user often reads this session in Term, a phone terminal that draws ```mermaid blocks as real diagrams in the terminal's colours; on the Mac the same block shows as ASCII. Draw one when structure is the point — a flow with branches, who calls whom in what order, states and their transitions, how a few records relate — and prose would take a paragraph. Never draw a list, a straight line of two or three steps, or anything one sentence says.",
+  "",
+  "Make it read on a phone held upright (about 45 characters wide):",
+  "- flowchart TD for flows; never LR with more than three nodes in a row. sequenceDiagram for exchanges between parties; stateDiagram-v2 for lifecycles; erDiagram or classDiagram only for a handful of entities.",
+  "- At most about 12 nodes, or 4 participants and 10 messages. Split a bigger picture into two diagrams with a sentence between them.",
+  "- Node labels two to four words; edge labels one or two words; short ids (A, B, auth). No line breaks, HTML, icons or math in labels.",
+  "- No classDef, style, linkStyle, init blocks or themes: Term colours diagrams from the terminal theme.",
+  "- One sentence before the block says what it shows. Do not restate the diagram in prose after it.",
+].join("\n");
 
 const pane = process.env.TMUX_PANE;
 const tmux = process.env.TMUX && pane ? findTmux() : undefined;
@@ -172,7 +193,7 @@ async function write(force) {
   }
   let json;
   try {
-    json = JSON.stringify(payload()).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+    json = ascii(JSON.stringify(payload()));
   } catch {
     return;
   }
@@ -186,6 +207,62 @@ async function write(force) {
   if (s.again) {
     s.again = false;
     void write(false);
+  }
+}
+
+/** JSON with non-ASCII \u-escaped. */
+function ascii(json) {
+  return json.replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
+// `@diagrams`: published sources oldest first, the value last written, and the hashes this message already added.
+const d = { list: [], json: "", writing: undefined, again: false, current: new Set() };
+
+/** The sources of the closed ```mermaid fences in a message's text. */
+function fences(text) {
+  if (!text.includes("```mermaid")) return [];
+  const out = [];
+  const re = /^[ \t]*```mermaid[ \t]*\n([\s\S]*?)\n[ \t]*```[ \t]*$/gm;
+  for (let m; (m = re.exec(text)); ) if (m[1].trim()) out.push(m[1]);
+  return out;
+}
+
+/** Adds a message's closed fences to `@diagrams`, newest last; a source drawn again moves to the end. */
+function publishDiagrams(message) {
+  if (!tmux || s.closing || message?.role !== "assistant") return;
+  let added = false;
+  for (const src of fences(textOf(message))) {
+    const h = createHash("sha256").update(src).digest("hex").slice(0, 12);
+    if (d.current.has(h)) continue;
+    d.current.add(h);
+    const entry = { h, t: Math.floor(Date.now() / 1000), src };
+    // One source over the cap alone would empty the list; it stays ASCII instead.
+    if (ascii(JSON.stringify(entry)).length > DIAGRAMS_CAP - 16) continue;
+    d.list = d.list.filter((e) => e.h !== h);
+    d.list.push(entry);
+    added = true;
+  }
+  if (!added) return;
+  let json = ascii(JSON.stringify({ v: 1, d: d.list }));
+  while (json.length > DIAGRAMS_CAP) {
+    d.list.shift();
+    json = ascii(JSON.stringify({ v: 1, d: d.list }));
+  }
+  d.json = json;
+  void writeDiagrams();
+}
+
+async function writeDiagrams() {
+  if (d.writing) {
+    d.again = true;
+    return;
+  }
+  d.writing = run(["set-option", "-p", "-t", pane, "@diagrams", d.json]);
+  await d.writing;
+  d.writing = undefined;
+  if (d.again) {
+    d.again = false;
+    void writeDiagrams();
   }
 }
 
@@ -359,6 +436,23 @@ export default function termAgent(pi) {
     s.ending = { kind: stopKind(final), last: cut(textOf(final), 280), deadline: Date.now() + SETTLE_MAX_MS };
     s.title = pi.getSessionName?.() ?? s.title;
     waitForIdle();
+  });
+
+  on("message_start", () => {
+    d.current = new Set();
+  });
+  on("message_update", (e) => publishDiagrams(e.message));
+  on("message_end", (e) => {
+    publishDiagrams(e.message);
+    d.current = new Set();
+  });
+
+  // Chains from the current base prompt; a retried preparation sees the section already there.
+  pi.on("before_agent_start", async (e, ctx) => {
+    if (!main(ctx)) return;
+    const base = Array.isArray(e?.systemPrompt) ? e.systemPrompt : typeof e?.systemPrompt === "string" ? [e.systemPrompt] : undefined;
+    if (!base || base.includes(DIAGRAMS)) return;
+    return { systemPrompt: [...base, DIAGRAMS] };
   });
 
   on("tool_execution_start", (e) => {
