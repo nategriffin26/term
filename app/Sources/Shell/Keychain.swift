@@ -1,9 +1,9 @@
 import Foundation
 import Security
 
-/// SSH private keys and host passwords. Keys are generic-password items whose
-/// account is the key name; the public line rides along in kSecAttrGeneric so
-/// listing keys never reads secret data.
+/// SSH private keys, host passwords and the OpenRouter key. Keys are
+/// generic-password items whose account is the key name; the public line
+/// rides along in kSecAttrGeneric so listing keys never reads secret data.
 enum Keychain {
   struct Key: Identifiable, Hashable, Sendable {
     var name: String
@@ -21,6 +21,7 @@ enum Keychain {
 
   private static let keyService = AppIdentity.bundleID + ".key"
   private static let passwordService = AppIdentity.bundleID + ".password"
+  private static let openRouterService = AppIdentity.bundleID + ".openrouter"
 
   static func keys() -> [Key] {
     let query: [CFString: Any] = [
@@ -75,6 +76,25 @@ enum Keychain {
       kSecAttrService: passwordService,
       kSecAttrAccount: host.uuidString,
       kSecValueData: Data(password.utf8),
+      kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+    ]
+    SecItemAdd(attrs as CFDictionary, nil)
+  }
+
+  /// Settings › Voice: the OpenRouter API key dictation sends with.
+  static func openRouterKey() -> String? {
+    read(service: openRouterService, account: "api-key")
+  }
+
+  /// nil or empty removes it.
+  static func setOpenRouterKey(_ key: String?) {
+    delete(service: openRouterService, account: "api-key")
+    guard let key, !key.isEmpty else { return }
+    let attrs: [CFString: Any] = [
+      kSecClass: kSecClassGenericPassword,
+      kSecAttrService: openRouterService,
+      kSecAttrAccount: "api-key",
+      kSecValueData: Data(key.utf8),
       kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
     ]
     SecItemAdd(attrs as CFDictionary, nil)

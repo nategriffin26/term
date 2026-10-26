@@ -14,6 +14,10 @@ protocol TerminalViewDelegate: AnyObject {
     func terminalView(_ view: TerminalView, insertFrom source: InsertSource)
     /// This view just sized its session's grid.
     func terminalView(_ view: TerminalView, didSizeGrid grid: GridSize)
+    /// Dictation into this terminal has something to say (a failure, the microphone refused).
+    func terminalView(_ view: TerminalView, voiceNotice text: String)
+    /// Settings › Voice, for a missing key or a failure fixed there.
+    func terminalViewOpensVoiceSettings(_ view: TerminalView)
 }
 
 /// A terminal grid in cells, with the cell it was measured in (pixels).
@@ -77,6 +81,8 @@ final class TerminalView: UIView {
     var keyClicksEnabled = true
     /// A page to read (tmux history): no keyboard, no paste.
     var isReadOnly = false
+    /// The last input here was dictated text, so the next transcript starts with a space.
+    var continuesDictation = false
 
     /// Current grid size in cells.
     var gridSize: (cols: Int, rows: Int) { (session.cols, session.rows) }
@@ -571,6 +577,8 @@ final class TerminalView: UIView {
         if snapshot.has(TERM_MODE_FOCUS_EVENTS) { reportFocus(focused) }
         updateBlinkTimer()
         setNeedsRender()
+        // The mic lives on this terminal's Smart Keys: they go with the keyboard.
+        if !focused { Dictation.shared.targetLostFocus(self) }
     }
 
     private func reportFocus(_ focused: Bool) {

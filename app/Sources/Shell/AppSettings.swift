@@ -59,6 +59,13 @@ final class AppSettings {
   var textSize: TextSize { didSet { store(textSize.rawValue, "textSize") } }
   /// Light taps on Smart Keys, switches and swipe actions.
   var haptics: Bool { didSet { store(haptics, "haptics") } }
+  /// The OpenRouter model dictation transcribes with (Settings › Voice).
+  var voiceModel: String { didSet { store(voiceModel, "voiceModel") } }
+  /// Whether the Keychain holds an OpenRouter key; set it through `setOpenRouterKey`.
+  private(set) var hasOpenRouterKey: Bool
+
+  /// The most accurate on commands, paths and flags, and about a second a segment.
+  static let recommendedVoiceModel = "openai/gpt-4o-transcribe"
 
   @ObservationIgnored private let defaults: UserDefaults
 
@@ -85,7 +92,15 @@ final class AppSettings {
     glassStyle = defaults.string(forKey: "glassStyle").flatMap(GlassStyle.init(rawValue:)) ?? .tinted
     textSize = defaults.string(forKey: "textSize").flatMap(TextSize.init(rawValue:)) ?? .standard
     haptics = (defaults.object(forKey: "haptics") as? Bool) ?? true
+    voiceModel = defaults.string(forKey: "voiceModel").flatMap { $0.isEmpty ? nil : $0 } ?? Self.recommendedVoiceModel
+    hasOpenRouterKey = Keychain.openRouterKey()?.isEmpty == false
     refreshAppTheme()
+  }
+
+  /// Keeps the key in the Keychain (empty removes it).
+  func setOpenRouterKey(_ key: String) {
+    Keychain.setOpenRouterKey(key)
+    hasOpenRouterKey = !key.isEmpty
   }
 
   var theme: Theme { Theme.named(themeName) }

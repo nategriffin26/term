@@ -1,44 +1,34 @@
 import UIKit
 
 /// The key bar above the software keyboard: a glass capsule over the
-/// terminal, after Blink's iPhone bar (KBLayout.iPhone). Esc/Ctrl/Alt on the
-/// left; a scrolling middle of Tab, symbol pairs and F-keys (pull a pair
-/// down for its upper symbol); the arrow joystick, hide-keyboard and Cmd on
-/// the right. Cmd swaps the middle for its own row: the system paste
+/// terminal, after Blink's iPhone bar (KBLayout.iPhone). Esc, Ctrl, Alt,
+/// Tab and the mic on the left (the mic away from the arrows, so a thumb on
+/// them never starts dictation); the arrow joystick, hide-keyboard and Cmd
+/// on the right. The middle shows the voice strip while dictation is busy.
+/// Cmd swaps Tab, the mic and the middle for its own row: the system paste
 /// control, then photo, camera and file keys that upload to the host and
 /// type the path.
 @MainActor
 final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     enum Action {
         case key(TermKey)
-        case text(String)
         case hideKeyboard
         case insert(InsertSource)
+        case voice
     }
 
     enum Key {
         case escape, tab
         case ctrl, alt
-        case pair(String, String)       // tap: first, pull down: second
-        case function(Int, Int)         // tap: F first, pull down: F second
         case arrows
         case hideKeyboard
         case command
     }
 
-    struct Layout {
-        var left: [Key]
-        var middle: [Key]
-        var right: [Key]
-
-        static let standard = Layout(
-            left: [.escape, .ctrl, .alt],
-            middle: [.tab]
-                + [("`", "~"), ("@", "#"), ("$", "^"), (";", ":"), ("-", "_"), ("=", "+"), ("[", "{"), ("]", "}"),
-                   ("\\", "|"), ("<", "*"), (">", "\""), ("/", "?"), (".", "!"), (",", "%")].map { Key.pair($0.0, $0.1) }
-                + (1...6).map { Key.function($0, $0 + 6) },
-            right: [.arrows, .hideKeyboard, .command])
-    }
+    private static let left: [Key] = [.escape, .ctrl, .alt]
+    /// Give way to the Cmd row while Cmd is on, with the voice strip after them.
+    private static let middle: [Key] = [.tab]
+    private static let right: [Key] = [.arrows, .hideKeyboard, .command]
 
     enum Modifier { case off, armed, locked }
 
@@ -65,15 +55,13 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
 
     private weak var terminal: TerminalView?
     var enableInputClicksWhenVisible: Bool { terminal?.keyClicksEnabled ?? true }
-    private let layout: Layout
     private let glass = GlassView()
     private var leftKeys: [KeyCap] = []
     private var rightKeys: [KeyCap] = []
-    private var middleKeys: [KeyCap] = []
-    /// Holds the scroller; its mask fades the keys out at a side with more keys past it.
+    /// Tab and the voice strip (which holds the mic key); faded out for the Cmd row.
     private let middle = UIView()
-    private let edgeFade = CAGradientLayer()
-    private let scroller = HorizontalScroller()
+    private var middleKeys: [KeyCap] = []
+    private let strip = VoiceStripView()
     private let commandRow = UIView()
     private var pasteControl: UIPasteControl
     private var insertKeys: [KeyCap] = []
@@ -87,9 +75,8 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     /// The capsule's inset from the bar's edges.
     private static let capsuleInset = UIEdgeInsets(top: 3, left: 6, bottom: 3, right: 6)
 
-    init(terminal: TerminalView, layout: Layout = .standard) {
+    init(terminal: TerminalView) {
         self.terminal = terminal
-        self.layout = layout
         pasteControl = Self.makePasteControl(for: UITraitCollection.current)
         super.init(frame: CGRect(x: 0, y: 0, width: 320, height: SmartKeysBar.height), inputViewStyle: .default)
         allowsSelfSizing = true
@@ -98,22 +85,18 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         glass.cornerConfiguration = .capsule()
         glass.isUserInteractionEnabled = false
         addSubview(glass)
-        scroller.showsHorizontalScrollIndicator = false
-        scroller.delaysContentTouches = false
-        scroller.canCancelContentTouches = true
-        scroller.alwaysBounceHorizontal = true
-        scroller.delegate = self
-        middle.addSubview(scroller)
-        edgeFade.startPoint = CGPoint(x: 0, y: 0.5)
-        edgeFade.endPoint = CGPoint(x: 1, y: 0.5)
-        middle.layer.mask = edgeFade
-        addSubview(middle)
-        leftKeys = layout.left.map(makeKey)
-        middleKeys = layout.middle.map(makeKey)
-        rightKeys = layout.right.map(makeKey)
+        leftKeys = Self.left.map(makeKey)
+        middleKeys = Self.middle.map(makeKey)
+        rightKeys = Self.right.map(makeKey)
         leftKeys.forEach(addSubview)
         rightKeys.forEach(addSubview)
-        middleKeys.forEach(scroller.addSubview)
+        middleKeys.forEach(middle.addSubview)
+        strip.onMic = { [weak self] in self?.emit(.voice) }
+        strip.onRetry = { Dictation.shared.retry() }
+        strip.onOpenSettings = { [weak terminal] in terminal?.dictationNeedsSettings() }
+        strip.onDiscard = { Dictation.shared.discard() }
+        middle.addSubview(strip)
+        addSubview(middle)
         pasteControl.target = terminal
         commandRow.addSubview(pasteControl)
         insertKeys = [("photo", "Insert Photo", InsertSource.photos), ("camera", "Insert from Camera", .camera),
@@ -139,7 +122,9 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         registerForTraitChanges([AppThemeTrait.self]) { (bar: SmartKeysBar, _: UITraitCollection) in
             bar.replacePasteControl()
         }
+        NotificationCenter.default.addObserver(self, selector: #selector(voiceChanged), name: .voiceStateChanged, object: nil)
         refresh()
+        voiceChanged()
     }
 
     @available(*, unavailable)
@@ -176,14 +161,13 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     // ------------------------------------------------------------ layout
 
     /// Slot widths, each key's whole touch target; a wide bar (iPhone Duo's
-    /// inner display) gets roomier slots.
+    /// inner display, a phone on its side) gets roomier slots.
     private func width(of key: Key) -> CGFloat {
         let roomy = bounds.width >= 600
         switch key {
         case .arrows, .hideKeyboard, .command: return roomy ? 60 : 40
         case .escape, .ctrl, .alt: return roomy ? 46 : 40
         case .tab: return roomy ? 46 : 36
-        case .pair, .function: return roomy ? 46 : 33
         }
     }
 
@@ -196,24 +180,25 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         // Keys keep the bar's full height as their target; the outer ones
         // start a little inside the capsule's rounded ends.
         var x = capsule.minX + Chrome.Space.s
-        for (key, view) in zip(layout.left, leftKeys) {
+        for (key, view) in zip(Self.left, leftKeys) {
             view.frame = CGRect(x: x, y: 0, width: width(of: key), height: h)
             x += view.frame.width
         }
         let middleStart = x
         var right = capsule.maxX - Chrome.Space.s
-        for (key, view) in zip(layout.right, rightKeys).reversed() {
+        for (key, view) in zip(Self.right, rightKeys).reversed() {
             right -= width(of: key)
             view.frame = CGRect(x: right, y: 0, width: width(of: key), height: h)
         }
         middle.frame = CGRect(x: middleStart, y: 0, width: max(0, right - middleStart), height: h)
-        scroller.frame = middle.bounds
         var mx: CGFloat = 0
-        for (key, view) in zip(layout.middle, middleKeys) {
+        for (key, view) in zip(Self.middle, middleKeys) {
             view.frame = CGRect(x: mx, y: 0, width: width(of: key), height: h)
             mx += view.frame.width
         }
-        scroller.contentSize = CGSize(width: mx, height: h)
+        // The mic key, drawn by the strip, is as wide as esc.
+        strip.micWidth = width(of: .escape)
+        strip.frame = CGRect(x: mx, y: 0, width: max(0, middle.bounds.width - mx), height: h)
         commandRow.frame = middle.frame
         let slots = CGFloat(1 + insertKeys.count)
         let slot = min(bounds.width >= 600 ? 56 : 44, commandRow.bounds.width / slots).rounded(.down)
@@ -223,21 +208,6 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         for (i, cap) in insertKeys.enumerated() {
             cap.frame = CGRect(x: slot * CGFloat(i + 1), y: 0, width: slot, height: h)
         }
-        updateEdges()
-    }
-
-    /// Keys fade out at each side of the middle that has more keys scrolled past it.
-    fileprivate func updateEdges() {
-        let offset = scroller.contentOffset.x
-        let more = (left: !command && offset > 0,
-                    right: !command && scroller.contentSize.width - offset > scroller.bounds.width + 0.5)
-        let fade = min(20 / max(middle.bounds.width, 1), 0.5)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        edgeFade.frame = middle.bounds
-        edgeFade.colors = [more.left ? UIColor.clear : .black, .black, .black, more.right ? .clear : .black].map(\.cgColor)
-        edgeFade.locations = [0, fade, 1 - fade, 1].map { NSNumber(value: Double($0)) }
-        CATransaction.commit()
     }
 
     // ------------------------------------------------------------ keys
@@ -261,14 +231,6 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
             cap.configure(title: "alt")
             cap.onTap = { [weak self] in self?.alt = self?.alt == .off ? .armed : .off }
             cap.onHold = { [weak self] in self?.alt = .locked }
-        case .pair(let a, let b):
-            cap.configure(title: a, alternate: b)
-            cap.repeats = true
-            cap.onPick = { [weak self] second in self?.emit(.text(second ? b : a)) }
-        case .function(let a, let b):
-            cap.configure(title: "F\(a)", alternate: "F\(b)")
-            cap.repeats = true
-            cap.onPick = { [weak self] second in self?.emit(.key(SmartKeysBar.functionKey(second ? b : a))) }
         case .arrows:
             cap.configureArrows()
             cap.accessibilityLabel = "Arrows"
@@ -292,10 +254,6 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         return cap
     }
 
-    private static func functionKey(_ n: Int) -> TermKey {
-        TermKey(rawValue: TERM_KEY_F1.rawValue + UInt32(n - 1))
-    }
-
     private func emit(_ action: Action) {
         terminal?.smartKey(action)
     }
@@ -313,8 +271,13 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         }
     }
 
+    /// The strip (and its mic key) follows dictation.
+    @objc private func voiceChanged() {
+        strip.state = Dictation.shared.state
+    }
+
     private func refresh() {
-        for (key, view) in zip(layout.left + layout.right, leftKeys + rightKeys) {
+        for (key, view) in zip(Self.left + Self.right, leftKeys + rightKeys) {
             switch key {
             case .ctrl: view.modifier = ctrl
             case .alt: view.modifier = alt
@@ -325,9 +288,8 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         }
         let row = command
         guard commandRow.isHidden == row else { return }
-        scroller.isUserInteractionEnabled = !row
+        middle.isUserInteractionEnabled = !row
         commandRow.isHidden = false
-        updateEdges()
         UIView.animate(withDuration: 0.12) {
             self.middle.alpha = row ? 0 : 1
             self.commandRow.alpha = row ? 1 : 0
@@ -346,31 +308,12 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     }
 }
 
-extension SmartKeysBar: UIScrollViewDelegate {
-    func scrollViewDidScroll(_ scrollView: UIScrollView) { updateEdges() }
-}
-
-/// Lets vertical drags reach the keys (pull-down alternates) instead of the scroller.
-private final class HorizontalScroller: UIScrollView {
-    override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        if g === panGestureRecognizer {
-            let v = panGestureRecognizer.velocity(in: self)
-            return abs(v.x) > abs(v.y)
-        }
-        return super.gestureRecognizerShouldBegin(g)
-    }
-
-    override func touchesShouldCancel(in view: UIView) -> Bool { true }
-}
-
 /// One key: a label on the glass, a capsule plate only while pressed (a
 /// wash) or while a modifier is on (the text colour, the label in the
-/// ground). Reports taps, holds, pair picks and joystick directions.
-private final class KeyCap: UIView {
+/// ground). Reports taps, holds and joystick directions.
+final class KeyCap: UIView {
     var onTap: (() -> Void)?
     var onHold: (() -> Void)?
-    /// Pairs: false = the main symbol, true = the upper one (pulled down).
-    var onPick: ((_ second: Bool) -> Void)?
     /// Holding the key repeats it at the Key Repeat settings (the joystick always does).
     var repeats = false
     /// Joystick: 0 left, 1 down, 2 up, 3 right.
@@ -381,7 +324,6 @@ private final class KeyCap: UIView {
 
     private let plate = UIView()
     private let title = UILabel()
-    private let upper = UILabel()
     private let lockBar = UIView()
     private var icon: UIImageView?
     /// The joystick's four arrows (left, down, up, right), each lit on its own.
@@ -389,9 +331,6 @@ private final class KeyCap: UIView {
     private var pressed = false { didSet { updateLook() } }
     private var holdTimer: Timer?
     private var held = false
-    private var startY: CGFloat = 0
-    /// Pull-down progress for pairs, 0...1.
-    private var progress: CGFloat = 0
     private var direction: Int?
     private let repeater = KeyRepeater()
 
@@ -406,11 +345,9 @@ private final class KeyCap: UIView {
         plate.layer.cornerCurve = .continuous
         plate.isUserInteractionEnabled = false
         addSubview(plate)
-        for label in [upper, title] {
-            label.textAlignment = .center
-            label.isUserInteractionEnabled = false
-            addSubview(label)
-        }
+        title.textAlignment = .center
+        title.isUserInteractionEnabled = false
+        addSubview(title)
         lockBar.layer.cornerRadius = 1
         lockBar.isHidden = true
         addSubview(lockBar)
@@ -421,11 +358,9 @@ private final class KeyCap: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    func configure(title text: String, alternate: String? = nil) {
+    func configure(title text: String) {
         title.text = text
         accessibilityLabel = text
-        upper.text = alternate
-        upper.isHidden = alternate == nil
         setNeedsLayout()
     }
 
@@ -438,6 +373,11 @@ private final class KeyCap: UIView {
         icon = view
         addSubview(view)
         updateLook()
+    }
+
+    /// Swaps a symbol key's glyph (the mic fills while it listens).
+    func setSymbol(_ symbol: String) {
+        icon?.image = UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control, size: .standard))
     }
 
     func configureArrows() {
@@ -471,25 +411,8 @@ private final class KeyCap: UIView {
         plate.bounds = CGRect(x: 0, y: 0, width: plateWidth, height: plateHeight)
         plate.center = center
         plate.layer.cornerRadius = plateHeight / 2
-        // The pair's upper symbol waits above, unseen, and slides into place
-        // as the finger pulls down.
-        let p = progress
         title.bounds = CGRect(x: 0, y: 0, width: max(bounds.width, plateWidth), height: 22)
         title.center = center
-        upper.bounds = title.bounds
-        upper.center = center
-        if upper.text != nil {
-            let lift = bounds.height * 0.3
-            let major = max(1 - p, 0.001)
-            title.transform = CGAffineTransform(translationX: 0, y: 14 * p).scaledBy(x: major, y: major)
-            title.alpha = 1 - 0.5 * p
-            let minor = 0.55 + 0.45 * p
-            upper.transform = CGAffineTransform(translationX: 0, y: -lift + lift * p).scaledBy(x: minor, y: minor)
-            upper.alpha = p
-        } else {
-            title.transform = .identity
-            title.alpha = 1
-        }
         lockBar.frame = CGRect(x: center.x - 6, y: plate.frame.maxY - 5, width: 12, height: 2)
         icon?.frame = CGRect(x: center.x - 15, y: center.y - 15, width: 30, height: 30)
         // Blink's joystick: four small arrows around the middle, spread as on its 40 pt key.
@@ -506,11 +429,8 @@ private final class KeyCap: UIView {
         let on = modifier != .off
         plate.backgroundColor = on ? Chrome.UI.fg : pressed && arrows.isEmpty ? Chrome.UI.fill3 : .clear
         let ink = on ? Chrome.UI.bg : Chrome.UI.fg
-        let font = Chrome.uiFont(.title, on ? .semibold : .regular, size: .standard)
-        for label in [title, upper] {
-            label.textColor = ink
-            label.font = font
-        }
+        title.textColor = ink
+        title.font = Chrome.uiFont(.title, on ? .semibold : .regular, size: .standard)
         lockBar.backgroundColor = Chrome.UI.bg
         lockBar.isHidden = modifier != .locked
         icon?.tintColor = on ? ink : Chrome.UI.fg
@@ -527,8 +447,6 @@ private final class KeyCap: UIView {
         guard let t = touches.first else { return }
         pressed = true
         held = false
-        progress = 0
-        startY = t.location(in: self).y
         UIDevice.current.playInputClick()
         Haptics.keyDown()
         if onArrow != nil {
@@ -547,32 +465,22 @@ private final class KeyCap: UIView {
             repeater.start { [weak self] in
                 guard let self else { return }
                 UIDevice.current.playInputClick()
-                if let onPick = self.onPick { onPick(self.progress >= 0.75) } else { self.onTap?() }
+                self.onTap?()
             }
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let t = touches.first else { return }
-        let p = t.location(in: self)
-        if onArrow != nil {
-            aim(at: p)
-        } else if onPick != nil {
-            let full = bounds.height - 10
-            progress = min(max(p.y - startY, 0), full) / full
-            UIView.performWithoutAnimation { layoutSubviews() }
-        }
+        guard let t = touches.first, onArrow != nil else { return }
+        aim(at: t.location(in: self))
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        let picked = progress >= 0.75
         let arrow = direction
         let fired = repeater.hasFired
         finish()
         if let onArrow {
             if let arrow, !fired { onArrow(arrow) }
-        } else if let onPick {
-            if !fired { onPick(picked) }
         } else if !held, !fired {
             onTap?()
         }
@@ -588,7 +496,6 @@ private final class KeyCap: UIView {
         holdTimer = nil
         repeater.stop()
         direction = nil
-        progress = 0
         updateLook()
         UIView.animate(withDuration: 0.15) { self.layoutSubviews() }
     }

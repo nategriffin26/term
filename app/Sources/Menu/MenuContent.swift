@@ -118,7 +118,7 @@ struct MenuContent: View {
     case .sessions: SessionsTab(model: model)
     case .tmux: TmuxTab(model: model)
     case .files: FilesTab(model: model)
-    case .settings: SettingsView().id(model.settingsGeneration).scrollContentBackground(.hidden)
+    case .settings: SettingsView(start: model.settingsStart).id(model.settingsGeneration).scrollContentBackground(.hidden)
     }
   }
 }

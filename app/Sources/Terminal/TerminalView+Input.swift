@@ -41,6 +41,7 @@ extension TerminalView {
         clearSelection()
         stopCoasting()
         restartBlink()
+        continuesDictation = false
     }
 
     // ------------------------------------------------------------ hardware keys
@@ -182,9 +183,30 @@ extension TerminalView {
     func smartKey(_ action: SmartKeysBar.Action) {
         switch action {
         case .key(let key): send(key)
-        case .text(let text): send(TERM_KEY_NONE, text: text)
         case .hideKeyboard: _ = resignFirstResponder()
         case .insert(let source): delegate?.terminalView(self, insertFrom: source)
+        case .voice: Dictation.shared.toggle(in: self)
         }
+    }
+}
+
+extension TerminalView: DictationTarget {
+    /// Typed as a paste (bracketed when the program asked), so a transcript
+    /// is never run line by line; a space joins it to text dictated just before.
+    func typeDictation(_ text: String) {
+        guard !isReadOnly, !text.isEmpty else { return }
+        let typed = DictatedText.typed(text, continuing: continuesDictation)
+        clearSelection()
+        session.paste(typed)
+        didSendInput()
+        continuesDictation = true
+    }
+
+    func dictationNotice(_ text: String) {
+        delegate?.terminalView(self, voiceNotice: text)
+    }
+
+    func dictationNeedsSettings() {
+        delegate?.terminalViewOpensVoiceSettings(self)
     }
 }

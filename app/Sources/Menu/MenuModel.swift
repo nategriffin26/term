@@ -59,10 +59,15 @@ final class MenuModel {
   var sessionsPage = SessionsPage.grid
   /// Bumped on every opening; Settings is rebuilt on it, so it starts at its root.
   private(set) var settingsGeneration = 0
+  /// A Settings page to open on instead of the root, for this opening only.
+  @ObservationIgnored var settingsStart: SettingsPage?
   /// Every tab but Files opens at its root page; Files resumes where he left it.
   var isOpen = false {
     didSet {
-      if !isOpen { tmuxTarget = nil }
+      if !isOpen {
+        tmuxTarget = nil
+        settingsStart = nil
+      }
       if isOpen, !oldValue { resetPages() }
       updateThumbnails()
       onChange?()

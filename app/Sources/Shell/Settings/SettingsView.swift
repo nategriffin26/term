@@ -5,7 +5,7 @@ enum SettingsPage: Hashable {
   case hosts, host(Host), newHost
   case keys, key(Keychain.Key), generateKey, importKey
   case appearance, themes, fontFamily
-  case keyboard, about
+  case keyboard, voice, about
 }
 
 /// How a page opens the next one or goes back.
@@ -29,13 +29,18 @@ extension EnvironmentValues {
 /// pages keep their state while covered, and a swipe from the leading edge
 /// goes back with the page beneath fading in under the finger.
 struct SettingsView: View {
-  @State private var path: [SettingsPage] = []
+  @State private var path: [SettingsPage]
   /// How far the top page is dragged by the back swipe.
   @State private var swipe: CGFloat = 0
 
   private struct Level: Hashable {
     let depth: Int
     let page: SettingsPage?
+  }
+
+  /// `start` opens a page straight away (the mic key with no OpenRouter key opens Voice).
+  init(start: SettingsPage? = nil) {
+    _path = State(initialValue: start.map { [$0] } ?? [])
   }
 
   var body: some View {
@@ -109,6 +114,7 @@ struct SettingsView: View {
     case .themes: ThemesView()
     case .fontFamily: FontFamilyView()
     case .keyboard: KeyboardSettingsView()
+    case .voice: VoiceView()
     case .about: AboutView()
     }
   }
@@ -191,6 +197,7 @@ private struct SettingsRoot: View {
           IconLabel("Appearance", symbol: "paintpalette")
         }
         PageRow(page: .keyboard) { IconLabel("Keyboard", symbol: "keyboard") }
+        PageRow(page: .voice, value: VoiceView.summary, monoValue: false) { IconLabel("Voice", symbol: "mic") }
       }
       ListSection {
         PageRow(page: .about, value: AboutView.version) { IconLabel("About", symbol: "info.circle") }

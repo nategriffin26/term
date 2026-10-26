@@ -453,6 +453,15 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     for tab in tabs where !isShown(tab) { tab.view.fit(grid) }
   }
 
+  func terminalView(_ view: TerminalView, voiceNotice text: String) {
+    tabs.first { $0.view === view }?.showNotice(text, failed: true, for: 8)
+  }
+
+  func terminalViewOpensVoiceSettings(_ view: TerminalView) {
+    menu.settingsStart = .voice
+    openMenu(.settings)
+  }
+
   private func updateBannerTimer() {
     let needed = panes.contains { $0.tab.unreachable || ($0.tab.isConnected && $0.tab.connecting != nil) }
     if needed, bannerTimer == nil {

@@ -66,6 +66,7 @@ targets:
           - $(PRODUCT_BUNDLE_IDENTIFIER).window
         NSLocalNetworkUsageDescription: Term connects to computers on your network over SSH and mosh.
         NSCameraUsageDescription: Term uploads photos you take to your computer.
+        NSMicrophoneUsageDescription: Term sends what you say to OpenRouter and types the text into the terminal.
         NSPhotoLibraryUsageDescription: Term uploads photos and videos you pick to your computer.
         NSPhotoLibraryAddUsageDescription: Term saves diagrams you share to your photo library.
     settings:
