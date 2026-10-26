@@ -201,6 +201,8 @@ final class CommandsTests: XCTestCase {
     XCTAssertEqual(Command.shellQuote("~"), "'~'")
     XCTAssertEqual(Command.shellQuote("日本"), "'日本'")
     XCTAssertEqual(Command.shellQuote("*"), "'*'")
+    // zsh expands a leading `=` (`=diag` is the path of command `diag`).
+    XCTAssertEqual(Command.shellQuote("=diag"), "'=diag'")
     XCTAssertEqual(Command.shellQuote("a\nb"), "'a\nb'")
   }
 

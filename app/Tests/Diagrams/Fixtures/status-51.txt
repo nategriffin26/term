@@ -1,0 +1,47 @@
+▌ diag          158G ·  54% ·  23% · 00:41
+          ┌──────────────┼──┤ 2FA enabled? │
+          │              │  │              │
+         Yes             │  ◇───────┬──────◇
+          │              │          │
+          │              │          │
+          │              │          │
+          │              │          │
+          ▼              │          │
+ ┌─────────────────┐     │          │
+ │                 │     │         No
+ │    Enter code   │     │          │
+ │                 │     │          │
+ └────────┬────────┘     │          │
+          │              │          │
+          │              │          │
+          │              │          │
+          │              │          │
+          ▼              │          │
+ ◇─────────────────◇     │          │
+ │                 │     │          │
+ │   Code valid?   │ ├───┼──────────┤
+ │                 │     │          │
+ ◇────────┬────────◇     │         Yes
+          │              │          │
+         No              │          │
+          │              │          │
+          │              │          │
+          ▼              │          ▼
+ ┌─────────────────┐     │  ┌──────────────┐
+ │                 │     │  │              │
+ │    Show error   │  No─┘  │   Sign in    │
+ │                 │        │              │
+ └─────────────────┘        └──────────────┘
+
+ ※ recap: Overall goal: a diagram of a client
+ fetching a token and calling an API. Both
+ diagrams are drawn, the token sequence and the
+ sign-in flowchart. Next: waiting for your next
+ request.
+
+                                        55.2 tok/s
+
+────────── 󰒪 DIAG: Draw client token API sequence ─
+❯
+───────────────────────────────────────────────────
+ 󰵗 ·  Haiku 5.5 · 󰪟 low ·  …gwork ·  2.7%/1M 󰁨

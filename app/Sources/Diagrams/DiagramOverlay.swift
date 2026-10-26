@@ -1,35 +1,33 @@
 import UIKit
 
-/// Where a diagram goes over its ASCII block, in points from the grid's top
-/// left. The tile covers exactly the block's visible rows, so it never hides
-/// real text. The image is centered and starts at the block's first row; a
-/// block that runs off the top keeps it pinned at the top until the block's
+/// Where a diagram goes over its ASCII drawing, in points from the grid's top
+/// left. The tile covers exactly the drawing's visible rows, so it never hides
+/// real text. The image is centered and starts at the drawing's first row; a
+/// drawing that goes on above the screen keeps it pinned at the top until its
 /// remaining rows are shorter than it, then it leaves with the last row.
 struct DiagramPlacement: Equatable {
-  /// The block's visible rows, full width.
+  /// The drawing's visible rows, full width.
   var tile: CGRect
   /// The image, relative to the tile (it may extend past it and is clipped).
   var image: CGRect
 
-  /// Smallest height scale used to fit a diagram within its block.
+  /// Smallest height scale used to fit a diagram within its drawing.
   static let minScale: CGFloat = 0.75
 
-  /// `top`/`bottom`: the block's rows on screen (`top` 0 when it may continue
-  /// above). `cell`: one cell in points. `size`: the image in points.
-  static func place(top: Int, bottom: Int, rows: Int, cols: Int, cell: CGSize, size: CGSize) -> DiagramPlacement? {
-    let first = max(top, 0), last = min(bottom, rows - 1)
-    guard last >= first, size.width > 0, size.height > 0 else { return nil }
+  /// `cell`: one cell in points. `size`: the image in points.
+  static func place(_ drawing: DiagramMatcher.Match, cols: Int, cell: CGSize, size: CGSize) -> DiagramPlacement? {
+    guard drawing.bottom >= drawing.top, size.width > 0, size.height > 0 else { return nil }
     let width = CGFloat(cols) * cell.width
-    let tile = CGRect(x: 0, y: CGFloat(first) * cell.height, width: width, height: CGFloat(last - first + 1) * cell.height)
+    let tile = CGRect(x: 0, y: CGFloat(drawing.top) * cell.height,
+                      width: width, height: CGFloat(drawing.bottom - drawing.top + 1) * cell.height)
     var scale = min(1, CGFloat(max(cols - 2, 1)) * cell.width / size.width)
-    // Both edges on screen: the whole block is known, so fit it, within reason.
-    if top > 0, bottom < rows - 1, size.height * scale > tile.height {
+    // Both edges on screen: the whole drawing is known, so fit it, within reason.
+    if !drawing.openTop, !drawing.openBottom, size.height * scale > tile.height {
       scale = min(scale, max(tile.height / size.height, minScale))
     }
     let shown = CGSize(width: size.width * scale, height: size.height * scale)
-    let y = top > 0 ? 0 : min(0, tile.height - shown.height)
-    let pinned = bottom < rows - 1 ? y : 0
-    return DiagramPlacement(tile: tile, image: CGRect(x: (width - shown.width) / 2, y: pinned, width: shown.width, height: shown.height))
+    let y = drawing.openTop && !drawing.openBottom ? min(0, tile.height - shown.height) : 0
+    return DiagramPlacement(tile: tile, image: CGRect(x: (width - shown.width) / 2, y: y, width: shown.width, height: shown.height))
   }
 }
 
@@ -44,8 +42,8 @@ final class DiagramOverlay: UIView {
   /// The screen's rows as text, from the last frame that had a drawing.
   private var rows: [String] = []
   private var matches: [DiagramMatcher.Match] = []
-  /// Drawings by their text: the source each is, or nil. Cleared when sources change.
-  private var known: [String: String?] = [:]
+  /// Drawings by their text: what each draws, or nil. Cleared when sources change.
+  private var known: [String: DiagramMatcher.Drawn?] = [:]
   private var tiles: [UIView] = []
 
   init(terminal: TerminalView) {
@@ -84,20 +82,23 @@ final class DiagramOverlay: UIView {
     if known.count > 256 { known = [:] }
     var found: [DiagramMatcher.Match] = []
     var unmatched: Set<String> = []
-    for block in DiagramMatcher.blocks(rows) {
-      let text = rows[block.top...block.bottom].joined(separator: "\n")
-      let hash: String?
+    for block in DiagramMatcher.blocks(rows) where block.glyphRows >= DiagramMatcher.minGlyphRows {
+      let lines = rows[block.top...block.bottom]
+      let text = lines.joined(separator: "\n")
+      let drawn: DiagramMatcher.Drawn?
       if let memo = known[text] {
-        hash = memo
+        drawn = memo
       } else {
-        hash = DiagramMatcher.source(of: DiagramMatcher.words(text), in: source.candidates)
-        known[text] = hash
+        drawn = DiagramMatcher.drawn(lines, in: source.candidates)
+        known[text] = drawn
       }
-      if let hash {
-        found.append(.init(top: block.top, bottom: block.bottom, hash: hash))
-      } else if block.glyphRows >= 3 {
-        // Two rules (omp's composer) are not a drawing worth a fetch.
-        let words = Set(DiagramMatcher.words(text))
+      if let drawn {
+        found.append(block.match(drawn, rows: rows.count))
+      } else {
+        // Named without the screen's first and last rows: a status line's
+        // clock there would make it a new drawing every minute.
+        let inner = rows[max(block.top, 1)...min(block.bottom, rows.count - 2)]
+        let words = Set(DiagramMatcher.words(inner.joined(separator: "\n")))
         if words.count >= 2 { unmatched.insert(words.sorted().joined(separator: " ")) }
       }
     }
@@ -117,8 +118,7 @@ final class DiagramOverlay: UIView {
       let request = DiagramEngine.Request(
         hash: m.hash, maxWidth: Int(CGFloat(max(snapshot.cols - 2, 1)) * cell.width), style: style(snapshot))
       guard let image = DiagramEngine.shared.image(request, source: src, ready: { [weak self] in self?.layoutTiles() }),
-            let place = DiagramPlacement.place(top: m.top, bottom: m.bottom, rows: snapshot.rows, cols: snapshot.cols,
-                                               cell: cell, size: image.size)
+            let place = DiagramPlacement.place(m, cols: snapshot.cols, cell: cell, size: image.size)
       else { continue }
       let tile = used < tiles.count ? tiles[used] : makeTile()
       used += 1

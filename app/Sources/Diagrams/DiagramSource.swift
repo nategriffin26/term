@@ -17,7 +17,8 @@ final class DiagramSource {
   /// publishing it, and a drawing with no source (a table, tool output) must
   /// not fetch for as long as it stays on screen.
   static let triesPerDrawing = 3
-  static let fetchInterval: Duration = .milliseconds(1500)
+  /// Least time between two fetches.
+  let fetchInterval: Duration
   /// Sources kept, oldest dropped first.
   static let capacity = 64
 
@@ -36,8 +37,9 @@ final class DiagramSource {
   /// New sources arrived, or a fetch finished: match the screen again.
   var onChange: (() -> Void)?
 
-  init(tmuxSession: String?, exec: @escaping Exec) {
+  init(tmuxSession: String?, fetchInterval: Duration = .milliseconds(1500), exec: @escaping Exec) {
     self.exec = exec
+    self.fetchInterval = fetchInterval
     command = Self.fetchCommand(tmuxSession: tmuxSession)
   }
 
@@ -76,9 +78,9 @@ final class DiagramSource {
     let open = drawings.filter { tries[$0, default: 0] < Self.triesPerDrawing }
     guard !open.isEmpty, !fetching, retry == nil else { return }
     let clock = ContinuousClock()
-    if let last = lastFetch, clock.now < last + Self.fetchInterval {
-      retry = Task { [weak self] in
-        try? await clock.sleep(until: last + Self.fetchInterval)
+    if let last = lastFetch, clock.now < last + fetchInterval {
+      retry = Task { [weak self, fetchInterval] in
+        try? await clock.sleep(until: last + fetchInterval)
         guard let self, !Task.isCancelled else { return }
         retry = nil
         onChange?()

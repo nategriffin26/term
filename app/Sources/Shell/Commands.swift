@@ -147,10 +147,12 @@ enum Command: Equatable {
     return .success(words)
   }
 
-  /// Quotes a word for a remote POSIX shell only when it needs it.
+  /// Quotes a word for a remote POSIX shell only when it needs it. A leading
+  /// `=` needs it too: zsh (a Mac's login shell) expands `=name` to the path of
+  /// command `name`, so tmux's exact-match target `=session` fails unquoted.
   static func shellQuote(_ word: String) -> String {
     let safe = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%_-+=:,./")
-    if !word.isEmpty, word.unicodeScalars.allSatisfy(safe.contains) { return word }
+    if !word.isEmpty, !word.hasPrefix("="), word.unicodeScalars.allSatisfy(safe.contains) { return word }
     return "'" + word.replacing("'", with: "'\\''") + "'"
   }
 

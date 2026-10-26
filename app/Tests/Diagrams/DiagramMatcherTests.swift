@@ -50,7 +50,45 @@ final class DiagramMatcherTests: XCTestCase {
   /// The live screen: only the flowchart's last three rows are left at the top.
   func testLiveScreenCatchesThePartialDrawingAtTheTop() throws {
     XCTAssertEqual(DiagramMatcher.match(try rows("screen-51"), sources),
-                   [.init(top: 0, bottom: 2, hash: "flow"), .init(top: 7, bottom: 35, hash: "seq")])
+                   [.init(top: 0, bottom: 2, hash: "flow", openTop: true), .init(top: 7, bottom: 35, hash: "seq")])
+  }
+
+  /// Seen live on the iPhone: tmux's status line sat right on a flowchart
+  /// that ran off the top, its words (clock, battery) sank the block under
+  /// the precision bar, and the flowchart stayed ASCII. The status row is not
+  /// part of the drawing, and the drawing goes on behind it.
+  func testStatusLineOnTopOfADrawingIsLeftOut() throws {
+    let signIn = DiagramMatcher.Candidate(hash: "signin", time: 3, source: """
+      flowchart TD
+          A[Enter password] --> B{Password valid?}
+          B -- No --> C[Show error]
+          B -- Yes --> D{2FA enabled?}
+          D -- No --> E[Sign in]
+          D -- Yes --> F[Enter code]
+          F --> G{Code valid?}
+          G -- Yes --> E
+          G -- No --> C
+      """)
+    XCTAssertEqual(DiagramMatcher.match(try rows("status-51"), sources + [signIn]),
+                   [.init(top: 1, bottom: 33, hash: "signin", openTop: true)])
+  }
+
+  /// At most two foreign rows come off an edge: past that, it is not the drawing.
+  func testAtMostTwoRowsTrimmedAtAnEdge() {
+    let ab = DiagramMatcher.Candidate(hash: "ab", time: 1, source: "flowchart TD\n A[alpha] --> B[beta]")
+    let box = ["┌───────┐", "│ alpha │", "└───┬───┘", "    ▼", "┌───────┐", "│ beta  │", "└───────┘"]
+    let chrome = "▌zebra yak ◉ 12% ▬ 00:41"
+    XCTAssertEqual(DiagramMatcher.match([chrome, chrome] + box + [chrome, chrome], [ab]),
+                   [.init(top: 2, bottom: 8, hash: "ab", openTop: true, openBottom: true)])
+    XCTAssertEqual(DiagramMatcher.match([chrome, chrome, chrome] + box, [ab]), [])
+  }
+
+  /// omp's composer, two rules around the prompt, is never a drawing, even
+  /// when its title is all words of a source.
+  func testComposerIsNotADrawing() {
+    let composer = ["", "─── alpha beta ───", "❯ ", "──────────────", ""]
+    let ab = DiagramMatcher.Candidate(hash: "ab", time: 1, source: "flowchart TD\n A[alpha] --> B[beta]")
+    XCTAssertEqual(DiagramMatcher.match(composer, [ab]), [])
   }
 
   /// No source published: every drawing stays ASCII.
@@ -65,16 +103,20 @@ final class DiagramMatcherTests: XCTestCase {
                    [[0, 3, 2], [5, 5, 1], [9, 9, 1]])
   }
 
+  func source(_ seen: [String], in candidates: [DiagramMatcher.Candidate]) -> String? {
+    DiagramMatcher.drawn([seen.joined(separator: " ")], in: candidates)?.hash
+  }
+
   func testWordsArePrefixesCutAtThePaneEdge() {
     XCTAssertEqual(DiagramMatcher.words("│ ASCII dia  show-options @diagrams. x 5.5"), ["ascii", "dia", "show-options", "diagrams", "5.5"])
-    XCTAssertEqual(DiagramMatcher.source(of: ["ascii", "dia", "attach", "scre", "sources"], in: sources), "seq")
+    XCTAssertEqual(source(["ascii", "dia", "attach", "scre", "sources"], in: sources), "seq")
   }
 
   /// Under 80% of a block's words in a source: not that source.
   func testPrecisionBar() {
     let four = ["phone", "tmux", "sources", "zebra", "yak"]
-    XCTAssertNil(DiagramMatcher.source(of: four, in: sources))
-    XCTAssertEqual(DiagramMatcher.source(of: Array(four.prefix(4)) + ["phone"], in: sources), "seq")
+    XCTAssertNil(source(four, in: sources))
+    XCTAssertEqual(source(Array(four.prefix(4)) + ["phone"], in: sources), "seq")
   }
 
   /// Same words in two sources: the one that covers more of its own words, then the newer.
@@ -82,8 +124,8 @@ final class DiagramMatcherTests: XCTestCase {
     let a = DiagramMatcher.Candidate(hash: "a", time: 1, source: "flowchart TD\n A[alpha] --> B[beta]")
     let b = DiagramMatcher.Candidate(hash: "b", time: 2, source: "flowchart TD\n A[alpha] --> B[beta]")
     let wide = DiagramMatcher.Candidate(hash: "wide", time: 3, source: "flowchart TD\n A[alpha] --> B[beta] --> C[gamma] --> D[delta]")
-    XCTAssertEqual(DiagramMatcher.source(of: ["alpha", "beta"], in: [a, b]), "b")
-    XCTAssertEqual(DiagramMatcher.source(of: ["alpha", "beta"], in: [a, wide]), "a")
+    XCTAssertEqual(source(["alpha", "beta"], in: [a, b]), "b")
+    XCTAssertEqual(source(["alpha", "beta"], in: [a, wide]), "a")
   }
 }
 
@@ -91,8 +133,10 @@ final class DiagramMatcherTests: XCTestCase {
 final class DiagramPlacementTests: XCTestCase {
   let cell = CGSize(width: 7.5, height: 17)
 
+  /// A drawing at row 0 may go on above the screen, one at row 44 below it.
   func place(top: Int, bottom: Int, height: CGFloat, width: CGFloat = 300) -> DiagramPlacement? {
-    DiagramPlacement.place(top: top, bottom: bottom, rows: 45, cols: 51, cell: cell, size: CGSize(width: width, height: height))
+    DiagramPlacement.place(.init(top: top, bottom: bottom, hash: "", openTop: top == 0, openBottom: bottom == 44),
+                           cols: 51, cell: cell, size: CGSize(width: width, height: height))
   }
 
   func testTileCoversExactlyTheVisibleRowsAndImageIsCentered() throws {

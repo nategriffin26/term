@@ -216,6 +216,9 @@ final class TmuxTests: XCTestCase {
     XCTAssertEqual(try Command.tokenize(Tmux.reattachCommand("my notes")).get(), ["tmux", "attach", "-t", "=my notes"])
     XCTAssertEqual(try Command.tokenize(Tmux.reattachCommand("it's")).get(), ["tmux", "attach", "-t", "=it's"])
     XCTAssertEqual(Tmux.hasSessionCommand("my notes"), Tmux.path + "; tmux has-session -t '=my notes'")
+    // A plain name too: zsh would expand an unquoted `=diag`.
+    XCTAssertEqual(Tmux.hasSessionCommand("diag"), Tmux.path + "; tmux has-session -t '=diag'")
+    XCTAssertEqual(Tmux.reattachCommand("diag"), "tmux attach -t '=diag'")
   }
 
   func testHistoryCommand() {

@@ -5,19 +5,39 @@
 /// block is a run of diagram rows; up to two non-blank rows without a glyph
 /// are bridged, because an edge label can sit on a row of its own. A block is
 /// a source's drawing when at least 80% of its words begin a word of the
-/// source: omp clips rows at the pane width, so a word may be cut short.
+/// source: omp clips rows at the pane width, so a word may be cut short. Up to
+/// two rows at either edge whose words mostly aren't the source's (tmux's
+/// status line right above a drawing) are left out, and the drawing is taken
+/// to go on behind them.
 enum DiagramMatcher {
   struct Block: Equatable {
     var top: Int
     var bottom: Int
     /// Rows in it that hold a glyph (bridged label rows don't count).
     var glyphRows: Int
+
+    /// The rows `drawn` covers of this block, on a screen `rows` tall.
+    func match(_ drawn: Drawn, rows: Int) -> Match {
+      Match(top: top + drawn.trimTop, bottom: bottom - drawn.trimBottom, hash: drawn.hash,
+            openTop: top == 0 || drawn.trimTop > 0, openBottom: bottom == rows - 1 || drawn.trimBottom > 0)
+    }
   }
 
+  /// A source's drawing on screen, and whether it may go on past either edge
+  /// (off screen, or behind a status line).
   struct Match: Equatable {
     var top: Int
     var bottom: Int
     var hash: String
+    var openTop = false
+    var openBottom = false
+  }
+
+  /// The source a block draws, and the rows at its edges that aren't part of it.
+  struct Drawn: Equatable {
+    var hash: String
+    var trimTop = 0
+    var trimBottom = 0
   }
 
   /// A published source, its words ready for matching.
@@ -31,9 +51,20 @@ enum DiagramMatcher {
       self.time = time
       vocab = Set(DiagramMatcher.words(source))
     }
+
+    /// At least `minPrecision` of `seen` begin a word of the source (none seen: yes).
+    func covers(_ seen: [String]) -> Bool {
+      let hits = seen.reduce(0) { n, w in n + (vocab.contains(w) || vocab.contains { $0.hasPrefix(w) } ? 1 : 0) }
+      return seen.isEmpty || Double(hits) / Double(seen.count) >= minPrecision
+    }
   }
 
   static let minPrecision = 0.8
+  /// Edge rows at most left out of a drawing, at each edge.
+  static let maxTrim = 2
+  /// Fewest glyph rows in a drawing: omp's composer (two rules around the
+  /// prompt) is not one, however its title reads.
+  static let minGlyphRows = 3
 
   /// U+2190–21FF arrows, U+2500–259F box drawing and blocks, U+25A0–25FF geometric shapes.
   static func isGlyph(_ v: UInt32) -> Bool {
@@ -93,27 +124,29 @@ enum DiagramMatcher {
     return out
   }
 
-  /// The source drawn in a block, by its words: nil when under two words or
-  /// no source reaches the precision bar. Ties go to higher recall, then to
+  /// The source a block's rows draw, by their words: nil when under two words
+  /// or no source reaches the precision bar. Ties go to higher recall, then to
   /// the newer source.
-  static func source(of seen: [String], in candidates: [Candidate]) -> String? {
-    guard seen.count >= 2 else { return nil }
-    let distinct = Set(seen)
-    var best: (recall: Double, time: Double, hash: String)?
+  static func drawn(_ rows: some Collection<String>, in candidates: [Candidate]) -> Drawn? {
+    let lines = rows.map { words($0) }
+    guard !lines.isEmpty else { return nil }
+    var best: (recall: Double, time: Double, drawn: Drawn)?
     for c in candidates {
-      let hits = seen.reduce(0) { n, w in n + (c.vocab.contains(w) || c.vocab.contains { $0.hasPrefix(w) } ? 1 : 0) }
-      guard Double(hits) / Double(seen.count) >= minPrecision else { continue }
-      let recall = Double(c.vocab.intersection(distinct).count) / Double(max(1, c.vocab.count))
+      var top = 0, bottom = lines.count - 1
+      while top < min(maxTrim, bottom), !c.covers(lines[top]) { top += 1 }
+      while bottom > max(top, lines.count - 1 - maxTrim), !c.covers(lines[bottom]) { bottom -= 1 }
+      let seen = Array(lines[top...bottom].joined())
+      guard seen.count >= 2, c.covers(seen) else { continue }
+      let recall = Double(c.vocab.intersection(seen).count) / Double(max(1, c.vocab.count))
       if let b = best, (recall, c.time) <= (b.recall, b.time) { continue }
-      best = (recall, c.time, c.hash)
+      best = (recall, c.time, Drawn(hash: c.hash, trimTop: top, trimBottom: lines.count - 1 - bottom))
     }
-    return best?.hash
+    return best?.drawn
   }
 
   static func match(_ rows: [String], _ candidates: [Candidate]) -> [Match] {
-    blocks(rows).compactMap { b in
-      let seen = words(rows[b.top...b.bottom].joined(separator: "\n"))
-      return source(of: seen, in: candidates).map { Match(top: b.top, bottom: b.bottom, hash: $0) }
+    blocks(rows).filter { $0.glyphRows >= minGlyphRows }.compactMap { b in
+      drawn(rows[b.top...b.bottom], in: candidates).map { b.match($0, rows: rows.count) }
     }
   }
 }
