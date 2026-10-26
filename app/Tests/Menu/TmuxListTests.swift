@@ -66,6 +66,22 @@ final class TmuxListTests: XCTestCase {
     XCTAssertEqual(TmuxList.hide(["$9"], from: []).0, [])
   }
 
+  /// Bug it catches (seen on the sim): api and ops print every 2-3 s, so
+  /// sorting each refresh by activity swapped their rows, and a tap on ops's
+  /// swipe Close landed on api. Rows hold their places; a new session goes
+  /// first; one that ended leaves; each keeps tmux's latest values.
+  func testRefreshKeepsTheOrderShown() {
+    let shown = [session("$1", "api"), session("$2", "ops"), session("$3", "docs")]
+    let fresh = [session("$2", "ops", activity: 300), session("$4", "new", activity: 250),
+                 session("$1", "api-renamed", activity: 200)]
+    let kept = TmuxList.keepOrder(shown, fresh)
+    XCTAssertEqual(kept.map(\.id), ["$4", "$1", "$2"])
+    XCTAssertEqual(kept.map(\.name), ["new", "api-renamed", "ops"])
+    XCTAssertEqual(kept[2].lastActivity, Date(timeIntervalSince1970: 300))
+    XCTAssertEqual(TmuxList.keepOrder([], fresh).map(\.id), ["$2", "$4", "$1"])
+    XCTAssertEqual(TmuxList.keepOrder(shown, []).map(\.id), [])
+  }
+
   /// Output recorded from tmux 3.6a `kill-session` on a `-L` server: a
   /// session already gone is closed, anything else is why it is still there.
   func testCloseComplaintIgnoresSessionsAlreadyGone() {

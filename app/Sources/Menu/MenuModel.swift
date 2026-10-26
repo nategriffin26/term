@@ -78,7 +78,11 @@ final class MenuModel {
   /// The host the tmux tab scrolls to when it shows (`tmux host` at the prompt).
   var tmuxTarget: String?
   /// The tmux tab shows checkboxes, to close several sessions at once.
-  var tmuxSelecting = false
+  var tmuxSelecting = false {
+    didSet { if !tmuxSelecting { tmuxSelection = [] } }
+  }
+  /// Rows checked while selecting, by `TmuxTab.rowID`.
+  var tmuxSelection = Set<String>()
 
   init() {
     tab = UserDefaults.standard.string(forKey: Self.lastTabKey).flatMap(MenuTab.init(rawValue:)) ?? .sessions

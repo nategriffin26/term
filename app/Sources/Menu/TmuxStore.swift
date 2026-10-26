@@ -44,6 +44,14 @@ enum TmuxList {
     (sessions.filter { !closing.contains($0.id) }, closing.intersection(sessions.map(\.id)))
   }
 
+  /// A refresh's sessions in the order already shown, so a row never moves
+  /// under his finger as sessions print; ones new since then go first.
+  static func keepOrder(_ shown: [Tmux.Session], _ fresh: [Tmux.Session]) -> [Tmux.Session] {
+    let known = Set(shown.map(\.id))
+    let byID = Dictionary(fresh.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    return fresh.filter { !known.contains($0.id) } + shown.compactMap { byID[$0.id] }
+  }
+
   /// Why closing failed, from the kills' output; a session already gone is closed.
   static func closeComplaint(_ output: Data) -> String? {
     String(decoding: output, as: UTF8.self).split(whereSeparator: \.isNewline)
@@ -124,6 +132,8 @@ final class TmuxStore {
   /// Sessions being closed or closed, by server key: the list leaves them
   /// out, even from a refresh that started before they ended.
   @ObservationIgnored private var closing: [String: Set<String>] = [:]
+  /// Servers listed since the tab opened: their order holds until it closes.
+  @ObservationIgnored private var ordered: Set<String> = []
 
   /// While the tmux tab shows: often enough to follow a build scrolling by,
   /// cheap because only sessions with new activity are captured again.
@@ -139,8 +149,10 @@ final class TmuxStore {
   func screen(_ key: String, _ id: String) -> Data? { screens[key + "\t" + id] }
 
   /// Refreshes `hosts` now and every `interval` until the task is cancelled
-  /// (the tmux tab hides). The first pass also retries unreachable hosts.
+  /// (the tmux tab hides). The first pass also retries unreachable hosts and
+  /// lists each host most recently active first.
   func watch(_ hosts: @MainActor () -> [Host]) async {
+    ordered = []
     var first = true
     while !Task.isCancelled {
       for host in hosts() {
@@ -177,7 +189,9 @@ final class TmuxStore {
     case .success(let output):
       switch Tmux.parseOverview(status: output.status, output: output.stdout) {
       case .success(let overview):
-        server = Server(status: .ready, sessions: overview.sessions)
+        let sessions = ordered.contains(key) ? TmuxList.keepOrder(servers[key]?.sessions ?? [], overview.sessions) : overview.sessions
+        ordered.insert(key)
+        server = Server(status: .ready, sessions: sessions)
         for session in overview.sessions {
           guard let screen = overview.screens[session.id] else { continue }
           show(screen, of: session, key: key)

@@ -6,12 +6,12 @@ import SwiftUI
 /// shows the screen larger.
 struct TmuxTab: View {
   let model: MenuModel
-  /// Rows checked in select mode, by `rowID`.
-  @State private var selection = Set<String>()
   @State private var confirming = false
   @State private var failure: String?
   /// The host `tmux host` asked for, kept at the top until he scrolls.
   @State private var reveal: String?
+  /// Bumped when the menu closes, so a row left swiped open is closed next time.
+  @State private var generation = 0
   @Environment(\.displayScale) private var displayScale
 
   static let snapshot = CGSize(width: 64, height: 40)
@@ -50,8 +50,8 @@ struct TmuxTab: View {
       guard model.isOpen, model.tab == .tmux else { return }
       await store.watch { TmuxList.servers(ConfigStore.shared.hosts) }
     }
-    .onChange(of: model.tmuxSelecting) { _, on in
-      if !on { selection = [] }
+    .onChange(of: model.isOpen) { _, open in
+      if !open { generation += 1 }
     }
     .alert(failure ?? "", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
       Button("OK", role: .cancel) {}
@@ -80,6 +80,7 @@ struct TmuxTab: View {
           }
         }
       }
+      .id(generation)
       .listStyle(.plain)
       .scrollContentBackground(.hidden)
       .environment(\.defaultMinListRowHeight, 0)
@@ -111,14 +112,14 @@ struct TmuxTab: View {
     let detach: (() -> Void)? = others > 0 ? { detachOthers(session, on: host, keeping: mine) } : nil
     return Button {
       if model.tmuxSelecting {
-        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        if model.tmuxSelection.contains(id) { model.tmuxSelection.remove(id) } else { model.tmuxSelection.insert(id) }
       } else {
         open()
       }
     } label: {
       TmuxRow(model: model, host: host, session: session, fonts: fonts,
               dot: !mine.isEmpty ? Helm.accent : session.attached > 0 ? Helm.fg2 : nil,
-              checked: model.tmuxSelecting ? selection.contains(id) : nil)
+              checked: model.tmuxSelecting ? model.tmuxSelection.contains(id) : nil)
     }
     .buttonStyle(RowStyle())
     .listRowInsets(EdgeInsets())
@@ -139,11 +140,11 @@ struct TmuxTab: View {
       TmuxPreview(model: model, host: host, session: session)
     }
     .accessibilityLabel("\(session.name), \(host.alias)")
-    .accessibilityAddTraits(model.tmuxSelecting && selection.contains(id) ? .isSelected : [])
+    .accessibilityAddTraits(model.tmuxSelecting && model.tmuxSelection.contains(id) ? .isSelected : [])
   }
 
   private func selectBar(store: TmuxStore) -> some View {
-    let count = selected(store).count
+    let count = selected(store).reduce(0) { $0 + $1.1.count }
     return VStack(spacing: 0) {
       Rectangle().fill(Helm.line).frame(height: 1)
       Button(count > 0 ? "Close \(count)" : "Close") { confirming = true }
@@ -166,7 +167,7 @@ struct TmuxTab: View {
   /// The checked sessions still listed, with their hosts.
   private func selected(_ store: TmuxStore) -> [(Host, [Tmux.Session])] {
     TmuxList.servers(ConfigStore.shared.hosts).compactMap { host in
-      let picked = (store.servers[host.serverKey]?.sessions ?? []).filter { selection.contains(Self.rowID(host, $0)) }
+      let picked = (store.servers[host.serverKey]?.sessions ?? []).filter { model.tmuxSelection.contains(Self.rowID(host, $0)) }
       return picked.isEmpty ? nil : (host, picked)
     }
   }
