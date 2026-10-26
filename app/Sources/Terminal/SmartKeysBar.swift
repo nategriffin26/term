@@ -432,7 +432,7 @@ private final class KeyCap: UIView {
 
     /// `secondary`: drawn in the second text colour (hide-keyboard, which leaves the terminal be).
     func configure(symbol: String, secondary: Bool = false) {
-        let view = UIImageView(image: UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control)))
+        let view = UIImageView(image: UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control, size: .standard)))
         view.contentMode = .center
         view.isUserInteractionEnabled = false
         icon = view
@@ -529,7 +529,7 @@ private final class KeyCap: UIView {
         let traits = traitCollection
         plate.backgroundColor = on ? Chrome.UI.fg : pressed && arms.isEmpty ? Chrome.UI.fill3 : .clear
         let ink = on ? Chrome.UI.bg : Chrome.UI.fg
-        let font = Chrome.uiFont(.title, on ? .semibold : .regular)
+        let font = Chrome.uiFont(.title, on ? .semibold : .regular, size: .standard)
         for label in [title, upper] {
             label.textColor = ink
             label.font = font
@@ -556,6 +556,7 @@ private final class KeyCap: UIView {
         progress = 0
         startY = t.location(in: self).y
         UIDevice.current.playInputClick()
+        Haptics.keyDown()
         if onArrow != nil {
             aim(at: t.location(in: self))
         } else if onHold != nil {
@@ -564,6 +565,7 @@ private final class KeyCap: UIView {
                     guard let self else { return }
                     self.held = true
                     UIDevice.current.playInputClick()
+                    Haptics.firm()
                     self.onHold?()
                 }
             }

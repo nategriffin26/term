@@ -81,10 +81,10 @@ final class EditorKeysBar: UIInputView {
     config.baseForegroundColor = Chrome.UI.fg2
     config.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)
     if let text {
-      config.attributedTitle = AttributedString(text, attributes: AttributeContainer([.font: Chrome.uiMono(.title)]))
+      config.attributedTitle = AttributedString(text, attributes: AttributeContainer([.font: Chrome.uiMono(.title, size: .standard)]))
     }
     if let symbol {
-      config.image = UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control))
+      config.image = UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control, size: .standard))
     }
     let button = UIButton(configuration: config, primaryAction: UIAction { _ in
       UIDevice.current.playInputClick()

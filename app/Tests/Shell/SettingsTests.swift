@@ -30,7 +30,7 @@ final class ThemeStripTests: XCTestCase {
 
   // Bug: a typo in the strip silently drops that theme from it.
   func testEveryStripThemeShips() {
-    let shipped = Set(Theme.all.map(\.name))
+    let shipped = Set(Theme.names)
     for name in TerminalAppearancePage.strip { XCTAssertTrue(shipped.contains(name), name) }
   }
 }

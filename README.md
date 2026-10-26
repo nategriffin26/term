@@ -19,7 +19,7 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **A floating menu** for Sessions, tmux, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
 - **Smart Keys** for Esc, Ctrl, Alt, symbols and arrows, with configurable key repeat.
 - **Pinch to resize.** JetBrains Mono and Iosevka Nerd Fonts are built in.
-- **Your look.** Settings › Appearance picks from 46 terminal themes with a live preview (Term's own Dusk unless you pick another), the font, size and line height, and the cursor: block, bar or underline, blinking or steady, and whether programs like vim may change it. The app's own colors follow the terminal theme, on glass tinted by it.
+- **Your look.** Settings › Appearance picks from 823 terminal themes (searchable, with a live preview; Term's own Dusk unless you pick another) or one you import as a Ghostty theme or `.itermcolors` file, the font, size and line height, and the cursor: block, bar or underline, blinking or steady, and whether programs like vim may change it. The app's own colors follow the terminal theme, on clear or tinted glass, with the text size, home screen icon and haptics yours to pick.
 - **iPhone Duo layouts** for both displays, two windows side by side, and a menu dock in the inner display's status band.
 
 <p align="center">

@@ -107,7 +107,7 @@ struct TerminalAppearancePage: View {
   }
 
   private var themeStrip: some View {
-    let names = Self.stripNames(current: settings.themeName, catalog: Theme.all.map(\.name))
+    let names = Self.stripNames(current: settings.themeName, catalog: Theme.names)
     return ScrollViewReader { proxy in
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(alignment: .top, spacing: Chrome.Space.s) {
@@ -188,38 +188,132 @@ private struct ThemeTile: View {
   }
 }
 
+/// Every theme: the user's imports (swipe to delete), then Term's own and
+/// the iTerm2-Color-Schemes catalog by lightness, with a search over names.
 struct ThemesView: View {
   @Bindable private var settings = AppSettings.shared
+  @State private var query = ""
+  @State private var imported = ImportedThemes.all()
+  @State private var importing = false
+  @State private var failure: String?
+  @FocusState private var searching: Bool
 
   var body: some View {
     SettingsPageView(title: "Themes") {
+      CircleButton(symbol: "square.and.arrow.down", label: "Import Theme") { importing = true }
+    } content: {
       PreviewPage {
+        searchField
+          .padding(.horizontal, Chrome.Space.m)
+          .padding(.top, Chrome.Space.s)
         ScrollViewReader { proxy in
+          let mine = Theme.search(imported, query)
+          let shipped = Theme.search(Theme.bundled, query)
           List {
-            section("Dark", Theme.all.filter(\.isDark))
-            section("Light", Theme.all.filter { !$0.isDark })
+            section("Imported", mine, deletable: true)
+            section("Dark", shipped.filter(\.isDark))
+            section("Light", shipped.filter { !$0.isDark })
           }
           .chromeList()
+          .scrollDismissesKeyboard(.immediately)
+          .overlay(alignment: .top) {
+            if mine.isEmpty && shipped.isEmpty {
+              Text("No themes").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg2)
+                .padding(.top, 72)
+            }
+          }
           .onAppear { proxy.scrollTo(settings.themeName, anchor: .center) }
+          .onChange(of: imported) { proxy.scrollTo(settings.themeName, anchor: .center) }
         }
       }
     }
+    .sheet(isPresented: $importing) {
+      DocumentImporter { urls in
+        importing = false
+        add(urls)
+      }
+      .ignoresSafeArea()
+    }
+    .alert("Couldn't Import", isPresented: Binding { failure != nil } set: { if !$0 { failure = nil } }) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(failure ?? "")
+    }
   }
 
-  @ViewBuilder private func section(_ title: String, _ themes: [Theme]) -> some View {
+  private var searchField: some View {
+    HStack(spacing: Chrome.Space.s) {
+      Image(systemName: "magnifyingglass").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.muted)
+      TextField("Search", text: $query, prompt: Text("Search").foregroundStyle(Chrome.faint))
+        .font(Chrome.font(.body))
+        .foregroundStyle(Chrome.fg)
+        .autocorrectionDisabled()
+        .textInputAutocapitalization(.never)
+        .submitLabel(.search)
+        .focused($searching)
+      if !query.isEmpty {
+        Button { query = "" } label: {
+          Image(systemName: "xmark.circle.fill").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.muted)
+            .frame(width: Chrome.Size.target, height: Chrome.Size.control)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScale())
+        .accessibilityLabel("Clear Search")
+      }
+    }
+    .padding(.leading, Chrome.Space.m)
+    .frame(height: Chrome.Size.control)
+    .background(Capsule().fill(Chrome.fill2))
+  }
+
+  @ViewBuilder private func section(_ title: String, _ themes: [Theme], deletable: Bool = false) -> some View {
     if !themes.isEmpty {
       ListSection(title) {
         ForEach(themes) { theme in
           ChoiceRow(chosen: theme.name == settings.themeName) {
+            searching = false
             settings.themeName = theme.name
           } label: {
             ThemeThumbnail(theme: theme, compact: true)
             Text(theme.name)
           }
           .id(theme.name)
+          .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if deletable {
+              Button("Delete", role: .destructive) { delete(theme) }
+                .tint(Chrome.swipeBad)
+            }
+          }
         }
       }
     }
+  }
+
+  /// Imports each picked file; the last one read becomes the theme.
+  private func add(_ urls: [URL]) {
+    var problems: [String] = []
+    for url in urls {
+      do {
+        let theme = try ImportedThemes.add(Data(contentsOf: url), fileName: url.lastPathComponent, taken: Theme.names)
+        query = ""
+        settings.themeName = theme.name
+      } catch {
+        problems.append(error.localizedDescription)
+      }
+    }
+    imported = ImportedThemes.all()
+    if !problems.isEmpty { failure = problems.joined(separator: "\n") }
+  }
+
+  private func delete(_ theme: Theme) {
+    Haptics.firm()
+    do {
+      try ImportedThemes.delete(theme.name)
+    } catch {
+      failure = error.localizedDescription
+    }
+    if settings.themeName == theme.name { settings.themeName = Theme.own[0] }
+    imported = ImportedThemes.all()
   }
 }
 
@@ -296,7 +390,7 @@ struct FontFamilyView: View {
               ChoiceRow(chosen: family == settings.fontFamily) {
                 settings.fontFamily = family
               } label: {
-                Text(family).font(.custom(family, size: Chrome.TextStep.body.rawValue))
+                Text(family).font(.custom(family, size: Chrome.TextStep.body.size(in: settings.textSize)))
               }
             }
           }

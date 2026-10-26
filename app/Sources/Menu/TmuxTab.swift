@@ -15,7 +15,9 @@ struct TmuxTab: View {
 
   /// The session names' type, and one character's width in it.
   static let nameStep = Chrome.TextStep.body
-  private static let nameCharWidth = ("M" as NSString).size(withAttributes: [.font: Chrome.uiMono(nameStep, .medium)]).width
+  private static var nameCharWidth: CGFloat {
+    ("M" as NSString).size(withAttributes: [.font: Chrome.uiMono(nameStep, .medium)]).width
+  }
 
   var body: some View {
     let store = TmuxStore.shared
@@ -117,10 +119,10 @@ struct TmuxTab: View {
     .listRowBackground(Chrome.fill)
     .listRowSeparatorTint(Chrome.line)
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-      Button("Close", role: .destructive, action: close)
+      Button("Close", role: .destructive) { Haptics.firm(); close() }
         .tint(Chrome.swipeBad)
       if unread {
-        Button("Clear", action: clear)
+        Button("Clear") { Haptics.firm(); clear() }
           .tint(Chrome.swipeAccent)
       }
     }
@@ -236,8 +238,8 @@ private struct TmuxRow: View {
   /// Select mode's checkbox; nil outside it.
   let checked: Bool?
 
-  /// The first line's height: with the padding, a row is 50 tall.
-  private static let lineHeight: CGFloat = 20
+  /// The first line's height: with the padding, a row is 50 tall at Text Size Default.
+  private static var lineHeight: CGFloat { Chrome.TextStep.body.size(in: AppSettings.shared.textSize) + 5 }
 
   var body: some View {
     let note = TmuxList.note(agent)

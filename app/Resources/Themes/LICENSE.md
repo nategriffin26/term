@@ -2,7 +2,7 @@
 
 Dusk, Term, Tomorrow Night, Dracula, Nord, Gruvbox Dark, Catppuccin Mocha, Solarized Dark and Solarized Light are Term's own files.
 
-The rest are from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) in Ghostty's format, as Ghostty 1.3.1 ships them, unchanged. The copyright of each theme belongs to its author.
+The rest are from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) in Ghostty's format, unchanged: the first 37 Term shipped as Ghostty 1.3.1 ships them, the others from the ghostty-themes release 20261019-151001-86a776d. The copyright of each theme belongs to its author.
 
 ```
 MIT License

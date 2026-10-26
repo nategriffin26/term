@@ -114,7 +114,7 @@ final class SessionHUD: UIView {
     labels = names.map { name in
       let label = UILabel()
       label.text = name
-      label.font = Chrome.uiMono(.secondary, .medium)
+      label.font = Chrome.uiMono(.secondary, .medium, size: .standard)  // fits the HUD's fixed 18 pt strip
       label.textColor = Chrome.UI.fg
       label.textAlignment = .center
       label.lineBreakMode = .byTruncatingMiddle

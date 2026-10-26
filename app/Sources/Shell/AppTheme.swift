@@ -128,10 +128,13 @@ struct AppThemeTrait: UITraitDefinition {
 
 extension UIWindowScene {
   /// Hands the current app theme to this scene's views, and its lightness to
-  /// everything the system draws there (menus, alerts, keyboards, pickers).
+  /// everything the system draws there (menus, alerts, keyboards, pickers);
+  /// and the Glass and Text Size settings.
   @MainActor func applyAppTheme() {
-    let theme = AppSettings.shared.appTheme
+    let settings = AppSettings.shared
+    let theme = settings.appTheme
     traitOverrides[AppThemeTrait.self] = theme
     traitOverrides.userInterfaceStyle = theme.isDark ? .dark : .light
+    traitOverrides[ChromeStyleTrait.self] = ChromeStyle(glass: settings.glassStyle, textSize: settings.textSize)
   }
 }

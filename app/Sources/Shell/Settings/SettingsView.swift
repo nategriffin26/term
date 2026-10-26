@@ -246,7 +246,7 @@ struct AboutView: View {
         }
         ListSection("Licenses") {
           Text("JetBrains Mono, Iosevka: SIL Open Font License 1.1. Nerd Fonts glyphs: MIT and OFL. Ghostty: MIT. "
-            + "Terminal themes: iTerm2-Color-Schemes, MIT; each theme belongs to its author.")
+            + "Terminal themes: iTerm2-Color-Schemes (Mark Badolato and contributors), MIT; each theme belongs to its author.")
             .font(Chrome.font(.secondary))
             .foregroundStyle(Chrome.muted)
             .padding(.vertical, Chrome.Space.m)

@@ -24,12 +24,10 @@ final class StatusBanner: UIView {
     glass.translatesAutoresizingMaskIntoConstraints = false
     addSubview(glass)
 
-    label.font = Chrome.uiFont(.secondary, .medium)
     label.textColor = Chrome.UI.fg
     label.numberOfLines = 3
     label.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-    percent.font = Chrome.uiMono(.secondary)
     percent.textColor = Chrome.UI.muted
     percent.setContentHuggingPriority(.required, for: .horizontal)
     percent.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -38,13 +36,14 @@ final class StatusBanner: UIView {
     dot.layer.cornerRadius = 3.5
 
     var config = UIButton.Configuration.plain()
-    config.attributedTitle = AttributedString("Reconnect", attributes: AttributeContainer([.font: Chrome.uiFont(.secondary, .semibold)]))
     config.baseForegroundColor = Chrome.UI.fg
     config.background.backgroundColor = Chrome.UI.fill3
     config.cornerStyle = .capsule
     config.contentInsets = .init(top: 0, leading: Chrome.Space.m, bottom: 0, trailing: Chrome.Space.m)
     button.configuration = config
     button.addAction(UIAction { [weak self] _ in self?.onReconnect?() }, for: .primaryActionTriggered)
+    applyFonts()
+    registerForTraitChanges([ChromeStyleTrait.self]) { (self: Self, _) in self.applyFonts() }
 
     let stack = UIStackView(arrangedSubviews: [ring, dot, label, percent, button])
     stack.alignment = .center
@@ -75,6 +74,14 @@ final class StatusBanner: UIView {
   }
 
   required init?(coder: NSCoder) { fatalError("not used") }
+
+  /// Text at the Text Size setting; again when it changes.
+  private func applyFonts() {
+    label.font = Chrome.uiFont(.secondary, .medium)
+    percent.font = Chrome.uiMono(.secondary)
+    button.configuration?.attributedTitle = AttributedString(
+      "Reconnect", attributes: AttributeContainer([.font: Chrome.uiFont(.secondary, .semibold)]))
+  }
 
   /// Shows the banner for `tab`; returns whether it is visible.
   @discardableResult

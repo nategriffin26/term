@@ -73,6 +73,9 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(TERM_BUNDLE_ID)
         PRODUCT_NAME: Term
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # Settings › Appearance › App › App Icon; drawn by scripts/app-icons.swift.
+        ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIcon-Porcelain AppIcon-Graphite
+        ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         OTHER_LDFLAGS: [-lc++]
     dependencies:
       - framework: ../build/TermCore.xcframework

@@ -64,7 +64,7 @@ final class MenuDock: UIView {
     }
     let badge = badges[tab] ?? {
       let label = UILabel()
-      label.font = Chrome.uiFont(.caption, .bold)
+      label.font = Chrome.uiFont(.caption, .bold, size: .standard)  // sized to the dock's glyphs, which stay put
       label.textAlignment = .center
       label.backgroundColor = Chrome.UI.accent
       label.textColor = Chrome.UI.onAccent

@@ -75,14 +75,23 @@ final class ThemeParsingTests: XCTestCase {
     XCTAssertEqual(t.palette.count, 16)
   }
 
-  func testTheCatalogIsDuskThenTermThenTheOtherFortyFourByName() {
-    let all = Theme.all
-    XCTAssertEqual(all.count, 46)
+  // Bug: a shipped file Term can't read silently drops out of All while its
+  // name still counts as shipped (the strip, import's name check).
+  func testEveryShippedFileReadsAndTheCatalogIsDuskThenTermThenByName() {
+    let all = Theme.bundled
+    XCTAssertEqual(all.count, 823)
+    XCTAssertEqual(Set(Theme.names).subtracting(ImportedThemes.all().map(\.name)), Set(all.map(\.name)))
     XCTAssertEqual(all.prefix(2).map(\.name), ["Dusk", "Term"])
-    XCTAssertEqual(Set(all.map(\.name)).count, 46)
     let rest = all.dropFirst(2).map(\.name)
     XCTAssertEqual(rest, rest.sorted { $0.localizedStandardCompare($1) == .orderedAscending })
-    XCTAssertTrue(all.allSatisfy { $0.palette.count == 16 })
+  }
+
+  // Bug: a stored name no longer shipped, or one with a path in it, must
+  // fall back to Dusk rather than read outside the themes.
+  func testANamedThemeIsReadFromItsOwnFile() {
+    XCTAssertEqual(Theme.named("Nord").background, 0x2E3440)
+    XCTAssertEqual(Theme.named("Gone").name, "Dusk")
+    XCTAssertEqual(Theme.named("../Themes/Nord").name, "Dusk")
   }
 
   func testDuskIsTheMockupsPalette() {
@@ -213,6 +222,27 @@ final class AppearanceSettingsTests: XCTestCase {
     XCTAssertEqual(again.appAccent, 0xF2A65A)
     again.appAccent = nil
     XCTAssertNil(AppSettings(defaults: defaults).appAccent, "clearing the accent is stored")
+  }
+
+  // Bug: a stored Glass, Text Size or Haptics pick reset on relaunch, or a
+  // value from another build crashed or blanked the chrome.
+  func testGlassTextSizeAndHapticsDefaultSurviveARelaunchAndFallBack() {
+    let fresh = AppSettings(defaults: defaults)
+    XCTAssertEqual(fresh.glassStyle, .tinted)
+    XCTAssertEqual(fresh.textSize, .standard)
+    XCTAssertTrue(fresh.haptics)
+    fresh.glassStyle = .clear
+    fresh.textSize = .large
+    fresh.haptics = false
+    let again = AppSettings(defaults: defaults)
+    XCTAssertEqual(again.glassStyle, .clear)
+    XCTAssertEqual(again.textSize, .large)
+    XCTAssertFalse(again.haptics)
+    defaults.set("frosted", forKey: "glassStyle")
+    defaults.set("huge", forKey: "textSize")
+    let odd = AppSettings(defaults: defaults)
+    XCTAssertEqual(odd.glassStyle, .tinted)
+    XCTAssertEqual(odd.textSize, .standard)
   }
 
   func testTheCoreThemeCarriesTheUsersCursor() {
@@ -396,7 +426,7 @@ final class DerivedAppThemeTests: XCTestCase {
   /// The system's white "Clear" label vanished on Dusk's mint (1.4:1) and
   /// read poorly on its pink (2.7:1).
   func testSwipeActionFillsCarryWhiteLabelsOnEveryTheme() {
-    for shipped in Theme.all {
+    for shipped in Theme.bundled {
       let a = AppTheme.derived(from: shipped)
       XCTAssertGreaterThanOrEqual(AppTheme.contrast(a.swipeBad.rgb, 0xFFFFFF), 4.5, shipped.name)
       XCTAssertGreaterThanOrEqual(AppTheme.contrast(a.swipeAccent.rgb, 0xFFFFFF), 4.5, shipped.name)

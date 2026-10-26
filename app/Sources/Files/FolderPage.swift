@@ -139,7 +139,10 @@ private struct FolderList: View {
         .buttonStyle(RowStyle())
         .contextMenu { EntryMenu(entry: entry, browser: browser, context: context) }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-          Button(role: .destructive) { Task { await browser.delete([entry]) } } label: { Label("Delete", systemImage: "trash") }
+          Button(role: .destructive) {
+            Haptics.firm()
+            Task { await browser.delete([entry]) }
+          } label: { Label("Delete", systemImage: "trash") }
             .tint(Chrome.swipeBad)
         }
         .onDrag { browser.dragProvider(entry) }

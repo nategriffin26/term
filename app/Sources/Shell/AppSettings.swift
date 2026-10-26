@@ -53,12 +53,18 @@ final class AppSettings {
   var keyRepeatDelay: Double { didSet { store(keyRepeatDelay, "keyRepeatDelay") } }
   /// Repeats per second once a key repeats.
   var keyRepeatRate: Double { didSet { store(keyRepeatRate, "keyRepeatRate") } }
+  /// How much of the theme tints the menu panel and docks.
+  var glassStyle: GlassStyle { didSet { store(glassStyle.rawValue, "glassStyle") } }
+  /// The chrome's type size; the terminal has its own.
+  var textSize: TextSize { didSet { store(textSize.rawValue, "textSize") } }
+  /// Light taps on Smart Keys, switches and swipe actions.
+  var haptics: Bool { didSet { store(haptics, "haptics") } }
 
   @ObservationIgnored private let defaults: UserDefaults
 
   init(defaults: UserDefaults) {
     self.defaults = defaults
-    themeName = defaults.string(forKey: "themeName") ?? Theme.all[0].name
+    themeName = defaults.string(forKey: "themeName") ?? Theme.own[0]
     fontFamily = defaults.string(forKey: "fontFamily") ?? Self.bundledFontFamily
     fontSize = (defaults.object(forKey: "fontSize") as? Double) ?? 13
     lineSpacing = ((defaults.object(forKey: "lineSpacing") as? Double) ?? 1).clamped(to: Self.lineSpacingRange)
@@ -76,6 +82,9 @@ final class AppSettings {
       .clamped(to: Self.keyRepeatDelayRange)
     keyRepeatRate = ((defaults.object(forKey: "keyRepeatRate") as? Double) ?? 25)
       .clamped(to: Self.keyRepeatRateRange)
+    glassStyle = defaults.string(forKey: "glassStyle").flatMap(GlassStyle.init(rawValue:)) ?? .tinted
+    textSize = defaults.string(forKey: "textSize").flatMap(TextSize.init(rawValue:)) ?? .standard
+    haptics = (defaults.object(forKey: "haptics") as? Bool) ?? true
     refreshAppTheme()
   }
 
@@ -128,6 +137,18 @@ enum CursorColor: String, CaseIterable, Sendable {
   case theme
   /// The app's accent.
   case accent
+}
+
+enum GlassStyle: String, CaseIterable, Sendable {
+  /// The terminal shows through, lightly tinted.
+  case clear
+  /// The theme's ground mostly hides the terminal (c-glass).
+  case tinted
+}
+
+/// The chrome's type size (Chrome.TextStep.size(in:)).
+enum TextSize: String, CaseIterable, Sendable {
+  case small, standard, large
 }
 
 private extension Double {

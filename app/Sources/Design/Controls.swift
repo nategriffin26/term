@@ -224,8 +224,8 @@ struct SliderRow: View {
 // MARK: - Controls
 
 /// The segmented control: a capsule track of `fill2`, the chosen segment a
-/// lens of `fill3` that slides to the next pick. Picking the chosen one again
-/// does nothing. Segments share the width, or with `fills` off hug their
+/// lens of `fill3` that slides to the next pick, with a haptic tick. Picking
+/// the chosen one again does nothing. Segments share the width, or with `fills` off hug their
 /// labels (a compact control at a row's trailing edge).
 struct CapsuleSegmented<Value: Hashable, Label: View>: View {
   let values: [Value]
@@ -241,7 +241,11 @@ struct CapsuleSegmented<Value: Hashable, Label: View>: View {
     HStack(spacing: 0) {
       ForEach(values, id: \.self) { value in
         let selected = value == selection
-        Button { if !selected { pick(value) } } label: {
+        Button {
+          guard !selected else { return }
+          Haptics.selection()
+          pick(value)
+        } label: {
           label(value, selected)
             .lineLimit(1)
             .padding(.horizontal, Chrome.Space.l)
