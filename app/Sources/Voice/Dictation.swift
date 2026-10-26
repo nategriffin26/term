@@ -154,12 +154,14 @@ final class Dictation {
       target.dictationNeedsSettings()
       return
     }
-    switch AVAudioApplication.shared.recordPermission {
-    case .granted:
+    // Asked of the permission system, not the audio server: a stalled audio
+    // server (rpc_timeout is off) must not freeze the main thread here.
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
       listen(into: target)
-    case .undetermined:
+    case .notDetermined:
       Task { [weak self, weak target] in
-        guard await AVAudioApplication.requestRecordPermission(), let self, let target else { return }
+        guard await AVCaptureDevice.requestAccess(for: .audio), let self, let target else { return }
         listen(into: target)
       }
     default:
