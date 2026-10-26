@@ -11,7 +11,12 @@ final class ScreenToolbar: UIView {
 
   /// A column on the left edge rather than a row at the bottom.
   var vertical = false {
-    didSet { if vertical != oldValue { setNeedsLayout() } }
+    didSet {
+      guard vertical != oldValue else { return }
+      // The Displays row's pictures are drawn for the toolbar's side.
+      shownRow = nil
+      update()
+    }
   }
   /// A swipe inward that starts on the toolbar: the pointer to that edge of the Mac.
   var onEdgeSwipe: ((ScreenArrangement.Edges) -> Void)?
@@ -247,31 +252,35 @@ final class ScreenToolbar: UIView {
   private func displayOption(_ id: UInt32?) -> UIView {
     let chosen = session.settings.display == id
       || (id == nil && !session.displays.contains { $0.id == session.settings.display })
-    var config = UIButton.Configuration.plain()
-    config.contentInsets = .zero
-    config.image = arrangementImage(highlighting: id, chosen: chosen)
-    let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
+    let display = id.flatMap { id in session.displays.first { $0.id == id } }
+    let box = vertical ? CGSize(width: 42, height: 18) : CGSize(width: 64, height: 26)
+    let option = DisplayOption(picture: arrangementImage(showing: id, in: box),
+                               name: display.map(Self.shortName) ?? "All", chosen: chosen)
+    option.addAction(UIAction { [weak self] _ in
       Haptics.selection()
       self?.session.showDisplay(id)
-    })
-    button.accessibilityLabel = id.flatMap { id in session.displays.first { $0.id == id }?.name } ?? "All Displays"
-    button.accessibilityTraits = chosen ? [.button, .selected] : .button
-    return button
+    }, for: .touchUpInside)
+    option.accessibilityLabel = display?.name ?? "All Displays"
+    return option
   }
 
-  /// The Mac's displays in their real arrangement and proportions: the ones
-  /// this option shows filled (in the accent when it is the one on show),
-  /// the others outlined.
-  private func arrangementImage(highlighting id: UInt32?, chosen: Bool) -> UIImage {
-    let box = CGSize(width: 46, height: 30)
+  /// "Built-in" for the Mac's own screen ("Built-in Retina Display"), else the name System Settings gives it.
+  private static func shortName(_ display: ScreenWire.Display) -> String {
+    display.name.hasPrefix("Built-in") ? "Built-in" : display.name
+  }
+
+  /// The Mac's displays in their real arrangement and proportions, fitted
+  /// to `box`: the ones this option shows filled in the accent, the others outlined.
+  private func arrangementImage(showing id: UInt32?, in box: CGSize) -> UIImage {
     let frames = session.displays.map { ($0.id, $0.frame.cg) }
     let union = frames.map(\.1).reduce(CGRect.null) { $0.union($1) }
     let scale = min(box.width / max(union.width, 1), box.height / max(union.height, 1))
     let size = CGSize(width: (union.width * scale).rounded(.up), height: (union.height * scale).rounded(.up))
-    let fill = (chosen ? Chrome.UI.accent : Chrome.UI.fg2).resolvedColor(with: traitCollection)
-    let outline = Chrome.UI.muted.resolvedColor(with: traitCollection)
+    let fill = Chrome.UI.accent.resolvedColor(with: traitCollection)
+    let outline = Chrome.UI.fg2.resolvedColor(with: traitCollection)
     return UIGraphicsImageRenderer(size: size).image { _ in
       for (display, frame) in frames {
+        // Inset so neighbouring displays keep a gap between them.
         let r = CGRect(x: (frame.minX - union.minX) * scale, y: (frame.minY - union.minY) * scale,
                        width: frame.width * scale, height: frame.height * scale).insetBy(dx: 1, dy: 1)
         if id == nil || id == display {
@@ -279,8 +288,8 @@ final class ScreenToolbar: UIView {
           UIBezierPath(roundedRect: r, cornerRadius: 2.5).fill()
         } else {
           // Stroked inside its outline, so a shown and a hidden display read the same size.
-          let path = UIBezierPath(roundedRect: r.insetBy(dx: 0.625, dy: 0.625), cornerRadius: 2)
-          path.lineWidth = 1.25
+          let path = UIBezierPath(roundedRect: r.insetBy(dx: 0.75, dy: 0.75), cornerRadius: 2)
+          path.lineWidth = 1.5
           outline.setStroke()
           path.stroke()
         }
@@ -391,8 +400,10 @@ final class ScreenToolbar: UIView {
   }
 
   private func slotSize(_ view: UIView) -> CGSize {
-    if shownRow == .displays { return CGSize(width: 56, height: Chrome.Size.target) }
-    return CGSize(width: Chrome.Size.target, height: Chrome.Size.target)
+    guard shownRow == .displays else { return CGSize(width: Chrome.Size.target, height: Chrome.Size.target) }
+    if vertical { return CGSize(width: Self.thickness - 2, height: Self.thickness - 2) }
+    let slot = row.bounds.width / CGFloat(max(rowItems.count, 1))
+    return CGSize(width: min(84, slot - Chrome.Space.xs), height: Self.thickness - 2)
   }
 
   @objc private func swiped(_ g: UIPanGestureRecognizer) {
@@ -421,5 +432,52 @@ final class ScreenToolbar: UIView {
       button.transform = button.isHighlighted ? CGAffineTransform(scaleX: 0.88, y: 0.88) : .identity
     }
     return button
+  }
+}
+
+/// One choice in the Displays row: the arrangement in miniature with the
+/// choice's displays filled, its short name under it. The current choice sits on a fill.
+@MainActor
+private final class DisplayOption: UIControl {
+  private let picture = UIImageView()
+  private let label = UILabel()
+
+  init(picture image: UIImage, name: String, chosen: Bool) {
+    super.init(frame: .zero)
+    backgroundColor = chosen ? Chrome.UI.fill2 : nil
+    layer.cornerRadius = 12
+    layer.cornerCurve = .continuous
+    picture.image = image
+    picture.contentMode = .center
+    label.text = name
+    // Pinned like the toolbar's symbols: the row's height does not follow Text Size.
+    label.font = Chrome.uiFont(.caption, chosen ? .semibold : .medium, size: .standard)
+    label.textColor = chosen ? Chrome.UI.fg : Chrome.UI.fg2
+    label.textAlignment = .center
+    label.adjustsFontSizeToFitWidth = true
+    label.minimumScaleFactor = 0.7
+    label.lineBreakMode = .byTruncatingTail
+    for view in [picture, label] as [UIView] {
+      view.isUserInteractionEnabled = false
+      addSubview(view)
+    }
+    isAccessibilityElement = true
+    accessibilityTraits = chosen ? [.button, .selected] : .button
+  }
+
+  required init?(coder: NSCoder) { fatalError("not used") }
+
+  override var isHighlighted: Bool {
+    didSet { transform = isHighlighted ? CGAffineTransform(scaleX: 0.92, y: 0.92) : .identity }
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    let gap: CGFloat = 3
+    let pictureHeight = picture.image?.size.height ?? 0
+    let labelHeight = label.font.lineHeight.rounded(.up)
+    let top = ((bounds.height - pictureHeight - gap - labelHeight) / 2).rounded()
+    picture.frame = CGRect(x: 0, y: top, width: bounds.width, height: pictureHeight)
+    label.frame = CGRect(x: 3, y: top + pictureHeight + gap, width: bounds.width - 6, height: labelHeight)
   }
 }
