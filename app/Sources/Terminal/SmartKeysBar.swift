@@ -101,7 +101,7 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
         addSubview(middle)
         pasteControl.target = terminal
         commandRow.addSubview(pasteControl)
-        insertKeys = [("photo", "Insert Photo", InsertSource.photos), ("camera", "Insert from Camera", .camera),
+        insertKeys = [("photo", "Insert Photo or Video", InsertSource.photos), ("camera", "Insert from Camera", .camera),
                       ("folder", "Insert File", .files)]
             .filter { $0.2 != .camera || Inserter.hasCamera }
             .map { symbol, label, source in

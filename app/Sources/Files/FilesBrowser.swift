@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -692,29 +693,50 @@ final class FilesBrowser {
     await upload(urls, to: dir, consume: true)
   }
 
-  static func copyOut(_ provider: NSItemProvider) async -> URL? {
+  /// `provider`'s file copied into its own scratch folder; nil when it
+  /// cannot be read or the calling Task is cancelled. `progress` (0...1)
+  /// follows the provider's own load, which is the wait for a photo-library
+  /// video or an iCloud file to arrive.
+  static func copyOut(_ provider: NSItemProvider, progress report: (@Sendable (Double) -> Void)? = nil) async -> URL? {
     let types = provider.registeredTypeIdentifiers.compactMap(UTType.init)
     guard let type = types.first(where: { !$0.conforms(to: .url) || $0.conforms(to: .fileURL) }) ?? types.first else { return nil }
     let suggested = provider.suggestedName
-    return await withCheckedContinuation { continuation in
-      _ = provider.loadFileRepresentation(for: type, openInPlace: false) { url, _, _ in
-        guard let url else {
-          continuation.resume(returning: nil)
-          return
+    let loading = OSAllocatedUnfairLock<(progress: Progress?, cancelled: Bool)>(initialState: (nil, false))
+    return await withTaskCancellationHandler {
+      await withCheckedContinuation { continuation in
+        nonisolated(unsafe) var observation: NSKeyValueObservation?
+        let load = provider.loadFileRepresentation(for: type, openInPlace: false) { url, _, _ in
+          observation?.invalidate()
+          observation = nil
+          guard let url else {
+            continuation.resume(returning: nil)
+            return
+          }
+          var name = suggested ?? url.lastPathComponent
+          if FilePath.ext(name).isEmpty, let ext = url.pathExtension.isEmpty ? type.preferredFilenameExtension : url.pathExtension {
+            name += "." + ext
+          }
+          let dir = scratchFolder()
+          let copy = dir.appending(path: name)
+          do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: url, to: copy)
+            continuation.resume(returning: copy)
+          } catch {
+            continuation.resume(returning: nil)
+          }
         }
-        var name = suggested ?? url.lastPathComponent
-        if FilePath.ext(name).isEmpty, let ext = url.pathExtension.isEmpty ? type.preferredFilenameExtension : url.pathExtension {
-          name += "." + ext
+        if let report { observation = load.observe(\.fractionCompleted) { load, _ in report(load.fractionCompleted) } }
+        let cancelled = loading.withLock { state in
+          state.progress = load
+          return state.cancelled
         }
-        let dir = scratchFolder()
-        let copy = dir.appending(path: name)
-        do {
-          try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-          try FileManager.default.copyItem(at: url, to: copy)
-          continuation.resume(returning: copy)
-        } catch {
-          continuation.resume(returning: nil)
-        }
+        if cancelled { load.cancel() }
+      }
+    } onCancel: {
+      loading.withLock { state in
+        state.cancelled = true
+        state.progress?.cancel()
       }
     }
   }

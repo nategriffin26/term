@@ -13,7 +13,10 @@ final class StatusBanner: UIView {
   private let dot = UIView()
   private let button = UIButton(configuration: .plain())
   private var trailing: NSLayoutConstraint!
+  /// The button stops the notice's upload instead of reconnecting.
+  private var cancels = false
   var onReconnect: (() -> Void)?
+  var onCancel: (() -> Void)?
 
   static let height: CGFloat = 44
 
@@ -41,7 +44,10 @@ final class StatusBanner: UIView {
     config.cornerStyle = .capsule
     config.contentInsets = .init(top: 0, leading: Chrome.Space.m, bottom: 0, trailing: Chrome.Space.m)
     button.configuration = config
-    button.addAction(UIAction { [weak self] _ in self?.onReconnect?() }, for: .primaryActionTriggered)
+    button.addAction(UIAction { [weak self] _ in
+      guard let self else { return }
+      if cancels { onCancel?() } else { onReconnect?() }
+    }, for: .primaryActionTriggered)
     applyFonts()
     registerForTraitChanges([ChromeStyleTrait.self]) { (self: Self, _) in self.applyFonts() }
 
@@ -79,8 +85,12 @@ final class StatusBanner: UIView {
   private func applyFonts() {
     label.font = Chrome.uiFont(.secondary, .medium)
     percent.font = Chrome.uiMono(.secondary)
+    setTitle()
+  }
+
+  private func setTitle() {
     button.configuration?.attributedTitle = AttributedString(
-      "Reconnect", attributes: AttributeContainer([.font: Chrome.uiFont(.secondary, .semibold)]))
+      cancels ? "Cancel" : "Reconnect", attributes: AttributeContainer([.font: Chrome.uiFont(.secondary, .semibold)]))
   }
 
   /// Shows the banner for `tab`; returns whether it is visible.
@@ -98,7 +108,9 @@ final class StatusBanner: UIView {
     }
     label.text = text
     dot.isHidden = notice?.failed != true
-    button.isHidden = tab.reconnecting || !tab.unreachable
+    cancels = notice?.cancellable == true
+    setTitle()
+    button.isHidden = tab.reconnecting || !(tab.unreachable || cancels)
     // The button sits closer to the capsule's end, as concentric as its corners.
     trailing.constant = button.isHidden ? -Chrome.Space.l : -6
     let uploading = notice?.progress != nil

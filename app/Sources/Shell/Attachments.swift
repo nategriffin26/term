@@ -116,17 +116,75 @@ enum Attachments {
     return (out as Data, plan.format.ext)
   }
 
+  // MARK: - Videos
+
+  /// Largest frame a video is sent at, in either orientation. Beyond it
+  /// a clip is re-encoded: agents read a frame grid, and a 4K minute is
+  /// hundreds of megabytes over a phone's uplink.
+  static let maxVideoLongEdge = 1920
+  static let maxVideoShortEdge = 1080
+
+  enum VideoCodec: Equatable {
+    case hevc, h264, other
+
+    /// From a format description's media subtype (the four characters of
+    /// the sample entry: "hvc1", "avc1", …).
+    init(fourCC: UInt32) {
+      switch fourCC {
+      case 0x6876_6331, 0x6865_7631, 0x6476_6831, 0x6476_6865: self = .hevc  // hvc1 hev1 dvh1 dvhe
+      case 0x6176_6331, 0x6176_6333: self = .h264  // avc1 avc3
+      default: self = .other
+      }
+    }
+  }
+
+  enum VideoPlan: Equatable {
+    /// Send the file as it is.
+    case keep
+    /// Re-encode as HEVC no larger than 1920×1080 (portrait included).
+    case fit1080
+    /// Re-encode as HEVC at the size it has: a codec agents' ffmpeg may
+    /// not read or that is far too big (ProRes) in a frame that is not.
+    case transcode
+  }
+
+  /// HEVC and H.264 within 1080p are sent as recorded, and everything
+  /// else is brought to what the host and the uplink handle. Either
+  /// orientation: only the long and the short edge count.
+  static func videoPlan(codec: VideoCodec, width: Int, height: Int) -> VideoPlan {
+    let fits = max(width, height) <= maxVideoLongEdge && min(width, height) <= maxVideoShortEdge
+    if !fits { return .fit1080 }
+    return codec == .other ? .transcode : .keep
+  }
+
   /// A local file ready to send under its upload name: an image
-  /// normalized (written beside it), anything else as it is.
-  static func prepare(_ file: URL, at date: Date, taken: inout Set<String>) throws -> (file: URL, name: String) {
+  /// normalized, a video re-encoded when its plan says so (both written
+  /// beside it), anything else as it is, as is a video this device cannot
+  /// re-encode. `progress` (0...1) reports a re-encode.
+  @concurrent static func prepare(_ file: URL, at date: Date, taken: inout Set<String>,
+                                  progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> (file: URL, name: String) {
     let original = file.lastPathComponent
     let ext = FilePath.ext(original)
-    if let type = UTType(filenameExtension: ext), type.conforms(to: .image),
+    let type = UTType(filenameExtension: ext)
+    if let type, type.conforms(to: .image),
        let image = normalize(try Data(contentsOf: file), type: type, maxEdge: maxEdge) {
       let name = self.name(for: original, ext: image.ext, at: date, taken: &taken)
       let out = file.deletingLastPathComponent().appending(path: name)
       try image.data.write(to: out)
       return (out, name)
+    }
+    if let type, type.conforms(to: .movie), let info = await VideoExport.probe(file) {
+      let plan = videoPlan(codec: info.codec, width: info.width, height: info.height)
+      if plan != .keep {
+        let name = self.name(for: original, ext: "mov", at: date, taken: &taken)
+        let out = file.deletingLastPathComponent().appending(path: name)
+        do {
+          try await VideoExport.export(file, plan: plan, to: out, progress: progress)
+          return (out, name)
+        } catch VideoExport.ExportError.unsupported {
+          taken.remove(name)
+        }
+      }
     }
     return (file, name(for: original, ext: ext, at: date, taken: &taken))
   }

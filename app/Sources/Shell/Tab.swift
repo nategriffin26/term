@@ -39,6 +39,8 @@ final class Tab {
   private(set) var reconnecting = false
   /// A short line for the pane's banner: an upload's progress, or why it failed.
   private(set) var notice: Notice?
+  /// The upload the banner's Cancel stops.
+  var upload: Task<Void, Never>?
   private var noticeTimer: Task<Void, Never>?
   private let autoReconnect = AutoReconnect()
   private var attachmentProbe: Task<Void, Never>?
@@ -479,11 +481,11 @@ final class Tab {
   }
 
   /// Shows `text` in the banner (nil clears it), with an upload's
-  /// `progress` (0...1) or as a failure, for `seconds` when given.
-  func showNotice(_ text: String?, progress: Double? = nil, failed: Bool = false, for seconds: Double? = nil) {
+  /// `progress` (0...1) and Cancel, or as a failure, for `seconds` when given.
+  func showNotice(_ text: String?, progress: Double? = nil, failed: Bool = false, cancellable: Bool = false, for seconds: Double? = nil) {
     noticeTimer?.cancel()
     noticeTimer = nil
-    let next = text.map { Notice(text: $0, progress: progress, failed: failed) }
+    let next = text.map { Notice(text: $0, progress: progress, failed: failed, cancellable: cancellable) }
     if next != notice {
       notice = next
       host?.tabDidChange(self)
@@ -502,6 +504,8 @@ struct Notice: Equatable {
   var text: String
   var progress: Double?
   var failed = false
+  /// Cancel stops the upload that made it.
+  var cancellable = false
 }
 
 extension Tab: Identifiable {}

@@ -226,6 +226,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       old.view.removeFromSuperview()
     }
     pane.banner.onReconnect = { [weak tab] in tab?.reconnect() }
+    pane.banner.onCancel = { [weak tab] in tab?.upload?.cancel() }
     pane.banner.update(for: tab)
     if pane === focusedPane { view.window?.windowScene?.title = tab.displayTitle }
     Self.tabsChanged()
