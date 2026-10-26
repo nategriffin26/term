@@ -88,6 +88,19 @@ final class TranscriptQueueTests: XCTestCase {
     XCTAssertEqual(q.complete(ids[2], reply: "Config.").map(\.text), ["Config."])
   }
 
+  /// Catches the model's invented text in another script being typed (with
+  /// English fixed, Cyrillic or Japanese was never said), while English with
+  /// accents or a stray Greek letter is kept.
+  func testReplyMostlyInAnotherScriptIsNotTyped() {
+    var (q, ids) = queue(5)
+    XCTAssertEqual(q.complete(ids[0], reply: "Продолжение следует...").map(\.text), [])
+    XCTAssertEqual(q.complete(ids[1], reply: "ご視聴ありがとうございました").map(\.text), [])
+    XCTAssertEqual(q.complete(ids[2], reply: "Open Términos y condiciones at the café.").map(\.text),
+                   ["Open Términos y condiciones at the café."])
+    XCTAssertEqual(q.complete(ids[3], reply: "Area is πr².").map(\.text), ["Area is πr²."])
+    XCTAssertEqual(q.complete(ids[4], reply: "μs").map(\.text), ["μs"])
+  }
+
   /// Catches an empty reply blocking the queue.
   func testEmptyReplyTypesNothingAndUnblocks() {
     var (q, ids) = queue(2)
@@ -217,12 +230,14 @@ final class DictationTests: XCTestCase {
     func dictationNeedsSettings() {}
   }
 
-  /// Answers with the audio's bytes as text after `delay(text)`, or fails while `failure` is set.
+  /// Answers with `reply(audio)` (the audio's bytes as text unless a test says
+  /// otherwise) after `delay(text)`, or fails while `failure` is set.
   private final class Service: Transcriber, @unchecked Sendable {
     let lock = NSLock()
     private var _failure: TranscriptionFailure?
     private var _calls = 0
     var delay: @Sendable (String) -> Double = { _ in 0 }
+    var reply: @Sendable (Data) -> String = { String(decoding: $0, as: UTF8.self) }
     var failure: TranscriptionFailure? {
       get { lock.withLock { _failure } }
       set { lock.withLock { _failure = newValue } }
@@ -231,7 +246,7 @@ final class DictationTests: XCTestCase {
 
     func transcribe(_ audio: Data, prompt: String,
                     waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> String {
-      let text = String(decoding: audio, as: UTF8.self)
+      let text = reply(audio)
       lock.withLock { _calls += 1 }
       try? await Task.sleep(for: .seconds(delay(text)))
       if let failure { throw failure }
@@ -254,6 +269,28 @@ final class DictationTests: XCTestCase {
     for word in ["one", "two", "three"] { dictation.send(Data(word.utf8), for: dictation.reserve(for: terminal)) }
     await until("typed in order") { terminal.typed.count == 3 }
     XCTAssertEqual(terminal.typed, ["one", "two", "three"])
+    XCTAssertEqual(dictation.state, .idle)
+  }
+
+  /// Catches the made-up text bug at its source: segments the loudness
+  /// detector cut from typing, room noise or music never reach the
+  /// transcriber; spoken ones do, and type in the order they were said.
+  func testOnlySpokenSegmentsAreSent() async throws {
+    let service = Service()
+    service.reply = { $0.count > 10_000 ? "sentence" : "yes" }
+    let dictation = Dictation(transcriber: { service })
+    let terminal = Terminal()
+    let sentence = try await TestAudio.speech("Show me the last ten lines of the server log, then open the readme.")
+    let yes = try await TestAudio.speech("Yes.")
+    dictation.segmentEnded(TestAudio.typing(seconds: 4), in: terminal)
+    dictation.segmentEnded(sentence, in: terminal)
+    dictation.segmentEnded(TestAudio.roomWithKnocks(seconds: 6), in: terminal)
+    dictation.segmentEnded(yes, in: terminal)
+    dictation.segmentEnded(TestAudio.music(seconds: 4), in: terminal)
+    await until("both spoken segments typed") { terminal.typed.count >= 2 }
+    try? await Task.sleep(for: .milliseconds(500))
+    XCTAssertEqual(terminal.typed, ["sentence", "yes"])
+    XCTAssertEqual(service.calls, 2, "only speech is sent")
     XCTAssertEqual(dictation.state, .idle)
   }
 

@@ -37,6 +37,7 @@ final class Dictation {
   private weak var target: DictationTarget?
   private var capture: MicrophoneCapture?
   private var segmenter = SpeechSegmenter()
+  private let gate = SpeechGate()
   private var queue = TranscriptQueue<WeakTarget>()
   private var run = 0
   private var levels: [Float] = []
@@ -123,7 +124,8 @@ final class Dictation {
     self.capture = nil
     if let engineObserver { NotificationCenter.default.removeObserver(engineObserver) }
     engineObserver = nil
-    if let last = segmenter.finish(), let target { submit(last, to: target) }
+    if let last = segmenter.finish(), let target { segmentEnded(last, in: target) }
+    gate.release()
     target = nil
     levels = []
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -157,6 +159,11 @@ final class Dictation {
     self.target = target
     segmenter = SpeechSegmenter()
     levels = []
+    gate.prepare { [weak self, weak target] loaded in
+      guard !loaded, let self, let target, self.target === target else { return }
+      target.dictationNotice("Speech detection isn't available")
+      stop()
+    }
     // A new route (headphones, AirPods) stops the engine: start again in its format.
     engineObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
                                                             object: capture.notificationObject, queue: .main) { [weak self] _ in
@@ -174,11 +181,19 @@ final class Dictation {
     let out = segmenter.append(samples)
     levels.append(contentsOf: out.levels)
     if levels.count > Self.levelCount { levels.removeFirst(levels.count - Self.levelCount) }
-    for segment in out.segments { submit(segment, to: target) }
+    for segment in out.segments { segmentEnded(segment, in: target) }
     update()
   }
 
   // MARK: - Transcribing
+
+  /// A segment the loudness detector cut: sent only if the gate hears speech in it.
+  func segmentEnded(_ samples: [Float], in target: DictationTarget) {
+    gate.judge(samples) { [weak self, weak target] speech in
+      guard speech, let self, let target else { return }
+      submit(samples, to: target)
+    }
+  }
 
   /// A finished segment: its place in spoken order now, its audio once encoded.
   private func submit(_ samples: [Float], to target: DictationTarget) {

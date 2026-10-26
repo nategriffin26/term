@@ -118,7 +118,8 @@ struct TranscriptQueue<Target> {
   mutating func complete(_ id: Int, reply: String) -> [Typed] {
     guard let i = index(id) else { return [] }
     let text = DictatedText.clean(reply)
-    entries[i].status = .done(DictatedText.isEcho(text, of: entries[i].prompt) ? "" : text)
+    let madeUp = DictatedText.isEcho(text, of: entries[i].prompt) || DictatedText.isOtherScript(text)
+    entries[i].status = .done(madeUp ? "" : text)
     return popReady()
   }
 
@@ -196,6 +197,13 @@ enum DictatedText {
     let said = comparable(reply), context = comparable(prompt)
     guard !said.isEmpty, !context.isEmpty else { return false }
     return context.contains(said) && said.count * 10 >= context.count * 4
+  }
+
+  /// With English fixed, a reply mostly in another script (Cyrillic,
+  /// Japanese…) is the model making text up for noise, never what was said.
+  static func isOtherScript(_ reply: String) -> Bool {
+    let other = reply.matches(of: /[\p{L}--\p{Script=Latin}]/).count
+    return other > reply.matches(of: /\p{Script=Latin}/).count
   }
 
   /// What goes to the terminal: a space first when it continues dictated
