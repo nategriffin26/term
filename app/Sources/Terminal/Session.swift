@@ -160,6 +160,14 @@ final class Session {
         return String(cString: p)
     }
 
+    /// The whole buffer, scrollback and screen, as the escape sequences that
+    /// draw it (colors kept, soft wraps joined): what a History page replays.
+    func history() -> Data {
+        guard let p = term_session_history(core) else { return Data() }
+        defer { term_string_free(p) }
+        return Data(bytes: p, count: strlen(p))
+    }
+
     var status: TermStatus { term_session_status(core) }
 
     // ------------------------------------------------------------ lifecycle

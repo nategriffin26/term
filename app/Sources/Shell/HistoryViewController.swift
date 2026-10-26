@@ -1,24 +1,41 @@
 import SwiftUI
 import UIKit
 
-/// A tmux pane's history as a native, scrollable, selectable terminal:
-/// `capture-pane` output fed into a local session the TerminalView renders,
-/// under a header with the session's name and a close button.
+/// What a tab's History page reads: only ever that tab's own history.
+enum HistorySource {
+  /// The tmux session the tab is attached to, captured over SSH.
+  case tmux(session: String)
+  /// A tab that is not in tmux has no server-side history: its own terminal's
+  /// buffer, as escape sequences, as it stands when the page opens.
+  case scrollback(Data)
+}
+
+/// A tab's history as a native, scrollable, selectable terminal: the tmux
+/// session's `capture-pane` output, or the tab's own buffer, fed into a local
+/// session the TerminalView renders, under a header with the tab's name and a
+/// close button.
 @MainActor
 final class HistoryViewController: UIViewController {
   private let host: Host
-  private let tmuxSession: String?
+  private let source: HistorySource
   private var session: Session?
   private let header: UIHostingController<HistoryHeader>
   private let spinner = UIActivityIndicatorView(style: .medium)
   private let message = UILabel()
 
-  init(host: Host, tmuxSession: String?) {
+  /// The tmux session a diagram's source is looked up in, when the tab has one.
+  private var tmuxSession: String? {
+    if case .tmux(let name) = source { return name }
+    return nil
+  }
+
+  init(host: Host, source: HistorySource) {
     self.host = host
-    self.tmuxSession = tmuxSession
-    header = UIHostingController(rootView: HistoryHeader(title: tmuxSession ?? host.alias, close: {}))
+    self.source = source
+    let title = { if case .tmux(let name) = source { return name } else { return host.alias } }()
+    header = UIHostingController(rootView: HistoryHeader(title: title, close: {}))
     super.init(nibName: nil, bundle: nil)
-    header.rootView = HistoryHeader(title: tmuxSession ?? host.alias) { [weak self] in self?.dismiss(animated: true) }
+    header.rootView = HistoryHeader(title: title) { [weak self] in self?.dismiss(animated: true) }
     header.safeAreaRegions = []
     modalPresentationStyle = .fullScreen
   }
@@ -66,15 +83,22 @@ final class HistoryViewController: UIViewController {
   }
 
   private func load() async {
-    let result = await RemoteExec.run(Tab.spec(for: host), Tmux.historyCommand(tmuxSession))
-    spinner.stopAnimating()
-    switch result {
-    case .failure(let failure):
-      show(failure.message)
-    case .success(let output) where output.status != 0:
-      show("tmux exited with status \(output.status).")
-    case .success(let output):
-      showHistory(output.stdout)
+    switch source {
+    case .scrollback(let buffer):
+      spinner.stopAnimating()
+      showHistory(buffer)
+    case .tmux(let name):
+      let result = await RemoteExec.run(Tab.spec(for: host), Tmux.historyCommand(name))
+      spinner.stopAnimating()
+      switch result {
+      case .failure(let failure):
+        show(failure.message)
+      case .success(let output) where output.status != 0:
+        let reason = Tmux.readableError(String(decoding: output.stdout, as: UTF8.self))
+        show(reason.isEmpty ? "tmux exited with status \(output.status)." : reason)
+      case .success(let output):
+        showHistory(output.stdout)
+      }
     }
   }
 

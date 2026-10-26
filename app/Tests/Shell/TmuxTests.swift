@@ -221,10 +221,13 @@ final class TmuxTests: XCTestCase {
     XCTAssertEqual(Tmux.reattachCommand("diag"), "tmux attach -t '=diag'")
   }
 
-  func testHistoryCommand() {
-    XCTAssertEqual(Tmux.historyCommand(nil), "tmux capture-pane -p -e -J -S -3000")
-    XCTAssertEqual(Tmux.historyCommand("main"), "tmux capture-pane -p -e -J -S -3000 -t main")
-    XCTAssertEqual(Tmux.historyCommand("my work", lines: 50), "tmux capture-pane -p -e -J -S -50 -t 'my work'")
+  /// Bug it catches: History on a tab outside tmux captured whichever session
+  /// the server used last, and a bare `-t name` takes a session whose name only
+  /// starts with it when `name` has ended. The target is exactly the session.
+  func testHistoryCommandTargetsExactlyOneSession() {
+    XCTAssertEqual(Tmux.historyCommand("main"), Tmux.path + "; tmux capture-pane -p -e -J -S -3000 -t '=main:' 2>&1")
+    XCTAssertEqual(Tmux.historyCommand("my work", lines: 50), Tmux.path + "; tmux capture-pane -p -e -J -S -50 -t '=my work:' 2>&1")
+    XCTAssertEqual(Tmux.historyCommand("it's"), Tmux.path + "; tmux capture-pane -p -e -J -S -3000 -t '=it'\\''s:' 2>&1")
   }
 
   // MARK: - Session name from a startup command

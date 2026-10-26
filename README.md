@@ -47,7 +47,7 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 
 `ssh` is [russh](https://github.com/Eugeny/russh). It starts mosh-server, runs the commands behind the tmux tab and history, and carries SFTP for Files.
 
-tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads history with `tmux capture-pane`, and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
+tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads a tab's history with `tmux capture-pane` (a tab outside tmux shows its own scrollback), and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
 
 ### omp agents
 

@@ -178,11 +178,12 @@ enum Tmux {
   }
 
   /// Scrollback plus screen of the session's active pane, with colors, wrapped
-  /// lines joined so they rewrap at the phone's width.
-  static func historyCommand(_ name: String?, lines: Int = 3000) -> String {
-    var cmd = "tmux capture-pane -p -e -J -S -\(lines)"
-    if let name { cmd += " -t \(Command.shellQuote(name))" }
-    return cmd
+  /// lines joined so they rewrap at the phone's width. The target is exactly
+  /// `name` (`=name:`): tmux's bare `-t name` falls back to a prefix match, and
+  /// with no `-t` it takes whichever session was used last, so a session that
+  /// ended would show another one's screen. A failure's message lands on stdout.
+  static func historyCommand(_ name: String, lines: Int = 3000) -> String {
+    "\(path); tmux capture-pane -p -e -J -S -\(lines) -t \(Command.shellQuote("=" + name + ":")) 2>&1"
   }
 
   /// The session a startup command attaches to (`tmux new -A -s NAME`,

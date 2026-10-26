@@ -637,10 +637,10 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   }
 
   func showHistory(for tab: Tab) {
-    guard tab.isConnected, let target = tab.target else { return }
+    guard let target = tab.target, let source = tab.historySource else { return }
     menuRestoresFocus = false
     closeMenu()
-    present(HistoryViewController(host: target, tmuxSession: tab.tmuxSession), animated: true)
+    present(HistoryViewController(host: target, source: source), animated: true)
   }
 
   /// `tmux host` at the prompt: the tmux tab, scrolled to that host.

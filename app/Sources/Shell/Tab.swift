@@ -45,6 +45,13 @@ final class Tab {
   var editor: LineEditor
   private var settingsObserver: NSObjectProtocol?
 
+  /// What History shows: the tmux session the tab is attached to, else the
+  /// tab's own buffer. Never a guess at a session on the server.
+  var historySource: HistorySource? {
+    guard let remote, target != nil else { return nil }
+    return tmuxSession.map { .tmux(session: $0) } ?? .scrollback(remote.history())
+  }
+
   var current: Session { remote ?? local }
   var isConnected: Bool { remote != nil }
   /// Shown in session lists: the remote title, else the host, else "term".
