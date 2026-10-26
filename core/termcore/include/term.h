@@ -381,6 +381,11 @@ TermStatus term_session_status(TermSession *s);
 // and TermFrame.history_rows + r is live row r.
 char *term_session_text(TermSession *s, uint16_t col0, uint32_t row0, uint16_t col1, uint32_t row1);
 
+// The whole buffer, scrollback and screen, as the escape sequences that draw
+// it (colors and styles kept, soft wraps joined, trailing blanks trimmed);
+// caller frees with term_string_free. NULL for a NULL session.
+char *term_session_history(TermSession *s);
+
 void term_string_free(char *s);
 
 // ---- SVG (resvg, text feature only) -----------------------------------------

@@ -582,6 +582,16 @@ impl Terminal {
     /// screen space: 0 is the oldest scrollback row and history_rows() + r is
     /// live row r, so a selection can reach rows scrolled out of view.
     pub fn text(&self, col0: u16, row0: u32, col1: u16, row1: u32) -> String {
+        self.format(col0, row0, col1, row1, sys::GHOSTTY_FORMATTER_FORMAT_PLAIN)
+    }
+
+    /// `text` with each cell's style kept, as the escape sequences that draw
+    /// it: feeding the result to a terminal shows the span as it was.
+    pub fn styled_text(&self, col0: u16, row0: u32, col1: u16, row1: u32) -> String {
+        self.format(col0, row0, col1, row1, sys::GHOSTTY_FORMATTER_FORMAT_VT)
+    }
+
+    fn format(&self, col0: u16, row0: u32, col1: u16, row1: u32, emit: sys::GhosttyFormatterFormat) -> String {
         let (cols, rows) = self.size();
         let last_row = self.history_rows() + rows as u32 - 1;
         let clamp = |c: u16, r: u32| (c.min(cols - 1), r.min(last_row));
@@ -598,7 +608,7 @@ impl Terminal {
         let sel = sys::GhosttySelection { size: size_of::<sys::GhosttySelection>(), start, end, rectangle: false };
         let opts = sys::GhosttyTerminalSelectionFormatOptions {
             size: size_of::<sys::GhosttyTerminalSelectionFormatOptions>(),
-            emit: sys::GHOSTTY_FORMATTER_FORMAT_PLAIN,
+            emit,
             unwrap: true,
             trim: true,
             selection: &sel,

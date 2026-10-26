@@ -348,6 +348,17 @@ pub unsafe extern "C" fn term_session_text(s: *const Session, col0: u16, row0: u
     into_c(text)
 }
 
+/// term.h `term_session_history`.
+///
+/// # Safety
+/// `s` is NULL or live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn term_session_history(s: *const Session) -> *mut c_char {
+    let Some(s) = (unsafe { session(s) }) else { return std::ptr::null_mut() };
+    let text = s.lock().term.styled_text(0, 0, u16::MAX, u32::MAX);
+    into_c(text)
+}
+
 /// term.h `term_string_free`.
 ///
 /// # Safety

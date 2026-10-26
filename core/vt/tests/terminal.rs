@@ -234,6 +234,27 @@ fn text_extraction_reaches_scrollback() {
     assert_eq!(t.text(0, 4, 5, 4), "line-5");
 }
 
+// Bug: a scrollback page built from `text` is plain, so ls colors, prompts and
+// bold are lost; replaying `styled_text` must draw the same cells, scrollback included.
+#[test]
+fn styled_text_replays_colors_and_scrollback() {
+    let mut t = Terminal::new(20, 3, 100).unwrap();
+    t.write(b"\x1b[31mred\x1b[0m one\r\n\x1b[1;38;2;1;2;3mbold\x1b[0m\r\nline-3\r\nline-4\r\nline-5");
+    assert_eq!(t.history_rows(), 2);
+    let styled = t.styled_text(0, 0, u16::MAX, u32::MAX);
+    assert_eq!(t.text(0, 0, u16::MAX, u32::MAX), "red one\nbold\nline-3\nline-4\nline-5");
+
+    // 5 rows into a 5-row terminal: nothing scrolls, every row can be compared.
+    let mut copy = Terminal::new(20, 5, 100).unwrap();
+    copy.write(styled.replace('\n', "\r\n").as_bytes());
+    let f = frame(&mut copy);
+    let pal = Theme::default().palette;
+    assert_eq!(f.cell(0, 0).fg, 0xFF00_0000 | pal[1], "red kept");
+    assert_eq!(f.cell(0, 1).fg, 0xFF01_0203, "truecolor kept");
+    assert_ne!(f.cell(0, 1).flags & cell_flags::BOLD, 0, "bold kept");
+    assert_eq!(copy.text(0, 0, u16::MAX, u32::MAX), "red one\nbold\nline-3\nline-4\nline-5");
+}
+
 #[test]
 #[ignore = "timing; run with --release -- --ignored --nocapture"]
 fn bench_export_and_snapshot() {

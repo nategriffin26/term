@@ -245,6 +245,22 @@ fn text_copies_a_span_and_status_is_connected() {
 }
 
 #[test]
+fn history_is_the_whole_buffer_with_styles() {
+    // Bug caught: History for a tab outside tmux had no source of its own to
+    // read (it asked the server's most recent tmux session instead).
+    let rec = Recorder::new();
+    let s = local(&rec, 20, 3);
+    feed(s, b"\x1b[31mone\x1b[0m\r\ntwo\r\nthree\r\nfour\r\nfive");
+    let p = unsafe { term_session_history(s) };
+    let out = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_owned();
+    unsafe { term_string_free(p) };
+    assert!(out.contains("one") && out.contains("five"), "scrollback and screen: {out:?}");
+    assert!(out.contains('\x1b'), "styles kept: {out:?}");
+    assert!(unsafe { term_session_history(std::ptr::null()) }.is_null());
+    unsafe { term_session_free(s) };
+}
+
+#[test]
 fn feed_from_inside_an_output_callback_does_not_deadlock() {
     // Bug caught: the session lock held across callbacks deadlocks the
     // natural local-echo pattern.
