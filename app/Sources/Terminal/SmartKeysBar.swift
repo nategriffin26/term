@@ -71,7 +71,9 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     static let height: CGFloat = 52
     /// Where the phone is on its side.
     private static let compactHeight: CGFloat = 46
-    private var barHeight: CGFloat { traitCollection.verticalSizeClass == .compact ? Self.compactHeight : Self.height }
+    static func height(for traits: UITraitCollection) -> CGFloat {
+        traits.verticalSizeClass == .compact ? compactHeight : height
+    }
     /// The capsule's inset from the bar's edges.
     private static let capsuleInset = UIEdgeInsets(top: 3, left: 6, bottom: 3, right: 6)
 
@@ -130,7 +132,9 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var intrinsicContentSize: CGSize { CGSize(width: UIView.noIntrinsicMetric, height: barHeight) }
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: Self.height(for: traitCollection))
+    }
 
     /// The system's own paste button: reads the clipboard without the
     /// "Allow Paste" prompt and hands it to the terminal's paste(itemProviders:).

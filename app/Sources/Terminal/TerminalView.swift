@@ -124,6 +124,7 @@ final class TerminalView: UIView {
     /// Real diagrams over omp's ASCII drawings (app/Sources/Diagrams).
     private(set) lazy var diagramOverlay = DiagramOverlay(terminal: self)
     lazy var smartKeys = SmartKeysBar(terminal: self)
+    weak var keyboardAccessory: TerminalInputAccessory?
     lazy var editMenu = UIEditMenuInteraction(delegate: self)
     let startHandle = SelectionHandle(isStart: true)
     let endHandle = SelectionHandle(isStart: false)
@@ -562,8 +563,13 @@ final class TerminalView: UIView {
 
     @discardableResult
     override func becomeFirstResponder() -> Bool {
+        let previousBar = keyboardAccessory?.bar
+        keyboardAccessory?.show(smartKeys)
         let ok = super.becomeFirstResponder()
-        guard ok else { return false }
+        guard ok else {
+            if let previousBar { keyboardAccessory?.show(previousBar) }
+            return false
+        }
         if let previous = Self.keyboardOwner, previous !== self, previous.isFirstResponder {
             previous.resignFirstResponder()
         }
@@ -603,7 +609,8 @@ final class TerminalView: UIView {
 
     override var inputAccessoryView: UIView? {
         let software = softwareKeyboardShown ?? !hardwareKeyboardAttached
-        return software || showsSmartKeysWithHardwareKeyboard ? smartKeys : nil
+        guard software || showsSmartKeysWithHardwareKeyboard else { return nil }
+        return (keyboardAccessory as UIView?) ?? smartKeys
     }
 
     @objc private func keyboardsChanged() {

@@ -21,6 +21,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private let pager = UIPanGestureRecognizer()
   private let overviewSwipe = UIPanGestureRecognizer()
   private var overviewSwipeFired = false
+  private let keyboardAccessory = TerminalInputAccessory()
 
   let menu = MenuModel()
   private lazy var panel = MenuPanel(model: menu)
@@ -190,11 +191,10 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private func reconcilePanes(count: Int) {
     while panes.count > count {
       let pane = panes.removeLast()
-      let hadFocus = pane.tab.view.isFirstResponder
+      if pane.tab.view.isFirstResponder { panes.first?.tab.view.becomeFirstResponder() }
       pane.tab.view.removeFromSuperview()
       pane.container.removeFromSuperview()
       lastFocusedPane = min(lastFocusedPane, panes.count - 1)
-      if hadFocus { panes.first?.tab.view.becomeFirstResponder() }
     }
     while panes.count < count {
       let anchor = panes.last.flatMap { last in tabs.firstIndex { $0 === last.tab } } ?? -1
@@ -211,14 +211,20 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     panes.contains { $0.tab === tab }
   }
 
-  private func show(_ tab: Tab, in pane: Pane) {
-    if let old = pane.tabIfSet, old !== tab, old.view.superview === pane.container {
-      old.view.removeFromSuperview()
-    }
+  private func show(_ tab: Tab, in pane: Pane, focus: Bool = false) {
+    let old = pane.tabIfSet
+    let transfersFocus = focus || old?.view.isFirstResponder == true
     pane.tab = tab
     tab.view.frame = pane.container.bounds
     tab.view.transform = .identity
     pane.container.insertSubview(tab.view, belowSubview: pane.banner)
+    // Removing a first responder dismisses the keyboard before its replacement
+    // can take it. Hand it directly to the incoming terminal while both are
+    // still in the window; the keyboard and every tab's grid stay unchanged.
+    if transfersFocus { tab.view.becomeFirstResponder() }
+    if let old, old !== tab, old.view.superview === pane.container {
+      old.view.removeFromSuperview()
+    }
     pane.banner.onReconnect = { [weak tab] in tab?.reconnect() }
     pane.banner.update(for: tab)
     if pane === focusedPane { view.window?.windowScene?.title = tab.displayTitle }
@@ -237,6 +243,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private func adopt(_ tab: Tab) {
     tab.host = self
     tab.view.delegate = self
+    tab.view.keyboardAccessory = keyboardAccessory
   }
 
   private func makeTab(at index: Int) -> Tab? {
@@ -254,8 +261,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     guard let pane = pane ?? focusedPane else { return }
     let index = (tabs.firstIndex { $0 === pane.tab } ?? tabs.count - 1) + 1
     guard let tab = makeTab(at: index) else { return }
-    show(tab, in: pane)
-    tab.view.becomeFirstResponder()
+    show(tab, in: pane, focus: true)
   }
 
   /// Shows `tab` in the focused pane, or focuses the pane already showing it.
@@ -267,9 +273,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       return
     }
     guard let pane = focusedPane else { return }
-    let hadFocus = pane.tab.view.isFirstResponder
-    show(tab, in: pane)
-    if focus || hadFocus { tab.view.becomeFirstResponder() }
+    show(tab, in: pane, focus: focus)
   }
 
   func close(_ tab: Tab) {
@@ -277,16 +281,16 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     tab.disconnect()
     tabs.remove(at: index)
     if let pane = panes.first(where: { $0.tab === tab }) {
-      let hadFocus = tab.view.isFirstResponder
       let before = tabs[..<min(index, tabs.count)].reversed()
       let after = tabs[min(index, tabs.count)...]
       let replacement = (Array(before) + Array(after)).first { !isShown($0) } ?? makeTab(at: index)
-      tab.view.removeFromSuperview()
       if let replacement {
         show(replacement, in: pane)
-        if hadFocus { replacement.view.becomeFirstResponder() }
+      } else {
+        tab.view.removeFromSuperview()
       }
     }
+    keyboardAccessory.remove(tab.view.smartKeys)
     SessionRegistry.shared.setTabs(tabs, forScene: sceneID)
     Self.tabsChanged()
   }
@@ -308,8 +312,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     guard let pane = focusedPane else { return nil }
     let index = (tabs.firstIndex { $0 === pane.tab } ?? tabs.count - 1) + 1
     guard let tab = makeTab(at: index) else { return nil }
-    show(tab, in: pane)
-    if focus { tab.view.becomeFirstResponder() }
+    show(tab, in: pane, focus: focus)
     // Connecting sends the tab's grid size: laid out now, it is the pane's
     // instead of a fresh terminal's 80x24, which tmux would first draw at.
     pane.container.layoutIfNeeded()
@@ -600,8 +603,6 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     drag = nil
     let w = d.pane.container.bounds.width
     let current = d.pane.tab
-    // Read before `done` takes the old terminal out of the window, which resigns it.
-    let hadFocus = current.view.isFirstResponder
     settleHUD(on: target ?? current, in: d.pane)
     let moves = {
       let page: PagerStrip.Page = target == nil ? .current : target === d.next ? .next : .previous
@@ -609,14 +610,12 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     }
     let done = { [weak self] in
       guard let self else { return }
+      if let target { show(target, in: d.pane) }
       for tab in [d.previous, d.next, current].compactMap({ $0 }) where tab !== (target ?? current) {
         tab.view.removeFromSuperview()
         tab.view.transform = .identity
       }
-      if let target {
-        show(target, in: d.pane)
-        if hadFocus { target.view.becomeFirstResponder() }
-      } else {
+      if target == nil {
         d.pane.banner.update(for: current)
       }
       // At rest: measure the grid it held while sliding.
@@ -673,8 +672,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   private func step(_ delta: Int) {
     guard let pane = focusedPane, let tab = neighbor(of: pane, step: delta) else { return }
-    show(tab, in: pane)
-    tab.view.becomeFirstResponder()
+    show(tab, in: pane, focus: true)
     settleHUD(on: tab, in: pane)
   }
 
