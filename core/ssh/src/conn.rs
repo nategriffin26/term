@@ -223,6 +223,16 @@ impl Connection {
         self.handle.is_closed()
     }
 
+    /// A session channel carrying the phone's locale, as OpenSSH's
+    /// `SendEnv LANG` does: a host with no locale of its own (macOS sshd sets
+    /// none) otherwise runs tmux in its ASCII mode, which turns the tabs of
+    /// `list-sessions -F` and every non-ASCII cell into `_`. Hosts that don't
+    /// accept it (`AcceptEnv`) ignore it.
+    async fn session(&self) -> Result<russh::Channel<client::Msg>> {
+        let ch = self.handle.channel_open_session().await?;
+        ch.set_env(false, "LANG", "en_US.UTF-8").await?;
+        Ok(ch)
+    }
 
     /// Opens a subsystem on this authenticated connection.
     pub async fn subsystem(&self, name: &str) -> Result<impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static> {
@@ -232,7 +242,7 @@ impl Connection {
         Ok(ch.into_stream())
     }
     pub async fn exec(&self, cmd: &str) -> Result<ExecOutput> {
-        let mut ch = self.handle.channel_open_session().await?;
+        let mut ch = self.session().await?;
         ch.exec(true, cmd).await?;
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
         let (mut status, mut signal) = (None, None);
@@ -260,7 +270,7 @@ impl Connection {
     /// Opens a PTY running `command` (shell text for the remote login shell),
     /// or an interactive login shell when there is none.
     pub async fn shell(&self, term: &str, cols: u32, rows: u32, command: Option<&str>) -> Result<Shell> {
-        let mut ch = self.handle.channel_open_session().await?;
+        let mut ch = self.session().await?;
         // IUTF8 keeps the line discipline's erase correct on multibyte input.
         ch.request_pty(true, term, cols, rows, 0, 0, &[(Pty::IUTF8, 1)])
             .await?;

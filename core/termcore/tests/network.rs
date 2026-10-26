@@ -82,7 +82,7 @@ impl Sshd {
                          StrictModes no\nUsePAM no\nPasswordAuthentication no\n\
                          KbdInteractiveAuthentication no\nLogLevel INFO\n\
                          SetEnv ZDOTDIR={d}/zdot\nPerSourcePenalties no\nMaxStartups 100\n\
-                         Subsystem sftp /usr/libexec/sftp-server\n",
+                         Subsystem sftp /usr/libexec/sftp-server\nAcceptEnv LANG LC_*\n",
                         d = p.display()
                     ),
                 )
@@ -781,4 +781,21 @@ fn exec_returns_output_and_status_and_survives_a_dead_cached_connection() {
     let (status, out, error) = exec(&dead, "true");
     assert_eq!((status, out), (-1, Vec::new()));
     assert!(error.is_some_and(|e| e.contains("cannot connect")));
+}
+
+#[test]
+fn exec_runs_with_a_utf8_locale_so_tmux_keeps_tabs_and_non_ascii() {
+    let _cache = CACHE_TESTS.read().unwrap();
+    // Bug caught: macOS sshd gives exec sessions no locale, so tmux runs in
+    // its ASCII mode and prints `list-sessions -F` tabs and "é" as "_": the
+    // app's tmux tab parsed no sessions and said "No tmux sessions".
+    let sshd = Sshd::start();
+    let p = Params::new(&sshd, transport::SSH);
+    let socket = format!("utf8-{}", std::process::id());
+    let tmux = format!("/opt/homebrew/bin/tmux -L {socket} -f /dev/null");
+    let (status, out, error) = exec(&p, &format!(
+        "{tmux} new-session -d -s 'café' /bin/sleep 30 && {tmux} list-sessions -F '#{{session_windows}}\t#{{session_name}}'; \
+         s=$?; {tmux} kill-server; exit $s"));
+    assert_eq!((status, error), (0, None));
+    assert_eq!(String::from_utf8(out).unwrap(), "1\tcafé\n");
 }
