@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UIKit
 
 extension Host {
   /// The tmux server a host reaches: hosts that differ only in transport or
@@ -100,6 +101,17 @@ enum TmuxList {
     default: return "\(seconds / 86400)d"
     }
   }
+
+  /// Agents as a host just reported them, less the stops he has seen on
+  /// this phone (`seen`: session id → the stop he saw) before the host's
+  /// `@seen` caught up: a later stop is new again.
+  static func unseen(_ agents: [String: AgentInfo], seen: [String: Date]) -> [String: AgentInfo] {
+    var agents = agents
+    for (id, agent) in agents where agent.unread {
+      if let saw = seen[id], let stop = agent.stoppedAt, stop <= saw { agents[id]?.unread = false }
+    }
+    return agents
+  }
 }
 
 /// Every saved host's tmux sessions and their snapshots, refreshed while the
@@ -127,6 +139,8 @@ final class TmuxStore {
   private(set) var servers: [String: Server] = [:]
   /// Each snapshot's last lines, for its row.
   private(set) var excerpts: [String: ScreenExcerpt] = [:]
+  /// Each session's agent, by server key, then session id.
+  private(set) var agents: [String: [String: AgentInfo]] = [:]
 
   /// One terminal engine per snapshot, fed each new capture.
   @ObservationIgnored private var engines: [String: Session] = [:]
@@ -139,14 +153,26 @@ final class TmuxStore {
   @ObservationIgnored private var closing: [String: Set<String>] = [:]
   /// Servers listed since the tab opened: their order holds until it closes.
   @ObservationIgnored private var ordered: Set<String> = []
+  /// Stops he saw or cleared here (server key → session id → stop time),
+  /// held until the host's `@seen` says so too.
+  @ObservationIgnored private var cleared: [String: [String: Date]] = [:]
+  /// The tmux tab is refreshing: its exec lists the agents too.
+  @ObservationIgnored private var watching = false
 
   /// While the tmux tab shows: often enough to follow a build scrolling by,
   /// cheap because only sessions with new activity are captured again.
   static let interval: Duration = .seconds(3)
+  /// While it doesn't: the agent panes alone, to keep the badge true.
+  static let agentInterval: Duration = .seconds(10)
 
   private init() {}
 
   var hasSessions: Bool { servers.values.contains { !$0.sessions.isEmpty } }
+
+  /// Sessions whose agent stopped for him since he last saw them: the tmux tab's badge.
+  var unreadCount: Int { agents.values.reduce(0) { $0 + $1.values.count(where: \.unread) } }
+
+  func agent(_ key: String, _ id: String) -> AgentInfo? { agents[key]?[id] }
 
   /// The snapshot engine of a session, once it has been captured.
   func engine(_ key: String, _ id: String) -> Session? { engines[key + "\t" + id] }
@@ -159,6 +185,8 @@ final class TmuxStore {
   /// lists each host most recently active first.
   func watch(_ hosts: @MainActor () -> [Host]) async {
     ordered = []
+    watching = true
+    defer { watching = false }
     var first = true
     while !Task.isCancelled {
       for host in hosts() {
@@ -167,6 +195,40 @@ final class TmuxStore {
       }
       first = false
       try? await Task.sleep(for: Self.interval)
+    }
+  }
+
+  /// Checks the agents every `agentInterval` while Term is in front and the
+  /// tmux tab isn't refreshing. Runs for the app's life; coming to the front
+  /// checks at once (AppDelegate).
+  func watchAgents() async {
+    while !Task.isCancelled {
+      try? await Task.sleep(for: Self.agentInterval)
+      if UIApplication.shared.applicationState == .active { checkAgents() }
+    }
+  }
+
+  /// One agent-panes exec on each saved host not already running one;
+  /// unreachable hosts only on `retry` (Term coming to the front).
+  func checkAgents(retry: Bool = false) {
+    guard !watching else { return }
+    for host in TmuxList.servers(ConfigStore.shared.hosts) {
+      let key = host.serverKey
+      guard !inFlight.contains(key), retry || servers[key]?.isUnreachable != true else { continue }
+      inFlight.insert(key)
+      Task {
+        let result = await RemoteExec.run(Tab.spec(for: host), Tmux.agentsCommand())
+        inFlight.remove(key)
+        switch result {
+        case .success(let output):
+          if servers[key]?.isUnreachable == true { servers[key] = nil }
+          let hidden = closing[key] ?? []
+          setAgents(Tmux.parseAgents(output.stdout).filter { !hidden.contains($0.key) }, for: key)
+        case .failure(let failure):
+          servers[key] = Server(status: .unreachable(failure.message))
+          setAgents([:], for: key)
+        }
+      }
     }
   }
 
@@ -189,6 +251,7 @@ final class TmuxStore {
 
   private func apply(_ result: Result<RemoteExec.Output, RemoteExec.Failure>, to key: String) {
     var server = servers[key] ?? Server()
+    var agents: [String: AgentInfo] = [:]
     switch result {
     case .failure(let failure):
       server = Server(status: .unreachable(failure.message))
@@ -198,6 +261,7 @@ final class TmuxStore {
         let sessions = ordered.contains(key) ? TmuxList.keepOrder(servers[key]?.sessions ?? [], overview.sessions) : overview.sessions
         ordered.insert(key)
         server = Server(status: .ready, sessions: sessions)
+        agents = overview.agents
         for session in overview.sessions {
           guard let screen = overview.screens[session.id] else { continue }
           show(screen, of: session, key: key)
@@ -216,6 +280,40 @@ final class TmuxStore {
       excerpts[id] = nil
     }
     if servers[key] != server { servers[key] = server }
+    // Sessions being closed take their agents with them.
+    let listed = Set(server.sessions.map(\.id))
+    setAgents(agents.filter { listed.contains($0.key) }, for: key)
+  }
+
+  /// A host's agents as just read, less the stops he has seen here since.
+  private func setAgents(_ fresh: [String: AgentInfo], for key: String) {
+    cleared[key] = cleared[key]?.filter { fresh[$0.key] != nil }
+    let fresh = TmuxList.unseen(fresh, seen: cleared[key] ?? [:])
+    if agents[key] ?? [:] != fresh { agents[key] = fresh.isEmpty ? nil : fresh }
+    seeViewed()
+  }
+
+  /// He has seen these sessions' stops (ids on `host`): gone from the badge
+  /// at once, and from his other devices once the host's `@seen` moves.
+  func markSeen(_ ids: [String], on host: Host) {
+    let key = host.serverKey
+    let ids = ids.filter { agents[key]?[$0]?.unread == true }
+    guard !ids.isEmpty else { return }
+    for id in ids {
+      cleared[key, default: [:]][id] = agents[key]?[id]?.stoppedAt
+      agents[key]?[id]?.unread = false
+    }
+    let command = Tmux.seenCommand(ids: ids)
+    Task { _ = await RemoteExec.run(Tab.spec(for: host), command) }
+  }
+
+  /// A session he is looking at (focused in a Term window in front) has
+  /// nothing new for him.
+  func seeViewed() {
+    for (host, name) in SpaceController.viewedTmuxSessions {
+      let ids = (agents[host.serverKey] ?? [:]).filter { $0.value.unread && $0.value.session == name }.map(\.key)
+      if !ids.isEmpty { markSeen(ids, on: host) }
+    }
   }
 
   private func show(_ screen: String, of session: Tmux.Session, key: String) {
@@ -262,6 +360,7 @@ final class TmuxStore {
     let ids = Set(sessions.map(\.id))
     closing[key, default: []].formUnion(ids)
     servers[key]?.sessions.removeAll { ids.contains($0.id) }
+    agents[key] = agents[key]?.filter { !ids.contains($0.key) }
     let result = await RemoteExec.run(Tab.spec(for: host), Tmux.killCommand(ids: sessions.map(\.id)))
     let complaint: String?
     switch result {

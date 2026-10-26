@@ -26,11 +26,12 @@ enum Tmux {
     var statusRows = 0
   }
 
-  /// One refresh of a host: its sessions, most recently active first, and
-  /// the screens captured this time (by session id).
+  /// One refresh of a host: its sessions, most recently active first, the
+  /// screens captured this time (by session id), and each session's agent.
   struct Overview: Equatable, Sendable {
     var sessions: [Session]
     var screens: [String: String]
+    var agents: [String: AgentInfo] = [:]
   }
 
   enum ListError: Error, Equatable {
@@ -58,11 +59,11 @@ enum Tmux {
   /// Starts each captured screen in the overview output: ASCII record separator.
   static let screenMark: UInt8 = 0x1E
 
-  /// One exec per refresh: the session list, then the visible screen of each
-  /// session's active pane, except sessions in `skip` (id → activity) whose
-  /// activity has not moved since their last capture. Once the list is read
-  /// the exec succeeds: an empty server, or a session gone before its
-  /// capture, still shows the list.
+  /// One exec per refresh: the session list, the agent panes, then the
+  /// visible screen of each session's active pane, except sessions in `skip`
+  /// (id → activity) whose activity has not moved since their last capture.
+  /// Once the list is read the exec succeeds: an empty server, or a session
+  /// gone before its capture, still shows the list.
   static func overviewCommand(skip: [String: Date] = [:]) -> String {
     let format = fields.map { "#{\($0)}" }.joined(separator: "\t")
     let known = skip.sorted { $0.key < $1.key }.map { "\($0.key):\(Int($0.value.timeIntervalSince1970))" }
@@ -72,14 +73,16 @@ enum Tmux {
       "s=$?",
       #"printf '%s\n' "$l""#,
       "[ $s = 0 ] || exit $s",
+      agentsScript,
       #"printf '%s\n' "$l" | while IFS='\#t' read -r i a r; do [ -n "$i" ] || continue; case ' \#(known.joined(separator: " ")) ' in *" $i:$a "*) ;; *) printf '\036%s\n' "$i"; tmux capture-pane -p -e -J -t "$i" 2>/dev/null;; esac; done"#,
       "exit 0",
     ].joined(separator: "; ")
   }
 
-  static func parseOverview(status: Int32, output: Data) -> Result<Overview, ListError> {
+  static func parseOverview(status: Int32, output: Data, now: Date = .now) -> Result<Overview, ListError> {
     let parts = output.split(separator: screenMark, omittingEmptySubsequences: false)
-    let list = String(decoding: parts.first ?? Data(), as: UTF8.self)
+    let head = (parts.first ?? Data()).split(separator: agentMark, maxSplits: 1, omittingEmptySubsequences: false)
+    let list = String(decoding: head.first ?? Data(), as: UTF8.self)
     if status == 127 { return .failure(.notInstalled) }
     if status != 0 {
       if list.contains("no server running") || list.contains("error connecting") {
@@ -88,6 +91,7 @@ enum Tmux {
       return .failure(.failed(status: status, output: list.trimmingCharacters(in: .whitespacesAndNewlines)))
     }
     let sessions = list.split(whereSeparator: \.isNewline).compactMap(parseSession)
+    let agents = head.count > 1 ? parseAgents(String(decoding: head[1], as: UTF8.self), now: now) : [:]
     var screens: [String: String] = [:]
     for part in parts.dropFirst() {
       let text = String(decoding: part, as: UTF8.self)
@@ -96,7 +100,7 @@ enum Tmux {
       if screen.hasSuffix("\n") { screen = screen.dropLast() }
       screens[String(text[..<newline])] = String(screen)
     }
-    return .success(Overview(sessions: sessions.sorted { $0.lastActivity > $1.lastActivity }, screens: screens))
+    return .success(Overview(sessions: sessions.sorted { $0.lastActivity > $1.lastActivity }, screens: screens, agents: agents))
   }
 
   private static func parseSession(_ line: Substring) -> Session? {

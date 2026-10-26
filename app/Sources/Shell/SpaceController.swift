@@ -352,9 +352,37 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     open(host)
   }
 
-  /// Every window's overview follows tab and name changes.
+  /// Every window's overview follows tab and name changes; a session he
+  /// has just entered has nothing new for him.
   static func tabsChanged() {
     for space in live { space.menu.revision &+= 1 }
+    TmuxStore.shared.seeViewed()
+  }
+
+  /// The tmux sessions he is looking at: the focused tab of each window in
+  /// front, by its host.
+  static var viewedTmuxSessions: [(Host, String)] {
+    live.compactMap { space in
+      guard space.view.window?.windowScene?.activationState == .foregroundActive,
+            let tab = space.focusedTab, let host = tab.target, let name = tab.tmuxSession else { return nil }
+      return (host, name)
+    }
+  }
+
+  /// The tmux icons' badge: sessions whose agent stopped for him. UIKit runs
+  /// this again whenever the count changes.
+  override func updateProperties() {
+    super.updateProperties()
+    let count = TmuxStore.shared.unreadCount
+    dock.setBadge(count, on: .tmux)
+    if count > 0 {
+      var badge = UIBarButtonItem.Badge.count(count)
+      badge.backgroundColor = Helm.UI.accent
+      badge.foregroundColor = UIColor(Helm.onAccent)
+      dockItems[.tmux]?.badge = badge
+    } else {
+      dockItems[.tmux]?.badge = nil
+    }
   }
 
   static func openWindow() {

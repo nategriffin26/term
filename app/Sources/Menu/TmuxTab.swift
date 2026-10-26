@@ -87,7 +87,11 @@ struct TmuxTab: View {
     let id = Self.rowID(host, session)
     let mine = model.tabs(on: host, session: session.name)
     let others = TmuxList.others(on: session, term: mine.filter(\.isConnected).count)
-    let open: () -> Void = { model.space?.attach(host, session: session.name, preview: store.screen(host.serverKey, session.id)) }
+    let unread = store.agent(host.serverKey, session.id)?.unread == true
+    let open: () -> Void = {
+      store.markSeen([session.id], on: host)
+      model.space?.attach(host, session: session.name, preview: store.screen(host.serverKey, session.id))
+    }
     let close: () -> Void = { self.close([session], on: host) }
     let detach: (() -> Void)? = others > 0 ? { detachOthers(session, on: host, keeping: mine) } : nil
     return Button {
@@ -114,6 +118,9 @@ struct TmuxTab: View {
     }
     .contextMenu {
       Button("Open", systemImage: "arrow.up.left.and.arrow.down.right", action: open)
+      if unread {
+        Button("Clear Notification", systemImage: "bell.slash") { store.markSeen([session.id], on: host) }
+      }
       if let detach {
         Button("Detach Others", systemImage: "rectangle.portrait.and.arrow.right", action: detach)
       }
@@ -126,23 +133,39 @@ struct TmuxTab: View {
   }
 
   private func selectBar(store: TmuxStore) -> some View {
-    let count = selected(store).reduce(0) { $0 + $1.1.count }
+    let picked = selected(store)
+    let count = picked.reduce(0) { $0 + $1.1.count }
+    let unread = picked.reduce(0) { total, pick in total + pick.1.count { store.agent(pick.0.serverKey, $0.id)?.unread == true } }
     return VStack(spacing: 0) {
       Rectangle().fill(Helm.line).frame(height: 1)
-      Button(count > 0 ? "Close \(count)" : "Close") { confirming = true }
-        .font(Helm.sans(14, .medium))
-        .foregroundStyle(Helm.bad)
-        .frame(maxWidth: .infinity)
-        .frame(height: 50)
-        .contentShape(Rectangle())
-        .buttonStyle(PressScale())
-        .disabled(count == 0)
-        .opacity(count == 0 ? 0.4 : 1)
-        .confirmationDialog(count == 1 ? "Close 1 tmux session?" : "Close \(count) tmux sessions?",
-                            isPresented: $confirming, titleVisibility: .visible) {
-          Button("Close \(count)", role: .destructive) { closeSelected(store) }
-          Button("Cancel", role: .cancel) {}
+      HStack(spacing: 0) {
+        if store.unreadCount > 0 {
+          Button(unread > 0 ? "Clear \(unread)" : "Clear") { clearSelected(store) }
+            .font(Helm.sans(14, .medium))
+            .foregroundStyle(Helm.fg)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .contentShape(Rectangle())
+            .buttonStyle(PressScale())
+            .disabled(unread == 0)
+            .opacity(unread == 0 ? 0.4 : 1)
+          Rectangle().fill(Helm.line).frame(width: 1, height: 24)
         }
+        Button(count > 0 ? "Close \(count)" : "Close") { confirming = true }
+          .font(Helm.sans(14, .medium))
+          .foregroundStyle(Helm.bad)
+          .frame(maxWidth: .infinity)
+          .frame(height: 50)
+          .contentShape(Rectangle())
+          .buttonStyle(PressScale())
+          .disabled(count == 0)
+          .opacity(count == 0 ? 0.4 : 1)
+          .confirmationDialog(count == 1 ? "Close 1 tmux session?" : "Close \(count) tmux sessions?",
+                              isPresented: $confirming, titleVisibility: .visible) {
+            Button("Close \(count)", role: .destructive) { closeSelected(store) }
+            Button("Cancel", role: .cancel) {}
+          }
+      }
     }
   }
 
@@ -158,6 +181,12 @@ struct TmuxTab: View {
     let picked = selected(store)
     withAnimation(Helm.spring(0.4)) { model.tmuxSelecting = false }
     for (host, sessions) in picked { close(sessions, on: host) }
+  }
+
+  private func clearSelected(_ store: TmuxStore) {
+    let picked = selected(store)
+    withAnimation(Helm.spring(0.4)) { model.tmuxSelecting = false }
+    for (host, sessions) in picked { store.markSeen(sessions.map(\.id), on: host) }
   }
 
   private func close(_ sessions: [Tmux.Session], on host: Host) {

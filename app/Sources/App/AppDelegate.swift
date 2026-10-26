@@ -16,6 +16,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { _ in
       MainActor.assumeIsolated { SessionRegistry.shared.resumeAll() }
     }
+    // The tmux badge: agents checked at once on coming to the front, then
+    // every few seconds while Term stays there.
+    center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+      MainActor.assumeIsolated { TmuxStore.shared.checkAgents(retry: true) }
+    }
+    Task { await TmuxStore.shared.watchAgents() }
     return true
   }
 

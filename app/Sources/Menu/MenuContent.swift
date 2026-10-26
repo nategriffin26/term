@@ -72,6 +72,7 @@ struct MenuContent: View {
     HStack(spacing: 2) {
       ForEach(MenuTab.allCases) { tab in
         let selected = model.tab == tab
+        let count = tab == .tmux ? TmuxStore.shared.unreadCount : 0
         Button {
           withAnimation(Helm.spring(0.32)) { model.tab = tab }
         } label: {
@@ -79,11 +80,15 @@ struct MenuContent: View {
             Image(systemName: tab.symbol)
               .font(.system(size: 14, weight: .regular))
               .foregroundStyle(selected ? Helm.accent : Helm.muted)
+              .overlay(alignment: .topTrailing) {
+                if count > 0, !titled(tab) { CountBadge(count: count).offset(x: 9, y: -8) }
+              }
             if titled(tab) {
               Text(tab.title)
                 .font(Helm.sans(13, .medium))
                 .foregroundStyle(selected ? Helm.fg : Helm.muted)
                 .fixedSize()
+              if count > 0 { CountBadge(count: count) }
             }
           }
           .padding(.horizontal, 11)
@@ -100,6 +105,7 @@ struct MenuContent: View {
         }
         .buttonStyle(PressScale(0.94))
         .accessibilityLabel(tab.title)
+        .accessibilityValue(count > 0 ? "\(count) new" : "")
         .accessibilityAddTraits(selected ? .isSelected : [])
       }
     }
@@ -113,6 +119,21 @@ struct MenuContent: View {
     case .files: FilesTab(model: model)
     case .settings: SettingsView().id(model.settingsGeneration).scrollContentBackground(.hidden)
     }
+  }
+}
+
+/// How many sessions wait on him: a count in an accent disc.
+struct CountBadge: View {
+  let count: Int
+
+  var body: some View {
+    Text("\(count)")
+      .font(Helm.sans(10, .semibold))
+      .foregroundStyle(Helm.onAccent)
+      .padding(.horizontal, 4)
+      .frame(minWidth: 16, minHeight: 16)
+      .background(Capsule().fill(Helm.accent))
+      .fixedSize()
   }
 }
 

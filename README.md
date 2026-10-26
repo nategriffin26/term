@@ -13,6 +13,7 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **mosh that survives iOS.** Local echo prediction, roaming between Wi-Fi and cellular, and sessions that come back after iOS kills the app in the background.
 - **SSH** with Ed25519 keys made or imported in the app. Host keys are pinned on first use.
 - **tmux, native.** A tmux tab lists every session on your hosts with the last lines of its screen: tap one to open it in a window, swipe or select to close them. Plus a scrollable history viewer, an overview of your open windows (three fingers up), and a swipe between windows that names where you're going.
+- **Agents that tell you when they stop.** With the omp extension below, the tmux tab shows what each [omp](https://github.com/can1357/oh-my-pi) agent is doing, and its icon counts the sessions whose agent finished, failed or asks you something. Entering the session clears it, on every device.
 - **Reconnect in place.** When a tmux session's mosh-server dies, Term starts a new one and swaps it in under the same screen. Nothing to tap.
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
 - **A floating menu** for Sessions, tmux, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
@@ -46,6 +47,16 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 `ssh` is [russh](https://github.com/Eugeny/russh). It starts mosh-server, runs the commands behind the tmux tab and history, and carries SFTP for Files.
 
 tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads history with `tmux capture-pane`, and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
+
+### omp agents
+
+[`integrations/omp/term-agent.ts`](integrations/omp/term-agent.ts) is an omp extension. Inside tmux it keeps the agent's state in its pane as the user option `@agent`, a small JSON value (state, title, current step, todo progress, the question it asks, its last answer, model, context, cost), rewritten as the state changes and every 30 seconds. When you prompt or answer omp it sets the session option `@seen`, and Term does the same when you enter the session or clear its notification, so a stop you've seen stays quiet on every device. Outside tmux it does nothing. To install it on a host:
+
+```sh
+ln -s "$PWD/integrations/omp/term-agent.ts" ~/.omp/agent/extensions/term-agent.ts
+```
+
+New omp sessions load it. Without it, Term still reads omp's terminal title for working, asks you or idle.
 
 ### Connecting
 
@@ -153,6 +164,7 @@ core/                   Rust workspace
   mosh                  sans-IO mosh 1.4 client
   ssh                   russh client, mosh bootstrap
 formal/                 TLA+ models and runners, fragment property tests
+integrations/omp/       omp extension that publishes agent state to tmux
 scripts/                ghostty-vt.sh, build-core.sh
 docs/                   README images
 ```
