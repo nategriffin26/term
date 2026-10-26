@@ -40,7 +40,7 @@ struct MenuContent: View {
       Spacer(minLength: 8)
       if model.tab == .tmux, model.tmuxSelecting || TmuxStore.shared.hasSessions {
         Button(model.tmuxSelecting ? "Done" : "Select") {
-          withAnimation(Helm.ease()) { model.tmuxSelecting.toggle() }
+          withAnimation(Helm.spring(0.4)) { model.tmuxSelecting.toggle() }
         }
         .font(Helm.sans(13, .medium))
         .foregroundStyle(model.tmuxSelecting ? Helm.accent : Helm.fg2)

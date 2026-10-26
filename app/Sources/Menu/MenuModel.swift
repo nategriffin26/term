@@ -73,8 +73,7 @@ final class MenuModel {
   @ObservationIgnored let thumbnails = ThumbnailRenderer()
   /// Thumbnail frames in window coordinates, for the zoom in and out of a tile.
   @ObservationIgnored var tileFrames: [UUID: CGRect] = [:]
-  /// The tmux tab's row snapshots, and the long-press preview's larger one.
-  @ObservationIgnored let tmuxThumbnails = ThumbnailRenderer()
+  /// The tmux tab's long-press preview of a session's screen.
   @ObservationIgnored let tmuxPreviews = ThumbnailRenderer()
   /// The host the tmux tab lists first while open (`tmux host` at the prompt).
   var tmuxTarget: String?
@@ -93,7 +92,6 @@ final class MenuModel {
   private func updateThumbnails() {
     if isOpen { updateAspect() }
     thumbnails.isActive = isOpen && tab == .sessions
-    tmuxThumbnails.isActive = isOpen && tab == .tmux
     if !isOpen || tab != .tmux { tmuxSelecting = false }
   }
 

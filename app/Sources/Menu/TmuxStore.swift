@@ -125,6 +125,8 @@ final class TmuxStore {
   }
 
   private(set) var servers: [String: Server] = [:]
+  /// Each snapshot's last lines, for its row.
+  private(set) var excerpts: [String: ScreenExcerpt] = [:]
 
   /// One terminal engine per snapshot, fed each new capture.
   @ObservationIgnored private var engines: [String: Session] = [:]
@@ -148,6 +150,7 @@ final class TmuxStore {
 
   /// The snapshot engine of a session, once it has been captured.
   func engine(_ key: String, _ id: String) -> Session? { engines[key + "\t" + id] }
+  func excerpt(_ key: String, _ id: String) -> ScreenExcerpt? { excerpts[key + "\t" + id] }
   /// The last capture of a session, as terminal bytes.
   func screen(_ key: String, _ id: String) -> Data? { screens[key + "\t" + id] }
 
@@ -210,6 +213,7 @@ final class TmuxStore {
       engines[id] = nil
       captured[id] = nil
       screens[id] = nil
+      excerpts[id] = nil
     }
     if servers[key] != server { servers[key] = server }
   }
@@ -231,6 +235,8 @@ final class TmuxStore {
     engine.feed(Tmux.screenBytes(screen, cursorX: session.cursorX, cursorY: session.cursorY))
     screens[id] = Tmux.screenBytes(screen, cursorX: session.cursorX, cursorY: session.cursorY, top: session.statusRows)
     captured[id] = session.lastActivity
+    let excerpt = ScreenExcerpt(engine)
+    if excerpts[id] != excerpt { excerpts[id] = excerpt }
   }
 
   // MARK: - Actions

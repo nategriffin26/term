@@ -11,11 +11,10 @@ struct TmuxTab: View {
   /// Bumped when the menu closes, so each opening starts at the top with no
   /// row left swiped open.
   @State private var generation = 0
-  @Environment(\.displayScale) private var displayScale
 
-  static let snapshot = CGSize(width: 64, height: 40)
-  /// The snapshot's margin inside its rounded frame.
-  static let snapshotInset: CGFloat = 3
+  /// The excerpts' size: the terminal's own font, read at a glance.
+  static let excerptPointSize: CGFloat = 11
+  private static var excerptFontCache: FontSet?
 
   var body: some View {
     let store = TmuxStore.shared
@@ -58,7 +57,7 @@ struct TmuxTab: View {
   }
 
   private func list(_ hosts: [Host], store: TmuxStore) -> some View {
-    let fonts = rowFonts(hosts.flatMap { store.servers[$0.serverKey]?.sessions ?? [] })
+    let fonts = Self.excerptFonts(family: model.currentTab?.view.fontFamily ?? FontSet.family)
     return List {
       ForEach(hosts) { host in
         let server = store.servers[host.serverKey]
@@ -84,7 +83,7 @@ struct TmuxTab: View {
     .animation(Helm.ease(0.26), value: hosts.map { store.servers[$0.serverKey]?.sessions.map(\.id) ?? [] })
   }
 
-  private func row(_ session: Tmux.Session, on host: Host, fonts: FontSet?, store: TmuxStore) -> some View {
+  private func row(_ session: Tmux.Session, on host: Host, fonts: FontSet, store: TmuxStore) -> some View {
     let id = Self.rowID(host, session)
     let mine = model.tabs(on: host, session: session.name)
     let others = TmuxList.others(on: session, term: mine.filter(\.isConnected).count)
@@ -93,12 +92,14 @@ struct TmuxTab: View {
     let detach: (() -> Void)? = others > 0 ? { detachOthers(session, on: host, keeping: mine) } : nil
     return Button {
       if model.tmuxSelecting {
-        if model.tmuxSelection.contains(id) { model.tmuxSelection.remove(id) } else { model.tmuxSelection.insert(id) }
+        withAnimation(Helm.ease(0.15)) {
+          if model.tmuxSelection.contains(id) { model.tmuxSelection.remove(id) } else { model.tmuxSelection.insert(id) }
+        }
       } else {
         open()
       }
     } label: {
-      TmuxRow(model: model, host: host, session: session, fonts: fonts,
+      TmuxRow(session: session, excerpt: store.excerpt(host.serverKey, session.id), fonts: fonts,
               dot: !mine.isEmpty ? Helm.accent : session.attached > 0 ? Helm.fg2 : nil,
               checked: model.tmuxSelecting ? model.tmuxSelection.contains(id) : nil)
     }
@@ -155,7 +156,7 @@ struct TmuxTab: View {
 
   private func closeSelected(_ store: TmuxStore) {
     let picked = selected(store)
-    withAnimation(Helm.ease()) { model.tmuxSelecting = false }
+    withAnimation(Helm.spring(0.4)) { model.tmuxSelecting = false }
     for (host, sessions) in picked { close(sessions, on: host) }
   }
 
@@ -177,32 +178,26 @@ struct TmuxTab: View {
     host.serverKey + "\t" + session.id
   }
 
-  /// One font for every row's snapshot: the widest screen fits, smaller
-  /// than legible (a snapshot this size is recognised by its shape).
-  private func rowFonts(_ sessions: [Tmux.Session]) -> FontSet? {
-    let widest = sessions.map(\.width).max() ?? 80
-    guard widest > 0 else { return nil }
-    let width = Self.snapshot.width - 2 * Self.snapshotInset
-    let cell = Int((width * displayScale / CGFloat(widest)).rounded(.down))
-    return model.tmuxThumbnails.fonts(cellWidth: cell, scale: displayScale,
-                                      family: model.currentTab?.view.fontFamily ?? FontSet.family, minimum: 1)
+  private static func excerptFonts(family: String) -> FontSet {
+    if let cached = excerptFontCache, cached.family == family { return cached }
+    let fonts = FontSet(family: family, pointSize: excerptPointSize, scale: 1)
+    excerptFontCache = fonts
+    return fonts
   }
 }
 
-/// One session: its screen in miniature, name, how long since it last
-/// changed, and what runs where.
+/// One session: its name, what runs where, how long since it last changed,
+/// and the last lines of its screen.
 private struct TmuxRow: View {
-  let model: MenuModel
-  let host: Host
   let session: Tmux.Session
-  let fonts: FontSet?
+  let excerpt: ScreenExcerpt?
+  let fonts: FontSet
   /// Accent: a Term tab is on it; fg-2: another client is.
   let dot: Color?
   /// Select mode's checkbox; nil outside it.
   let checked: Bool?
 
   var body: some View {
-    let serverKey = host.serverKey, id = session.id
     HStack(spacing: 12) {
       if let checked {
         Image(systemName: checked ? "checkmark.circle.fill" : "circle")
@@ -210,41 +205,72 @@ private struct TmuxRow: View {
           .foregroundStyle(checked ? Helm.accent : Helm.faint)
           .transition(.move(edge: .leading).combined(with: .opacity))
       }
-      ThumbnailView(source: { TmuxStore.shared.engine(serverKey, id) }, renderer: model.tmuxThumbnails, fonts: fonts,
-                    inset: TmuxTab.snapshotInset)
-        .frame(width: TmuxTab.snapshot.width, height: TmuxTab.snapshot.height)
-        .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Helm.line2, lineWidth: 1))
-      VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 6) {
         HStack(spacing: 6) {
           Text(session.name)
             .font(Helm.mono(13.5, .medium))
             .foregroundStyle(Helm.fg)
+            .layoutPriority(1)
           if let dot {
-            Circle().fill(dot).frame(width: 6, height: 6)
+            Circle().fill(dot).frame(width: 7, height: 7)
               .accessibilityLabel(dot == Helm.accent ? "open in Term" : "attached")
           }
+          ViewThatFits(in: .horizontal) {
+            ForEach(TmuxList.details(session), id: \.self) { Text($0) }
+            Color.clear.frame(width: 0, height: 0)
+          }
+          .font(Helm.mono(11.5))
+          .foregroundStyle(Helm.muted)
+          .padding(.leading, 4)
           Spacer(minLength: 8)
           TimelineView(.everyMinute) { context in
             Text(TmuxList.age(session.lastActivity, now: context.date))
               .font(Helm.mono(11.5))
               .foregroundStyle(Helm.muted)
           }
+          .fixedSize()
         }
-        ViewThatFits(in: .horizontal) {
-          ForEach(TmuxList.details(session), id: \.self) { Text($0) }
-        }
-        .font(Helm.mono(11.5))
-        .foregroundStyle(Helm.muted)
+        .lineLimit(1)
+        ExcerptLines(excerpt: excerpt, fonts: fonts)
       }
-      .lineLimit(1)
     }
     .opacity(TmuxList.isIdle(session, now: .now) ? 0.5 : 1)
     .padding(.horizontal, 16)
-    .padding(.vertical, 10)
+    .padding(.vertical, 11)
     .frame(maxWidth: .infinity, alignment: .leading)
     .contentShape(Rectangle())
+  }
+}
+
+/// A session's last lines in the terminal's font and colours, each cut at
+/// the row's edge. Always as tall as its lines, so a row keeps its height
+/// before its first capture lands.
+private struct ExcerptLines: View {
+  let excerpt: ScreenExcerpt?
+  let fonts: FontSet
+
+  var body: some View {
+    let height = CGFloat(fonts.metrics.height)
+    VStack(alignment: .leading, spacing: 0) {
+      ForEach(0..<ScreenExcerpt.lineCount, id: \.self) { i in
+        Text(line(i))
+          .lineLimit(1)
+          .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .leading)
+      }
+    }
+    .accessibilityHidden(true)
+  }
+
+  private func line(_ i: Int) -> AttributedString {
+    guard let lines = excerpt?.lines, i < lines.count else { return AttributedString() }
+    return lines[i].reduce(into: AttributedString()) { out, run in
+      var part = AttributedString(run.text)
+      let color = run.fg.map { Color(uiColor: UIColor(argb: $0 | 0xFF00_0000)) } ?? Helm.fg2
+      part.foregroundColor = run.faint ? color.opacity(0.55) : color
+      if let bg = run.bg { part.backgroundColor = Color(uiColor: UIColor(argb: bg | 0xFF00_0000)) }
+      part.font = Font(fonts.face(run.bold ? 1 : 0))
+      out += part
+    }
   }
 }
 
