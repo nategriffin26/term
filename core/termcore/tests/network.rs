@@ -481,6 +481,43 @@ fn mosh_transport_trusts_on_first_use_types_resizes_and_closes_cleanly() {
 }
 
 #[test]
+fn mosh_resize_issued_while_connecting_is_the_size_the_shell_reports() {
+    // Bug caught: the app resizes (keyboard up) between term_session_connect and
+    // the mosh client's first packet, and the server keeps the size connect
+    // asked for; `stty size` then disagrees with the visible grid.
+    let sshd = Sshd::start();
+    let token = MoshToken::new("early-resize");
+    let mut p = Params::new(&sshd, transport::MOSH);
+    p.command = Some(token.command());
+    let rec = Recorder::new();
+    let s = p.connect(&rec);
+    unsafe { term_session_resize(s, 57, 13, 0, 0) };
+    rec.wait_status(status::CONNECTED, 20 * SEC);
+    write(s, "stty size\r");
+    wait_screen(s, "13 57", 10 * SEC);
+    write(s, "exit\r");
+    assert_eq!(closed_reason(&rec, 15 * SEC), "");
+    unsafe { term_session_free(s) };
+}
+
+#[test]
+fn ssh_resize_issued_while_connecting_is_the_size_the_shell_reports() {
+    // Bug caught: a resize sent before the shell channel opens is dropped, so
+    // the shell keeps the connect-time size.
+    let sshd = Sshd::start();
+    let p = Params::new(&sshd, transport::SSH);
+    let rec = Recorder::new();
+    let s = p.connect(&rec);
+    unsafe { term_session_resize(s, 57, 13, 0, 0) };
+    rec.wait_status(status::CONNECTED, 20 * SEC);
+    write(s, "stty size\r");
+    wait_screen(s, "13 57", 10 * SEC);
+    write(s, "exit\r");
+    assert_eq!(closed_reason(&rec, 15 * SEC), "");
+    unsafe { term_session_free(s) };
+}
+
+#[test]
 fn mosh_session_survives_suspend_save_free_restore_resume() {
     // Bug caught: the saved blob cannot rebuild the session (wrong key,
     // states or nonce), so an app relaunch loses the remote shell.
