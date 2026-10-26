@@ -2,14 +2,15 @@ import SwiftUI
 
 /// The panel's content: a row of tabs and the selected tab below it. Every
 /// tab stays alive while hidden so it keeps its place across tab switches;
-/// only Files also keeps it across close/reopen (MenuModel.isOpen resets the rest).
+/// only Files and Screen also keep it across close/reopen (MenuModel.isOpen resets the rest).
 struct MenuContent: View {
   let model: MenuModel
   @Namespace private var indicator
 
   var body: some View {
     VStack(spacing: 0) {
-      header
+      // Fullscreen on the Screen gives the picture the whole panel.
+      if !(model.tab == .screen && model.screen.fullscreen) { header.transition(.opacity) }
       ZStack {
         ForEach(MenuTab.allCases) { tab in
           let shown = model.tab == tab
@@ -118,6 +119,7 @@ struct MenuContent: View {
     case .sessions: SessionsTab(model: model)
     case .tmux: TmuxTab(model: model)
     case .files: FilesTab(model: model)
+    case .screen: ScreenTab(session: model.screen)
     case .settings: SettingsView(start: model.settingsStart).id(model.settingsGeneration).scrollContentBackground(.hidden)
     }
   }

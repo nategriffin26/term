@@ -93,9 +93,11 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
     let twoFingerTap = UITapGestureRecognizer(target: self, action: #selector(twoFingerTap(_:)))
     twoFingerTap.numberOfTouchesRequired = 2
+    twoFingerTap.delegate = self
     view.addGestureRecognizer(twoFingerTap)
     let threeFingerTap = UITapGestureRecognizer(target: self, action: #selector(toggleMenu(_:)))
     threeFingerTap.numberOfTouchesRequired = 3
+    threeFingerTap.delegate = self
     view.addGestureRecognizer(threeFingerTap)
     overviewSwipe.addTarget(self, action: #selector(overviewSwiped(_:)))
     overviewSwipe.minimumNumberOfTouches = 3
@@ -502,6 +504,16 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     panes.first { $0.container.frame.contains(point) }
   }
 
+  /// Every touch on the Screen is the Mac's: none of the window's own gestures see it.
+  func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    var view = touch.view
+    while let v = view {
+      if v is ScreenView { return false }
+      view = v.superview
+    }
+    return true
+  }
+
   func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
     if g === overviewSwipe {
       let v = overviewSwipe.velocity(in: view)
@@ -687,7 +699,9 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   }
 
   override var keyCommands: [UIKeyCommand]? {
-    [
+    // While the Screen shows, ⌘W and the rest are the Mac's.
+    if panel.isOpen, menu.tab == .screen { return nil }
+    return [
       UIKeyCommand(title: "New Shell", action: #selector(newSession(_:)), input: "t", modifierFlags: .command),
       UIKeyCommand(title: "Close Shell", action: #selector(closeSession(_:)), input: "w", modifierFlags: .command),
       UIKeyCommand(title: "Next Shell", action: #selector(nextSession(_:)), input: "]", modifierFlags: [.command, .shift]),
@@ -851,6 +865,11 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let open = menu.isOpen ? menu.tab : nil
     dock.setSelected(open)
     for (tab, item) in dockItems { item.tintColor = tab == open ? Chrome.UI.accent : nil }
+    // The Screen takes the keyboard (its own, or a hardware one's keys): the terminal hands it over until the panel closes.
+    if open == .screen, let terminal = focusedTab?.view, terminal.isFirstResponder {
+      menuRestoresFocus = true
+      terminal.resignFirstResponder()
+    }
   }
 
   /// A dock icon: opens the panel out of itself, switches to its tab when the

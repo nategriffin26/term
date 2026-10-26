@@ -1,9 +1,9 @@
 import Foundation
 import Security
 
-/// SSH private keys, host passwords and the OpenRouter key. Keys are
-/// generic-password items whose account is the key name; the public line
-/// rides along in kSecAttrGeneric so listing keys never reads secret data.
+/// SSH private keys, host passwords, Mac passwords and the OpenRouter key.
+/// Keys are generic-password items whose account is the key name; the public
+/// line rides along in kSecAttrGeneric so listing keys never reads secret data.
 enum Keychain {
   struct Key: Identifiable, Hashable, Sendable {
     var name: String
@@ -22,6 +22,8 @@ enum Keychain {
   private static let keyService = AppIdentity.bundleID + ".key"
   private static let passwordService = AppIdentity.bundleID + ".password"
   private static let openRouterService = AppIdentity.bundleID + ".openrouter"
+  /// The Mac account password per host: Screen Sharing's sign-in and Type User Password.
+  private static let macPasswordService = AppIdentity.bundleID + ".mac-password"
 
   static func keys() -> [Key] {
     let query: [CFString: Any] = [
@@ -96,6 +98,24 @@ enum Keychain {
       kSecAttrAccount: "api-key",
       kSecValueData: Data(key.utf8),
       kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+    ]
+    SecItemAdd(attrs as CFDictionary, nil)
+  }
+
+  static func macPassword(for host: UUID) -> String? {
+    read(service: macPasswordService, account: host.uuidString)
+  }
+
+  /// nil or empty removes it.
+  static func setMacPassword(_ password: String?, for host: UUID) {
+    delete(service: macPasswordService, account: host.uuidString)
+    guard let password, !password.isEmpty else { return }
+    let attrs: [CFString: Any] = [
+      kSecClass: kSecClassGenericPassword,
+      kSecAttrService: macPasswordService,
+      kSecAttrAccount: host.uuidString,
+      kSecValueData: Data(password.utf8),
+      kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
     ]
     SecItemAdd(attrs as CFDictionary, nil)
   }

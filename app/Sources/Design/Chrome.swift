@@ -97,6 +97,8 @@ enum Chrome {
     static var onAccent: UIColor { tone(\.onAccent) }
     static var bad: UIColor { tone(\.bad) }
     static var overlay: UIColor { tone(\.overlay) }
+    static var ok: UIColor { tone(\.ok) }
+    static var folder: UIColor { tone(\.folder) }
 
     private static func tone(_ key: KeyPath<AppTheme, AppTheme.Tone> & Sendable) -> UIColor {
       UIColor { traits in traits[AppThemeTrait.self][keyPath: key].uiColor }

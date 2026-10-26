@@ -4,7 +4,7 @@ import UIKit
 /// The panel's tabs, in order. A new capability is a new case plus its view
 /// in MenuContent; the header and the dock follow this list.
 enum MenuTab: String, CaseIterable, Identifiable {
-  case sessions, tmux, files, settings
+  case sessions, tmux, files, screen, settings
 
   var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum MenuTab: String, CaseIterable, Identifiable {
     case .sessions: "Sessions"
     case .tmux: "tmux"
     case .files: "Files"
+    case .screen: "Screen"
     case .settings: "Settings"
     }
   }
@@ -22,6 +23,7 @@ enum MenuTab: String, CaseIterable, Identifiable {
     case .sessions: "square.grid.2x2"
     case .tmux: "rectangle.stack"
     case .files: "folder"
+    case .screen: "rectangle.and.hand.point.up.left"
     case .settings: "gearshape"
     }
   }
@@ -53,6 +55,7 @@ final class MenuModel {
     didSet {
       UserDefaults.standard.set(tab.rawValue, forKey: Self.lastTabKey)
       updateThumbnails()
+      updateScreen()
       onChange?()
     }
   }
@@ -70,6 +73,7 @@ final class MenuModel {
       }
       if isOpen, !oldValue { resetPages() }
       updateThumbnails()
+      updateScreen()
       onChange?()
     }
   }
@@ -97,6 +101,8 @@ final class MenuModel {
   var tmuxSelection = Set<String>()
   /// Rows opening a session while its existing terminals are being checked.
   var tmuxOpening = Set<String>()
+  /// The Screen tab's Mac, connected while the window lives; it streams only while shown.
+  @ObservationIgnored let screen = ScreenSession()
 
   init() {
     tab = UserDefaults.standard.string(forKey: Self.lastTabKey).flatMap(MenuTab.init(rawValue:)) ?? .sessions
@@ -107,6 +113,10 @@ final class MenuModel {
     if isOpen { updateAspect() }
     thumbnails.isActive = isOpen && tab == .sessions
     if !isOpen || tab != .tmux { tmuxSelecting = false }
+  }
+
+  private func updateScreen() {
+    screen.setShown(isOpen && tab == .screen)
   }
 
   /// Sub-pages from the last opening are gone before the panel shows, with
