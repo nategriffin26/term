@@ -6,7 +6,7 @@ final class Host {
     private var listener: SocketListener?
     private var client: SocketClient?
     private var welcomed = false
-    private let input = Input()
+    private let input: Input
     private let clipboard: Clipboard
     private let clipboardQueue = DispatchQueue(label: "screen.clipboard", qos: .userInitiated)
     private var clipboardReadPending = false
@@ -23,8 +23,12 @@ final class Host {
     private var observers: [NSObjectProtocol] = []
     private var quality = QualityController()
     private var transportSkips = 0
+    private var transportFrames = 0
 
-    init(clipboard: Clipboard = Clipboard()) { self.clipboard = clipboard }
+    init(clipboard: Clipboard = Clipboard(), input: Input = Input()) {
+        self.clipboard = clipboard
+        self.input = input
+    }
 
     func start() throws {
         access = Desktop.access(request: true)
@@ -67,6 +71,7 @@ final class Host {
         welcomed = false
         quality = QualityController()
         transportSkips = 0
+        transportFrames = 0
         client = nil
     }
 
@@ -157,13 +162,12 @@ final class Host {
         }
     }
 
-    private func pollPointer() {
+    func pollPointer(actual: ScreenWire.Point = Desktop.pointer, at now: Double = ProcessInfo.processInfo.systemUptime) {
         if let image = cursor.changed() { client?.send(.cursor, image) }
-        let actual = Desktop.pointer
         let reference = input.lastPoint ?? CGPoint(x: pointer.x, y: pointer.y)
         // CGEvent can still report the previous position just after a posted move.
-        if ProcessInfo.processInfo.systemUptime - input.lastMoveTime >= 0.25,
-           hypot(actual.x - reference.x, actual.y - reference.y) > 0.5,
+        guard now - input.lastMoveTime >= 0.25 else { return }
+        if hypot(actual.x - reference.x, actual.y - reference.y) > 0.5,
            hypot(actual.x - pointer.x, actual.y - pointer.y) > 0.5 {
             client?.send(.pointerMoved, actual)
         }
@@ -197,9 +201,11 @@ final class Host {
     private func sampleQuality() {
         let skipped = transportSkips
         transportSkips = 0
+        let sent = transportFrames
+        transportFrames = 0
         guard !streams.isEmpty else { return }
         let previous = quality.level
-        if quality.sample(skipped: skipped, blocked: (client?.pendingVideos ?? 0) >= 2,
+        if quality.sample(sent: sent, skipped: skipped, blocked: (client?.pendingVideos ?? 0) >= 2,
                           at: ProcessInfo.processInfo.systemUptime) {
             applyQuality(previous: previous)
         }
@@ -252,6 +258,7 @@ final class Host {
                             guard let self, (self.client?.pendingVideos ?? 0) > 0 else { return }
                             self.transportSkips += 1
                         },
+                        transportSent: { [weak self] in self?.transportFrames += 1 },
                         output: { [weak self] format, frame in
                             guard let self, !self.locked, self.streams[id] != nil else { return false }
                             DispatchQueue.main.async { [weak self] in

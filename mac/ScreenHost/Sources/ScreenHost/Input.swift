@@ -96,7 +96,7 @@ final class Input {
         event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
         event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum)
         event.flags = flags
-        event.location = CGEvent(source: nil)?.location ?? .zero
+        event.location = lastPoint ?? CGEvent(source: nil)?.location ?? .zero
         post(event)
     }
 

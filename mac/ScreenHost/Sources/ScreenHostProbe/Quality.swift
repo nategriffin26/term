@@ -114,10 +114,17 @@ func exerciseQuality(_ connection: Connection) throws {
     try animate(3)
     let down = connection.qualityStates.map { $0.state.level }
     try require(down.contains(.medium) && down.contains(.low), "Real socket congestion did not reach medium and low")
-    // Keep the picture still while the unrestricted socket drains. A blocked
-    // still screen must not count as quiet, but a drained one must recover.
+    // An idle picture must not infer spare bandwidth from silence.
     windows.forEach { $0.still() }
-    try connection.wait(45) { connection.qualityStates.last?.state.level == .high }
+    try connection.pump(18)
+    try require(connection.qualityStates.last?.state.level == .low, "Idle screen raised quality without delivered frames")
+    print("idle_screen_recovery_paused=true")
+    let recoveryDeadline = Date().addingTimeInterval(45)
+    while connection.qualityStates.last?.state.level != .high && Date() < recoveryDeadline {
+        try animate(1)
+    }
+    try require(connection.qualityStates.last?.state.level == .high, "Delivered frames did not restore quality after congestion cleared")
+    windows.forEach { $0.still() }
     print("adaptive_recovered_seconds=\(ProcessInfo.processInfo.systemUptime - cleared)")
     connection.decodeFrames = true
     for display in welcome.displays { try connection.send(.keyframe, ScreenWire.KeyframeRequest(display: display.id)) }

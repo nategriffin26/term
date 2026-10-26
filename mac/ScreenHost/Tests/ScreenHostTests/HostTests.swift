@@ -4,6 +4,46 @@ import ScreenProtocol
 @testable import ScreenHost
 
 final class HostTests: XCTestCase {
+    func testExternalPointerWarpDuringSuppressionIsReportedAfterward() throws {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let input = Input { _ in }
+        let host = Host(clipboard: Clipboard(pasteboard: board), input: input)
+        var pair: [Int32] = [0, 0]
+        XCTAssertEqual(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair), 0)
+        let client = SocketClient(pair[0])
+        defer { client.close(); Darwin.close(pair[1]) }
+        host.connect(client)
+        try client.receive?(.hello, JSONEncoder().encode(ScreenWire.Hello()))
+        let initial = Desktop.pointer
+        input.move(initial)
+        let warped = ScreenWire.Point(x: initial.x + 100, y: initial.y + 100)
+        var bytes = [UInt8](repeating: 0, count: 65536)
+        _ = recv(pair[1], &bytes, bytes.count, MSG_DONTWAIT)
+        host.pollPointer(actual: warped, at: input.lastMoveTime + 0.1)
+        host.pollPointer(actual: warped, at: input.lastMoveTime + 0.3)
+        host.pollPointer(actual: warped, at: input.lastMoveTime + 0.4)
+        let count = recv(pair[1], &bytes, bytes.count, MSG_DONTWAIT)
+        var reader = ScreenWire.FrameReader()
+        reader.append(Data(bytes.prefix(max(0, count))))
+        var moved: [ScreenWire.Point] = []
+        while let (kind, payload) = try reader.next() {
+            if kind == .pointerMoved { moved.append(try ScreenWire.decode(ScreenWire.Point.self, from: payload)) }
+        }
+        XCTAssertEqual(moved, [warped], "A suppressed external warp must be delivered once after the settling window")
+    }
+
+    func testScrollImmediatelyAfterPointerMoveUsesRequestedPosition() {
+        var events: [CGEvent] = []
+        let input = Input { events.append($0) }
+        let actual = Desktop.pointer
+        let requested = ScreenWire.Point(x: actual.x + 100, y: actual.y + 100)
+        input.move(requested)
+        input.scroll(.init(dx: 0, dy: 10, phase: .began, momentum: .none))
+        XCTAssertEqual(events.last?.type, .scrollWheel)
+        XCTAssertEqual(events.last?.location, CGPoint(x: requested.x, y: requested.y))
+    }
+
     func testWelcomeIncludesQualityAndCursorBeforePolling() throws {
         let board = NSPasteboard.withUniqueName()
         defer { board.releaseGlobally() }

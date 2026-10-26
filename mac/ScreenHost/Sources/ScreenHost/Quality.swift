@@ -2,11 +2,13 @@ import ScreenProtocol
 
 /// One sample per second, shared by all watched displays. Encoder saturation
 /// alone is not network congestion. Recovery is deliberately slower than a drop.
+/// Recovery needs fifteen uncongested samples with delivered frames; idle
+/// samples pause that count rather than inferring spare bandwidth from silence.
 struct QualityController {
     private(set) var mode = ScreenWire.QualityMode.adaptive
     private(set) var level = ScreenWire.QualityLevel.high
     private var congestedSince: Double?
-    private var quietSince: Double?
+    private var quietSamples = 0
     private var lastChange: Double = -.infinity
 
     var state: ScreenWire.QualityState { .init(mode: mode, level: level) }
@@ -22,26 +24,26 @@ struct QualityController {
         }
         lastChange = now
         congestedSince = nil
-        quietSince = nil
+        quietSamples = 0
         return true
     }
 
-    mutating func sample(skipped: Int, blocked: Bool, at now: Double) -> Bool {
+    mutating func sample(sent: Int, skipped: Int, blocked: Bool, at now: Double) -> Bool {
         guard mode == .adaptive else { return false }
-        if skipped > 0 || blocked { quietSince = nil }
-        else if quietSince == nil { quietSince = now }
+        if skipped > 0 || blocked { quietSamples = 0 }
+        else if sent > 0 { quietSamples += 1 }
         if skipped >= 3 || blocked {
             if congestedSince == nil { congestedSince = now }
         } else { congestedSince = nil }
         guard now - lastChange >= 5 else { return false }
         if let since = congestedSince, now - since >= 1, level != .low {
             level = level == .high ? .medium : .low
-        } else if let since = quietSince, now - since >= 15, level != .high {
+        } else if quietSamples >= 15, level != .high {
             level = level == .low ? .medium : .high
         } else { return false }
         lastChange = now
         congestedSince = nil
-        quietSince = nil
+        quietSamples = 0
         return true
     }
 }

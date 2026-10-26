@@ -32,6 +32,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
     private let failure: (String) -> Void
     private let congested: () -> Bool
     private let transportSkipped: () -> Void
+    private let transportSent: () -> Void
     private var congestionDrops = 0
     private var encodeTimes: [Double] = []
     private var sentBytes = 0
@@ -45,6 +46,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
 
     init(display: ScreenWire.Display, source: SCDisplay, level: ScreenWire.QualityLevel,
          congested: @escaping () -> Bool, transportSkipped: @escaping () -> Void,
+         transportSent: @escaping () -> Void,
          output: @escaping (ScreenWire.VideoFormat?, ScreenWire.VideoFrame) -> Bool,
          failure: @escaping (String) -> Void) throws {
         self.display = display
@@ -52,6 +54,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
         self.output = output
         self.failure = failure
         self.transportSkipped = transportSkipped
+        self.transportSent = transportSent
         quality = StreamQuality(display: display, level: level)
         super.init()
         do { try createEncoder(.hevc) }
@@ -248,6 +251,7 @@ final class DisplayStream: NSObject, SCStreamOutput, SCStreamDelegate {
             if let newFormat { format = newFormat }
             sentFrames += 1
             sentBytes += length
+            transportSent()
         } else {
             transportDrops += 1
             transportSkipped()
