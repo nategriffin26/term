@@ -111,7 +111,7 @@ final class DiagramMatcherTests: XCTestCase {
     let rows = ["Here are the pets:", "", "```mermaid", "pie title Pets adopted", "  \"Dogs\" : 386",
                 "  \"Cats\" : 85", "  \"Rats\" : 15", "```", "", "Dogs win."]
     let pie = DiagramMatcher.Candidate(hash: "pie", time: 3, source: Self.pie)
-    XCTAssertEqual(DiagramMatcher.match(rows, sources + [pie]), [.init(top: 2, bottom: 7, hash: "pie")])
+    XCTAssertEqual(DiagramMatcher.match(rows, sources + [pie]), [.init(top: 2, bottom: 7, hash: "pie", isText: true)])
     XCTAssertEqual(DiagramMatcher.match(rows, sources), [])
   }
 
@@ -119,7 +119,7 @@ final class DiagramMatcherTests: XCTestCase {
   func testSourceTextBlockOpenAtTheBottomAndOtherFences() {
     let pie = DiagramMatcher.Candidate(hash: "pie", time: 3, source: Self.pie)
     XCTAssertEqual(DiagramMatcher.match(["x", "```mermaid", "pie title Pets adopted", "  \"Dogs\" : 386"], [pie]),
-                   [.init(top: 1, bottom: 3, hash: "pie", openBottom: true)])
+                   [.init(top: 1, bottom: 3, hash: "pie", openBottom: true, isText: true)])
     XCTAssertEqual(DiagramMatcher.match(["```", "pie title Pets adopted", "  \"Dogs\" : 386", "```"], [pie]), [])
     XCTAssertEqual(DiagramMatcher.match(["x", "```mermaid"], [pie]), [])
   }
@@ -229,6 +229,29 @@ final class DiagramPlacementTests: XCTestCase {
     XCTAssertEqual(try XCTUnwrap(place(top: 5, bottom: 14, height: region)).image.height, region)
     XCTAssertEqual(try XCTUnwrap(place(top: 5, bottom: 14, height: region + 1)).image.height, region, accuracy: 0.001)
     XCTAssertEqual(try XCTUnwrap(place(top: 5, bottom: 14, height: region * 2)).image.height, region * 2 * 0.75, accuracy: 0.001)
+  }
+
+  /// Source text has no natural height, so a diagram taller than its rows is
+  /// fitted whole (a pie in 7 rows was clipped to a half pie); an ASCII drawing
+  /// keeps the floor.
+  func testSourceTextBlockFitsWholeBelowTheFloor() throws {
+    let region: CGFloat = 8 * 17
+    let text = DiagramMatcher.Match(top: 5, bottom: 12, hash: "", isText: true)
+    let p = try XCTUnwrap(DiagramPlacement.place(text, cols: 51, rows: 45, cell: cell, size: CGSize(width: 300, height: region * 3)))
+    XCTAssertEqual(p.image.height, region, accuracy: 0.001)
+    XCTAssertEqual(p.image.width, 100, accuracy: 0.001)
+    XCTAssertFalse(p.clipsBottom)
+  }
+
+  /// Clipped past the floor, with the drawing's last row on screen: fade. Whole,
+  /// still streaming, or last row below the screen: no fade.
+  func testClippedBlockFadesAtItsLastRowOnly() throws {
+    let region: CGFloat = 10 * 17
+    XCTAssertEqual(try XCTUnwrap(place(top: 5, bottom: 14, height: region * 2)).clipsBottom, true)
+    XCTAssertEqual(try XCTUnwrap(place(top: 5, bottom: 14, height: region)).clipsBottom, false)
+    XCTAssertEqual(try XCTUnwrap(place(top: 30, bottom: 44, height: 2000)).clipsBottom, false)
+    XCTAssertEqual(try XCTUnwrap(page(top: 40, bottom: 60, height: 2000)).clipsBottom, false)
+    XCTAssertEqual(try XCTUnwrap(page(top: 30, bottom: 40, height: 2000)).clipsBottom, true)
   }
 
   /// Wider than 49 columns: scaled to fit the width.

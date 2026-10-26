@@ -23,6 +23,12 @@ enum DiagramMatcher {
             openTop: rows != nil && (top == 0 || drawn.trimTop > 0),
             openBottom: rows.map { bottom == $0 - 1 || drawn.trimBottom > 0 } ?? false)
     }
+
+    /// This block as the source text of `hash` (rows from the fence line to
+    /// the closing one), open at the bottom of a `rows`-tall screen.
+    func sourceMatch(_ hash: String, screenRows rows: Int?) -> Match {
+      Match(top: top, bottom: bottom, hash: hash, openBottom: rows.map { bottom == $0 - 1 } ?? false, isText: true)
+    }
   }
 
   /// A source's drawing on screen, and whether it may go on past either edge
@@ -33,6 +39,9 @@ enum DiagramMatcher {
     var hash: String
     var openTop = false
     var openBottom = false
+    /// The rows are Mermaid source text, not an ASCII drawing: the diagram has
+    /// no natural height here, so it is fitted whole into them.
+    var isText = false
   }
 
   /// The source a block draws, and the rows at its edges that aren't part of it.
@@ -176,7 +185,7 @@ enum DiagramMatcher {
     }
     let sources = sourceBlocks(rows).compactMap { b in
       drawn(rows[b.top + 1...b.bottom], in: candidates).map {
-        Match(top: b.top, bottom: b.bottom, hash: $0.hash, openTop: false, openBottom: edge != nil && b.bottom == rows.count - 1)
+        b.sourceMatch($0.hash, screenRows: edge)
       }
     }
     return (drawings + sources).sorted { $0.top < $1.top }

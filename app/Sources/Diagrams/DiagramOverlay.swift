@@ -10,8 +10,11 @@ struct DiagramPlacement: Equatable {
   var tile: CGRect
   /// The image, relative to the tile (it may extend past it and is clipped).
   var image: CGRect
+  /// The drawing's last row is on screen and the image runs past it: the
+  /// tile fades out there to say there is more.
+  var clipsBottom: Bool
 
-  /// Smallest height scale used to fit a diagram within its drawing.
+  /// Smallest height scale used to fit a diagram within an ASCII drawing.
   static let minScale: CGFloat = 0.75
 
   /// `drawing`: its rows on a grid `rows` tall, which may lie past the grid
@@ -26,13 +29,14 @@ struct DiagramPlacement: Equatable {
     var scale = min(1, CGFloat(max(cols - 2, 1)) * cell.width / size.width)
     // Both edges known: the whole drawing is known, so fit it, within reason.
     if !drawing.openTop, !drawing.openBottom, size.height * scale > block {
-      scale = min(scale, max(block / size.height, minScale))
+      scale = min(scale, max(block / size.height, drawing.isText ? 0 : minScale))
     }
     let shown = CGSize(width: size.width * scale, height: size.height * scale)
     let y = drawing.openTop && !drawing.openBottom
       ? min(0, tile.height - shown.height)
       : CGFloat(drawing.top - first) * cell.height
-    return DiagramPlacement(tile: tile, image: CGRect(x: (width - shown.width) / 2, y: y, width: shown.width, height: shown.height))
+    let image = CGRect(x: (width - shown.width) / 2, y: y, width: shown.width, height: shown.height)
+    return DiagramPlacement(tile: tile, image: image, clipsBottom: !drawing.openBottom && drawing.bottom <= rows - 1 && image.maxY > tile.height + 0.5)
   }
 }
 
@@ -197,8 +201,7 @@ final class DiagramOverlay: UIView {
     }
     for block in DiagramMatcher.sourceBlocks(rows) {
       if let drawn = memo(rows[block.top + 1...block.bottom]) {
-        found.append(.init(top: block.top, bottom: block.bottom, hash: drawn.hash,
-                           openBottom: screen.map { block.bottom == $0 - 1 } ?? false))
+        found.append(block.sourceMatch(drawn.hash, screenRows: screen))
       } else {
         miss(block)
       }
@@ -236,6 +239,13 @@ final class DiagramOverlay: UIView {
       let view = tile.subviews[0] as! UIImageView
       view.image = image
       view.frame = place.image
+      let fade = tile.subviews[1] as! ClipFade
+      fade.isHidden = !place.clipsBottom
+      if place.clipsBottom {
+        let h = min(place.tile.height, cell.height * 2)
+        fade.frame = CGRect(x: 0, y: place.tile.height - h, width: place.tile.width, height: h)
+        fade.update(background: UIColor(argb: snapshot.bg), foreground: UIColor(argb: snapshot.fg))
+      }
       shown.append(Shown(drawing: drawing, image: image, style: style, frame: tile.frame, tile: tile))
     }
     while tiles.count > used { tiles.removeLast().removeFromSuperview() }
@@ -248,6 +258,7 @@ final class DiagramOverlay: UIView {
     let image = UIImageView()
     image.contentMode = .scaleToFill
     tile.addSubview(image)
+    tile.addSubview(ClipFade())
     addSubview(tile)
     tiles.append(tile)
     return tile
@@ -279,5 +290,36 @@ final class DiagramOverlay: UIView {
   static func pageRows(_ session: Session, cols: Int, rows: Int) -> [String] {
     guard cols > 0 else { return [] }
     return (0..<rows).map { session.text(fromCol: 0, row: $0, toCol: cols - 1, row: $0) }
+  }
+}
+
+/// The bottom edge of a tile whose diagram runs past its rows: fades to the
+/// terminal background with a small expand glyph, a tap away from the whole.
+private final class ClipFade: UIView {
+  private let gradient = CAGradientLayer()
+  private let glyph = UIImageView(image: UIImage(
+    systemName: "arrow.up.left.and.arrow.down.right", withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .medium)))
+
+  init() {
+    super.init(frame: .zero)
+    isUserInteractionEnabled = false
+    layer.addSublayer(gradient)
+    addSubview(glyph)
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  func update(background: UIColor, foreground: UIColor) {
+    gradient.colors = [background.withAlphaComponent(0).cgColor, background.cgColor]
+    glyph.tintColor = foreground.withAlphaComponent(0.6)
+    setNeedsLayout()
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    gradient.frame = bounds
+    glyph.sizeToFit()
+    glyph.frame.origin = CGPoint(x: bounds.maxX - glyph.bounds.width - 6, y: bounds.maxY - glyph.bounds.height - 4)
   }
 }
