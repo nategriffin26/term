@@ -18,7 +18,7 @@ import Foundation
 /// Everything on the wire, namespaced so the app's module keeps its own names.
 public enum ScreenWire {
   /// Bumped on any incompatible change; the host closes a client whose hello differs.
-  public static let version = 1
+  public static let version = 2
   /// The host's socket, under the Mac user's home directory (mode 0600 in a 0700 directory).
   public static let socketPath = "~/.term/screen.sock"
   /// The largest frame either side accepts; a clipboard image is the biggest.
@@ -31,6 +31,7 @@ public enum Kind: UInt8, Sendable {
   case hello = 0x01      // Hello; the first message
   case watch = 0x02      // Watch
   case keyframe = 0x03   // KeyframeRequest
+  case quality = 0x04    // QualityRequest
   case pointer = 0x10    // Point: move the pointer there (a drag while a button is down)
   case button = 0x11     // ButtonEvent
   case scroll = 0x12     // ScrollEvent
@@ -49,6 +50,7 @@ public enum Kind: UInt8, Sendable {
   case clipboard = 0x87    // Clipboard: the Mac's clipboard changed
   case lock = 0x88         // LockState, whenever the session locks or unlocks
   case access = 0x89       // Access, whenever a privacy grant changes
+  case qualityState = 0x8A // QualityState, after Welcome and whenever the mode or the level changes
   case failure = 0x8F      // Failure: something the user should read; the connection stays open
 }
 
@@ -59,6 +61,22 @@ public struct Rect: Codable, Equatable, Sendable {
   public init(x: Double, y: Double, width: Double, height: Double) {
     self.x = x; self.y = y; self.width = width; self.height = height
   }
+}
+
+/// How the host trades picture for speed, per display stream:
+/// - high: native pixels at the full bitrate;
+/// - medium: three quarters of the pixels on each axis at half the bitrate;
+/// - low: half the pixels on each axis at a quarter of the bitrate.
+/// A level change restarts each stream with a VideoFormat (its new pixel size) and a key frame.
+public enum QualityLevel: String, Codable, Equatable, Sendable {
+  case high, medium, low
+}
+
+/// A fixed level, or adaptive: the default until the phone asks otherwise. It
+/// starts at high, drops a level when the connection falls behind, and climbs
+/// back a level after a quiet spell.
+public enum QualityMode: String, Codable, Equatable, Sendable {
+  case adaptive, high, medium, low
 }
 
 public struct Display: Codable, Equatable, Sendable {
@@ -110,6 +128,12 @@ public struct Watch: Codable, Equatable, Sendable {
 public struct KeyframeRequest: Codable, Equatable, Sendable {
   public var display: UInt32
   public init(display: UInt32) { self.display = display }
+}
+
+/// The picture quality the phone asks for; it holds for the connection.
+public struct QualityRequest: Codable, Equatable, Sendable {
+  public var mode: QualityMode
+  public init(mode: QualityMode) { self.mode = mode }
 }
 
 public enum MouseButton: String, Codable, Sendable {
@@ -232,6 +256,13 @@ public struct CursorImage: Codable, Equatable, Sendable {
 public struct LockState: Codable, Equatable, Sendable {
   public var locked: Bool
   public init(locked: Bool) { self.locked = locked }
+}
+
+public struct QualityState: Codable, Equatable, Sendable {
+  public var mode: QualityMode
+  /// The level the streams use now (the mode's own under a fixed mode).
+  public var level: QualityLevel
+  public init(mode: QualityMode, level: QualityLevel) { self.mode = mode; self.level = level }
 }
 
 public struct Failure: Codable, Equatable, Sendable {
