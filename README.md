@@ -16,7 +16,8 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **Agents that tell you when they stop.** With the omp extension below, the tmux tab shows what each [omp](https://github.com/can1357/oh-my-pi) agent is working on and how far through its todo list it is. A session whose agent finished, failed or asks you something shows the answer or question under its name, and the tab's icon counts them; a long press shows the whole answer with its model, context, cost and branch. Entering the session or clearing it there quiets it on every device.
 - **Reconnect in place.** Term remembers tmux sessions entered from a shell as well as those opened from its tmux tab. Mosh reconnects automatically when contact is lost; Reconnect also works on SSH. Both attach to the same session, never recreating a missing session empty.
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
-- **A floating menu** for Sessions, tmux, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
+- **Your Mac's screen**, the way [Screens](https://edovia.com/screens) does it: a Screen tab streams each of the Mac's displays as hardware video through a small app on the Mac. Drag anywhere to move the pointer, tap to click, two fingers to scroll with momentum, pinch to zoom, press and hold to drag; Screens' toolbar with its modifier keys, arrows and edit keys. Both displays show in their arrangement, and one tap shows just one. The clipboard follows both ways, text and images. When the Mac is locked, Term signs in to its Screen Sharing so you can unlock it.
+- **A floating menu** for Sessions, tmux, Files, Screen and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
 - **Smart Keys** for Esc, Ctrl, Alt, symbols and arrows, with configurable key repeat.
 - **Pinch to resize.** JetBrains Mono and Iosevka Nerd Fonts are built in.
 - **Your look.** Settings › Appearance picks from 823 terminal themes (searchable, with a live preview; Term's own Dusk unless you pick another) or one you import as a Ghostty theme or `.itermcolors` file, the font, size and line height, and the cursor: block, bar or underline, blinking or steady, and whether programs like vim may change it. The app's own colors follow the terminal theme, on clear or tinted glass, with the text size, home screen icon and haptics yours to pick.
@@ -93,6 +94,14 @@ The order matters, and it's where the bugs hide: a reused encryption nonce, or a
 
 The other path handles a server that's gone. Once a session has been silent for about 6 seconds, Term probes the host over SSH. If the host answers, it starts a new mosh-server and ends the old one, and you're back in the same tmux session. In the simulator, after `kill -9` on the server, the session came back on its own, without a tap.
 
+### Screen
+
+The Screen tab talks to Term Screen Host ([`mac/ScreenHost`](mac/ScreenHost)), a small app that runs on the Mac as a LaunchAgent. It captures each display with ScreenCaptureKit, encodes HEVC on the media engine, posts the phone's pointer, scroll and key events, and reads and writes the clipboard. The phone draws the pointer itself, so moving it never waits for the network. A still screen gets one sharper frame about 0.4 s after it stops changing, so text is crisp.
+
+The host listens on a Unix socket in `~/.term` and accepts only connections that arrive through sshd. Term reaches it over its SSH connection to the Mac (a streamlocal channel), so nothing new listens on the network. Both ends compile one Swift file, [`ScreenProtocol.swift`](mac/ScreenHost/Sources/ScreenProtocol/ScreenProtocol.swift), as the wire format.
+
+A locked Mac stops screen capture, so Term switches to the Mac's own Screen Sharing (RFB with Apple's authentication; the client is [`core/vnc`](core/vnc)) through the same SSH connection, and back once the Mac is unlocked. A Mac unlocked through Screen Sharing locks again when that session ends, so Term keeps it open until you leave the Screen.
+
 ## Build
 
 You need Xcode 27.1 (the iOS 27.1 SDK has the iPhone Duo APIs), Rust with the iOS targets, and [XcodeGen](https://github.com/yonaskolb/XcodeGen). The Ghostty step downloads its own pinned Zig.
@@ -132,6 +141,14 @@ xcrun devicectl device process launch --device <udid> com.yourname.term
 
 The computer you connect to needs `mosh-server` (mosh 1.4) on its PATH or in Homebrew's usual place. tmux is optional, but it's what makes sessions shared and reconnects seamless.
 
+For the Screen tab, run this on the Mac. It builds Term Screen Host, signs it with the Apple Development identity of `DEVELOPMENT_TEAM` (so its privacy grants survive reinstalls), installs it in `~/Applications` and starts its LaunchAgent:
+
+```sh
+scripts/install-screen-host.sh             # --uninstall removes it
+```
+
+Then allow Term Screen Host in System Settings › Privacy & Security under Screen & System Audio Recording and Accessibility, and allow its first paste from other apps. For a locked Mac, turn on Screen Sharing (General › Sharing); Term asks once for the Mac account's password and keeps it in the Keychain.
+
 ## Tests and formal checks
 
 ```sh
@@ -141,6 +158,7 @@ cd app && xcodebuild test -project Term.xcodeproj -scheme Term \
 python3 formal/mosh-resume.py              # TLA+ models, about 20 s
 python3 formal/mosh-fragment.py fallback   # property tests, about 2 s (25 s on a cold build)
 bun test integrations/omp/term-agent.test.ts # extension lifecycle; needs tmux and python3
+cd mac/ScreenHost && swift test            # host input, framing, clipboard and privacy checks
 ```
 
 `mosh-resume.py` runs two TLA+ models with TLC. The first checks that suspend, save, kill and restore, run twice with lost, duplicated and reordered packets within small bounds, never reuses an encryption nonce or loses the state needed to apply the server's next update. The second checks that a reconnect racing a suspend never leaves a checkpoint pointing at a server it ended. Before TLC runs, the script executes a probe against the real mosh crate and checks fingerprints of the Rust functions the models describe, so a model can't quietly drift from the code. It needs Java 21 and downloads a checksum-pinned TLC.
@@ -157,6 +175,7 @@ Term is installed and tested end to end on an iPhone 11. A few things are not pr
 - iPhone Duo layouts are verified in the simulator, not on Duo hardware.
 - Roaming between networks is covered by the formal model and the interop tests, not by long field use on cellular.
 - Composed input (CJK, dead-key accents) is untested.
+- The Screen tab is measured in the simulator against a real Mac with two displays, not yet on a phone over Wi-Fi or cellular.
 
 ## Layout
 
@@ -166,14 +185,17 @@ app/                    Swift app (UIKit + Metal), XcodeGen project in project.y
   Sources/Shell         tabs, hosts, keys, tmux sessions and history, reconnect
   Sources/Menu          floating menu, Sessions overview, tmux tab, swipe HUD
   Sources/Files         SFTP browser, viewers, editor
+  Sources/Screen        the Screen tab: gestures, toolbar, video, clipboard, Screen Sharing
 core/                   Rust workspace
   termcore              C ABI (include/term.h), sessions, tokio runtime, SFTP, SVG rasterizer
   vt                    libghostty-vt wrapper
   mosh                  sans-IO mosh 1.4 client
   ssh                   russh client, mosh bootstrap
+  vnc                   sans-IO RFB client (Apple's authentication, ZRLE)
+mac/ScreenHost/         Term Screen Host (macOS): capture, HEVC, input, clipboard; ScreenProtocol.swift shared with the app
 formal/                 TLA+ models and runners, fragment property tests
 integrations/omp/       omp extension that publishes agent state to tmux
-scripts/                ghostty-vt.sh, build-core.sh
+scripts/                ghostty-vt.sh, build-core.sh, install-screen-host.sh
 docs/                   README images
 ```
 
