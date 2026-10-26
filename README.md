@@ -179,6 +179,7 @@ docs/                   README images
 - [mosh](https://mosh.org), the protocol and the server Term talks to (GPL-3.0).
 - [russh](https://github.com/Eugeny/russh) and [russh-sftp](https://github.com/AspectUnk/russh-sftp) (Apache-2.0).
 - [Runestone](https://github.com/simonbs/Runestone) and [TreeSitterLanguages](https://github.com/simonbs/TreeSitterLanguages) for the editor, on [tree-sitter](https://tree-sitter.github.io) (MIT).
+- [Pele](https://github.com/obsidianmd/pele) lays out the Mermaid diagrams omp prints, in JavaScriptCore (MIT; license in [`app/Resources/Diagrams`](app/Resources/Diagrams)).
 - [resvg](https://github.com/linebender/resvg) rasterizes the diagrams Term draws (Apache-2.0 OR MIT).
 - [swift-cmark](https://github.com/swiftlang/swift-cmark) for Markdown (BSD-2-Clause).
 - [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and [Iosevka](https://github.com/be5invis/Iosevka) as patched by [Nerd Fonts](https://www.nerdfonts.com) (SIL OFL 1.1; licenses in [`app/Resources/Fonts`](app/Resources/Fonts)).

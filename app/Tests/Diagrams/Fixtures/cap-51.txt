@@ -1,0 +1,128 @@
+
+
+                  █████████████╗
+                  ╚═██╔═══██╔══╝
+                    ██║   ██║
+                    ██║   ██║
+                    ██║   ██║
+                    ╚═╝   ╚═╝
+          ~/code/demo
+                     v18.12.6
+
+[Context]
+  ~/AGENTS.md
+
+[Skills]
+  lint, test, review, deploy
+  lint, test, review, deploy
+  lint, test, review, deploy
+  lint, test, review, deploy
+  lint, test, review, deploy
+
+[MCP]
+  docs, search
+
+
+
+ Read samples.md and reply with its two mermaid
+ code blocks verbatim (fenced as mermaid), with
+ one short sentence before each and nothing else.
+
+
+  Read samples.md
+
+ Flowchart of the phone-to-diagram path:
+
+ ┌───────────────────────┐
+ │                       │
+ │      Phone: Term      │
+ │                       │
+ └───────────┬───────────┘
+             │
+           mosh
+             │
+             │
+             ▼
+ ┌───────────────────────┐
+ │                       │
+ │      mosh-server      │
+ │                       │
+ └───────────┬───────────┘
+             │
+             │
+             │
+             │
+             ▼
+ ┌───────────────────────┐
+ │                       │
+ │       tmux pane       │
+ │                       │
+ └───────────┬───────────┘
+             │
+             │
+             │
+             │
+             ▼
+ ◇───────────────────────◇
+ │                       │
+ │  omp prints mermaid?  ├────────────┐
+ │                       │            │
+ ◇───────────┬───────────◇           no
+             │                        │
+            yes                       │
+             │                        │
+             │                        │
+             ▼                        ▼
+ ┌───────────────────────┐     ┌────────────┐
+ │                       │     │            │
+ │     ASCII in grid     │     │ Plain text │
+ │                       │     │            │
+ └───────────┬───────────┘     └────────────┘
+             │
+             │
+             │
+             │
+             ▼
+ ┌───────────────────────┐
+ │                       │
+ │ Term overlays diagram │
+ │                       │
+ └───────────────────────┘
+
+ Sequence of the attach, diagram, and
+ source-lookup exchange:
+
+  ┌───────┐                   ┌──────┐
+  │ Phone │                   │ tmux │
+  └───┬───┘                   └───┬──┘
+      │                           │
+      │       attach (mosh)       │
+      │───────────────────────────▶
+      │                           │
+      │                           │      ASCII dia
+      │                           ◀───────────────
+      │                           │
+      │                           │  @diagrams {ha
+      │                           ◀╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+      │                           │
+      │        screen diff        │
+      ◀───────────────────────────│
+      │                           │
+      │  show-options @diagrams   │
+      │───────────────────────────▶
+      │                           │
+      │          sources          │
+      ◀╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+      │                           │
+ ┌──────────────────┐             │
+ │ render with Pele │             │
+ └──────────────────┘             │
+      │                           │
+  ┌───┴───┐                   ┌───┴──┐
+  │ Phone │                   │ tmux │
+  └───────┘                   └──────┘
+
+──── 󰄨 MERM: Show mermaid samples from samples.md ─
+❯
+───────────────────────────────────────────────────
+ 󰵗 ·  Haiku 5.5 · 󰪟 low ·  …grams

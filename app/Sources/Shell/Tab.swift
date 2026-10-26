@@ -93,6 +93,7 @@ final class Tab {
     target = saved.target
     tmuxSession = saved.tmuxSession
     title = saved.title
+    session.diagrams = DiagramSource(host: saved.target, tmuxSession: saved.tmuxSession)
     wireRemote(session)
     remote = session
     view.session = session
@@ -123,6 +124,7 @@ final class Tab {
     }
     self.target = target
     self.tmuxSession = tmuxSession ?? Tmux.sessionName(inCommand: target.startupCommand)
+    session.diagrams = DiagramSource(host: target, tmuxSession: self.tmuxSession)
     wireRemote(session)
     connecting = session
     if remote == nil {
@@ -130,6 +132,7 @@ final class Tab {
       echo("Connecting to \(target.alias) (\(target.user)@\(target.hostname)) over \(via)…\r\n")
       if let screen, let shown = Session(localCols: local.cols, rows: local.rows) {
         shown.setTheme(AppSettings.shared.termTheme)
+        shown.diagrams = session.diagrams
         shown.feed(screen)
         preview = shown
         view.session = shown

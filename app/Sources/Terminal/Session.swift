@@ -28,6 +28,9 @@ final class Session {
     var onGridChange: ((Int, Int) -> Void)?
     /// A new frame is ready. Owned by the TerminalView showing this session.
     var onFrame: (() -> Void)?
+    /// The Mermaid sources of the tmux session it shows, for drawing omp's
+    /// ASCII diagrams as diagrams; nil where there can be none (the prompt).
+    var diagrams: DiagramSource?
 
     /// A session whose remote end is the app: typed bytes arrive on
     /// `onOutput`, and the app writes host output with `feed`.
@@ -139,6 +142,7 @@ final class Session {
 
     func setTheme(_ theme: TermTheme) {
         var t = theme
+        NSLog("SETTHEME style=%d blink=%d", Int(t.cursor_style), Int(t.cursor_blink))
         term_session_set_theme(core, &t)
     }
 

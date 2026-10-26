@@ -35,7 +35,11 @@ targets:
       - path: Resources
         excludes:
           - Themes
+          - Diagrams
       - path: Resources/Themes
+        type: folder
+      # Pele 1.10.0 (pinned: term-pele.js reads its private CSS variables) and its glue.
+      - path: Resources/Diagrams
         type: folder
     info:
       path: Info.plist

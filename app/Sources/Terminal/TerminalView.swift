@@ -104,6 +104,8 @@ final class TerminalView: UIView {
     /// must pull in to clear rounded display corners.
     private let safeRegion = UIView()
     let scrollIndicator = UIView()
+    /// Real diagrams over omp's ASCII drawings (app/Sources/Diagrams).
+    private(set) lazy var diagramOverlay = DiagramOverlay(terminal: self)
     lazy var smartKeys = SmartKeysBar(terminal: self)
     lazy var editMenu = UIEditMenuInteraction(delegate: self)
     let startHandle = SelectionHandle(isStart: true)
@@ -171,6 +173,7 @@ final class TerminalView: UIView {
         safeRegion.isHidden = true
         safeRegion.isUserInteractionEnabled = false
         addSubview(safeRegion)
+        addSubview(diagramOverlay)
 
         scrollIndicator.backgroundColor = UIColor(white: 0.6, alpha: 0.8)
         scrollIndicator.layer.cornerRadius = 1.5
@@ -240,6 +243,8 @@ final class TerminalView: UIView {
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
         layoutGrid()
+        diagramOverlay.frame = bounds
+        diagramOverlay.layoutTiles()
         updateHandles()
         setNeedsRender(build: false)
     }
@@ -369,6 +374,7 @@ final class TerminalView: UIView {
             updateBlinkTimer()
         }
         guard needsDraw, metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else { return }
+        diagramOverlay.isHidden = zoom != 1 || isPinching || selection != nil
         needsDraw = false
         let p = placement
         guard let drawable = metalLayer.nextDrawable(),
@@ -409,6 +415,7 @@ final class TerminalView: UIView {
         if snapshot.viewportOffset > 0 || scrollIndicator.alpha > 0 { updateScrollIndicator() }
         updateHandles()
         updateBlinkTimer()
+        diagramOverlay.frameChanged()
     }
 
     // ------------------------------------------------------------ blink

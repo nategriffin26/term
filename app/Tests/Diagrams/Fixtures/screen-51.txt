@@ -1,0 +1,45 @@
+ │ Term overlays diagram │
+ │                       │
+ └───────────────────────┘
+
+ Sequence of the attach, diagram, and
+ source-lookup exchange:
+
+  ┌───────┐                   ┌──────┐
+  │ Phone │                   │ tmux │
+  └───┬───┘                   └───┬──┘
+      │                           │
+      │       attach (mosh)       │
+      │───────────────────────────▶
+      │                           │
+      │                           │      ASCII dia
+      │                           ◀───────────────
+      │                           │
+      │                           │  @diagrams {ha
+      │                           ◀╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+      │                           │
+      │        screen diff        │
+      ◀───────────────────────────│
+      │                           │
+      │  show-options @diagrams   │
+      │───────────────────────────▶
+      │                           │
+      │          sources          │
+      ◀╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+      │                           │
+ ┌──────────────────┐             │
+ │ render with Pele │             │
+ └──────────────────┘             │
+      │                           │
+  ┌───┴───┐                   ┌───┴──┐
+  │ Phone │                   │ tmux │
+  └───────┘                   └──────┘
+
+ ※ recap: Goal: showing the mermaid samples from
+ samples.md, which is done. Next: reply with the
+ two blocks again or move on to your next request.
+
+──── 󰄨 MERM: Show mermaid samples from samples.md ─
+❯
+───────────────────────────────────────────────────
+ 󰵗 ·  Haiku 5.5 · 󰪟 low ·  …grams
