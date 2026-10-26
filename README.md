@@ -12,7 +12,7 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 
 - **mosh that survives iOS.** Local echo prediction, roaming between Wi-Fi and cellular, and sessions that come back after iOS kills the app in the background.
 - **SSH** with Ed25519 keys made or imported in the app. Host keys are pinned on first use.
-- **tmux, native.** A tmux tab lists every session on your hosts with a snapshot of its screen: tap one to open it in a window, swipe or select to close them. Plus a scrollable history viewer, an overview of your open windows (three fingers up), and a swipe between windows that names where you're going.
+- **tmux, native.** A tmux tab lists every session on your hosts with the last lines of its screen: tap one to open it in a window, swipe or select to close them. Plus a scrollable history viewer, an overview of your open windows (three fingers up), and a swipe between windows that names where you're going.
 - **Reconnect in place.** When a tmux session's mosh-server dies, Term starts a new one and swaps it in under the same screen. Nothing to tap.
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
 - **A floating menu** for Sessions, tmux, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
