@@ -638,6 +638,50 @@ fn resume_right_after_suspend_still_takes_a_new_socket() {
     unsafe { term_session_free(s) };
 }
 
+/// Flags of the cell showing `ch` on the prompt row (the row whose first cell
+/// is `>`), with its column. Scoped to that row so earlier output never matches.
+fn prompt_key(s: *const Session, ch: char) -> Option<(usize, u16)> {
+    let mut f = TermFrame::default();
+    unsafe { term_session_frame(s, 0, &mut f) };
+    let cols = f.cols as usize;
+    let cells = unsafe { std::slice::from_raw_parts(f.cells, cols * f.rows as usize) };
+    let row = cells.chunks(cols).find(|row| row[0].ch == '>' as u32)?;
+    row.iter().position(|c| c.ch == ch as u32).map(|col| (col, row[col].flags))
+}
+
+/// A key typed on a fresh epoch is hidden until the server's echo and its
+/// acknowledgement confirm the epoch, and whether that has happened is not
+/// visible from outside: an earlier keystroke can be mispredicted or still
+/// unacknowledged. So type distinct letters, each after the previous one's
+/// echo is drawn, until one is on screen the instant it is typed, which only a
+/// confirmed epoch allows. Returns the letter, its column and its flags, read
+/// in the same frame. The link is slow, so the server cannot have echoed the
+/// letter by then.
+fn type_until_predicted(s: *const Session) -> (char, usize, u16) {
+    for key in 'a'..='h' {
+        write(s, &key.to_string());
+        if let Some((col, flags)) = prompt_key(s, key)
+            && flags & vt::cell_flags::PREDICTED != 0
+        {
+            return (key, col, flags);
+        }
+        let deadline = Instant::now() + 10 * SEC;
+        while prompt_key(s, key).is_none() {
+            assert!(Instant::now() < deadline, "{key} was never echoed");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    panic!("no keystroke was ever drawn before the server echoed it");
+}
+
+fn wait_confirmed(s: *const Session, key: char, mask: u16) {
+    let deadline = Instant::now() + 10 * SEC;
+    while prompt_key(s, key).is_none_or(|(_, f)| f & mask != 0) {
+        assert!(Instant::now() < deadline, "{key} never confirmed: {:?}", prompt_key(s, key));
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn mosh_prediction_shows_unconfirmed_echo_and_clears_it_when_confirmed() {
     // Bug caught: predictions never reach the frame (no local echo on a slow
@@ -645,6 +689,8 @@ fn mosh_prediction_shows_unconfirmed_echo_and_clears_it_when_confirmed() {
     let sshd = Sshd::start();
     let token = MoshToken::new("predict");
     let relay = Relay::start(sshd.dir.path());
+    // Slow enough that a typed key is always on screen before its echo.
+    relay.delay_ms.store(100, Ordering::SeqCst);
     let mut p = Params::new(&sshd, transport::MOSH);
     p.command = Some(token.command());
     p.mosh_server = Some(relay.wrapper.clone());
@@ -654,31 +700,21 @@ fn mosh_prediction_shows_unconfirmed_echo_and_clears_it_when_confirmed() {
     rec.wait_status(status::CONNECTED, 20 * SEC);
     write(s, "PS1='>'\r");
     wait_screen(s, "\n>", 10 * SEC);
-    write(s, "x");
-    wait_screen(s, ">x", 10 * SEC);
-    // mosh-server acknowledges echo up to 50 ms after drawing it; only then is
-    // the prediction epoch confirmed and later keystrokes shown at once.
-    std::thread::sleep(Duration::from_millis(500));
-
+    let (primed, ..) = type_until_predicted(s);
+    wait_confirmed(s, primed, vt::cell_flags::PREDICTED);
+    // The epoch is confirmed. With the link down the next key cannot be echoed.
     relay.dropping.store(true, Ordering::SeqCst);
-    write(s, "y");
-    let predicted = |s| {
-        let mut f = TermFrame::default();
-        unsafe { term_session_frame(s, 0, &mut f) };
-        let cells = unsafe { std::slice::from_raw_parts(f.cells, f.cols as usize * f.rows as usize) };
-        cells.iter().position(|c| c.ch == 'y' as u32).map(|i| (cells[i].flags & vt::cell_flags::PREDICTED != 0, i))
+    let (y, at, flags) = {
+        let y = (primed as u8 + 1) as char;
+        write(s, &y.to_string());
+        let (at, flags) = prompt_key(s, y).expect("typed key not drawn while the link is down");
+        (y, at, flags)
     };
-    let (flag, at) = predicted(s).expect("typed y not drawn while the link is down");
-    assert!(flag, "unconfirmed y not marked TERM_CELL_PREDICTED");
-    let x_at = screen(s).replace('\n', "").find(">x").unwrap() + 2;
-    assert_eq!(at, x_at, "prediction drawn at the wrong cell");
+    assert_ne!(flags & vt::cell_flags::PREDICTED, 0, "unconfirmed key not marked TERM_CELL_PREDICTED");
+    assert_eq!(at, 1 + (y as usize - 'a' as usize), "prediction drawn at the wrong cell");
 
     relay.dropping.store(false, Ordering::SeqCst);
-    let deadline = Instant::now() + 10 * SEC;
-    while predicted(s) != Some((false, at)) {
-        assert!(Instant::now() < deadline, "y never confirmed: {:?}", predicted(s));
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_confirmed(s, y, vt::cell_flags::PREDICTED);
     write(s, "\x15exit\r");
     assert_eq!(closed_reason(&rec, 15 * SEC), "");
     unsafe { term_session_free(s) };
@@ -701,27 +737,10 @@ fn adaptive_prediction_underlines_echo_on_a_slow_link_until_confirmed() {
     rec.wait_status(status::CONNECTED, 20 * SEC);
     write(s, "PS1='>'\r");
     wait_screen(s, "\n>", 10 * SEC);
-    // The first echo on a line confirms its epoch; later keys then show at once.
-    write(s, "x");
-    wait_screen(s, ">x", 10 * SEC);
-    std::thread::sleep(2 * SEC);
+    let (key, _, flags) = type_until_predicted(s);
+    assert_ne!(flags & vt::cell_flags::UNDERLINE_MASK, 0, "unconfirmed {key} not underlined");
 
-    write(s, "y");
-    let cell = |s, ch: char| {
-        let mut f = TermFrame::default();
-        unsafe { term_session_frame(s, 0, &mut f) };
-        let cells = unsafe { std::slice::from_raw_parts(f.cells, f.cols as usize * f.rows as usize) };
-        cells.iter().find(|c| c.ch == ch as u32).map(|c| c.flags)
-    };
-    let flags = cell(s, 'y').expect("y not drawn before the server echoed it");
-    assert_ne!(flags & vt::cell_flags::PREDICTED, 0, "unconfirmed y not marked predicted");
-    assert_ne!(flags & vt::cell_flags::UNDERLINE_MASK, 0, "unconfirmed y not underlined");
-
-    let deadline = Instant::now() + 10 * SEC;
-    while cell(s, 'y').is_none_or(|f| f & (vt::cell_flags::PREDICTED | vt::cell_flags::UNDERLINE_MASK) != 0) {
-        assert!(Instant::now() < deadline, "y never confirmed: {:?}", cell(s, 'y'));
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_confirmed(s, key, vt::cell_flags::PREDICTED | vt::cell_flags::UNDERLINE_MASK);
     write(s, "\x15exit\r");
     assert_eq!(closed_reason(&rec, 15 * SEC), "");
     unsafe { term_session_free(s) };
