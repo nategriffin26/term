@@ -240,6 +240,30 @@ final class ScreenSessionTests: XCTestCase {
     XCTAssertEqual(Array(host.sent[afterClick...]), [.pointer(210, 160)], "one message, the latest position")
   }
 
+  // Bug: an edge swipe's two moves (one point short of the edge, then the
+  // edge) coalesced into one, so the Mac saw no move reaching the edge and
+  // a repeated swipe to the Dock revealed nothing.
+  func testAnEdgeSwipeSendsTheMoveShortOfTheEdgeAndThenTheEdge() {
+    welcome()  // the pointer at 864,558 on the built-in display
+    let view = ScreenView(session: session)
+    let before = host.sent.count
+    view.jump(to: .bottom)
+    session.flushPointer()
+    XCTAssertEqual(Array(host.sent[before...]), [.pointer(864, 1115), .pointer(864, 1116)])
+  }
+
+  // Bug: the pointer's display link left paused in the run loop once the
+  // moves stopped, with its target, after the window or the session closed.
+  func testThePointerDisplayLinkEndsOnceTheMovesStop() async throws {
+    continueAfterFailure = true  // a failure that throws inside an async test hangs the runner
+    welcome()
+    session.movePointer(to: CGPoint(x: 100, y: 100))
+    XCTAssertNotNil(session.pointerFrame)
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(host.sent.last, .pointer(100, 100))
+    XCTAssertNil(session.pointerFrame, "no link once there is nothing to send")
+  }
+
   // Bug (the user's report): the pointer invisible, drawn to the picture's
   // scale (a 32 pt pointer is 3 pt on a phone showing both displays), or
   // not drawn at all until the Mac sends a shape or when it sends none.

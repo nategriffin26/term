@@ -186,7 +186,8 @@ final class ScreenSession {
   @ObservationIgnored private var sharingCursor: ScreenCursor?
   /// The latest pointer position not yet sent: one goes per display frame.
   @ObservationIgnored private var pendingPointer: CGPoint?
-  @ObservationIgnored private var pointerFrame: CADisplayLink?
+  /// Runs while moves are coming; it ends on the first frame with nothing to send.
+  @ObservationIgnored private(set) var pointerFrame: CADisplayLink?
   /// Where the host last put the pointer while Screen Sharing drove it.
   @ObservationIgnored private var hostPointer = CGPoint.zero
   @ObservationIgnored weak var surface: ScreenSurface?
@@ -587,15 +588,23 @@ final class ScreenSession {
       link.add(to: .main, forMode: .common)
       pointerFrame = link
     }
-    pointerFrame?.isPaused = false
   }
 
   /// Sends the pending pointer position, if any.
   func flushPointer() {
-    pointerFrame?.isPaused = true
     guard let point = pendingPointer else { return }
     pendingPointer = nil
     send(.pointer(point))
+  }
+
+  /// A display frame: the pending move goes; a frame with none ends the link, so none outlives the moves.
+  fileprivate func pointerFrameFired() {
+    guard pendingPointer != nil else {
+      pointerFrame?.invalidate()
+      pointerFrame = nil
+      return
+    }
+    flushPointer()
   }
 
   /// A click of `clicks` (2 for a double-click's second click) at `point`.
@@ -891,6 +900,6 @@ private final class PointerFrameTarget: NSObject {
   init(_ session: ScreenSession) { self.session = session }
   @MainActor @objc func fire(_ link: CADisplayLink) {
     guard let session else { link.invalidate(); return }
-    session.flushPointer()
+    session.pointerFrameFired()
   }
 }

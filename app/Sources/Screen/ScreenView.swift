@@ -350,10 +350,11 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     let frames = session.shownDisplays.map { $0.frame.cg }
     guard let frame = frames.first(where: { $0.insetBy(dx: -1, dy: -1).contains(session.pointer) }) ?? frames.first else { return }
     let target = ScreenArrangement.edgePoint(edges, on: frame)
-    // Two moves: macOS reveals the Dock and the menu bar on a move that reaches the edge.
+    // Two moves, the first sent on its own: macOS reveals the Dock and the menu bar on a move that reaches the edge.
     let inset = CGPoint(x: edges.contains(.left) ? 1 : edges.contains(.right) ? -1 : 0,
                         y: edges.contains(.top) ? 1 : edges.contains(.bottom) ? -1 : 0)
     movePointer(to: CGPoint(x: target.x + inset.x, y: target.y + inset.y))
+    session.flushPointer()
     movePointer(to: target)
     Haptics.keyDown()
   }
