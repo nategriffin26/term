@@ -21,8 +21,9 @@ final class StatusBanner: UIView {
     layer.cornerRadius = 9
     layer.cornerCurve = .continuous
     layer.borderWidth = 1
-    layer.borderColor = Helm.UI.line2.cgColor
     clipsToBounds = true
+    registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.updateBorder() }
+    updateBorder()
 
     label.font = Helm.uiSans(12.5, .medium)
     label.textColor = Helm.UI.fg2
@@ -66,6 +67,11 @@ final class StatusBanner: UIView {
   }
 
   required init?(coder: NSCoder) { fatalError("not used") }
+
+  /// A layer's CGColor does not follow the app theme by itself.
+  private func updateBorder() {
+    layer.borderColor = Helm.UI.line2.resolvedColor(with: traitCollection).cgColor
+  }
 
   override func layoutSubviews() {
     super.layoutSubviews()

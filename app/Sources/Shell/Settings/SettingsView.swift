@@ -16,7 +16,7 @@ struct SettingsView: View {
             HelmLabel("Keys", symbol: "key")
           }
         }
-        HelmSection("Terminal") {
+        HelmSection {
           NavigationLink { AppearanceView() } label: {
             LabeledContent { HelmValue(settings.themeName) } label: { HelmLabel("Appearance", symbol: "paintpalette") }
           }
@@ -43,9 +43,9 @@ struct KeyboardSettingsView: View {
   var body: some View {
     List {
       HelmSection("Key Repeat") {
-        RepeatSlider(label: "Delay", value: $settings.keyRepeatDelay, range: AppSettings.keyRepeatDelayRange,
+        HelmSlider(label: "Delay", value: $settings.keyRepeatDelay, range: AppSettings.keyRepeatDelayRange,
                      step: 0.05, text: String(format: "%.2f s", settings.keyRepeatDelay))
-        RepeatSlider(label: "Rate", value: $settings.keyRepeatRate, range: AppSettings.keyRepeatRateRange,
+        HelmSlider(label: "Rate", value: $settings.keyRepeatRate, range: AppSettings.keyRepeatRateRange,
                      step: 1, text: "\(Int(settings.keyRepeatRate)) /s")
       }
       HelmSection("Smart Keys") {
@@ -64,22 +64,6 @@ struct KeyboardSettingsView: View {
   }
 }
 
-/// A setting row: label left, value in mono right, the slider under them.
-private struct RepeatSlider: View {
-  let label: String
-  @Binding var value: Double
-  let range: ClosedRange<Double>
-  let step: Double
-  let text: String
-
-  var body: some View {
-    VStack(spacing: 4) {
-      LabeledContent { HelmValue(text) } label: { Text(label) }
-      Slider(value: $value, in: range, step: step)
-    }
-  }
-}
-
 struct AboutView: View {
   static let version: String = {
     let info = Bundle.main.infoDictionary
@@ -94,7 +78,8 @@ struct AboutView: View {
       HelmRow("Terminal Engine", "libghostty-vt cec8b92f")
       HelmRow("Font", "JetBrains Mono, Iosevka (Nerd Fonts)")
       HelmSection("Licenses") {
-        Text("JetBrains Mono, Iosevka: SIL Open Font License 1.1. Nerd Fonts glyphs: MIT and OFL. Ghostty: MIT.")
+        Text("JetBrains Mono, Iosevka: SIL Open Font License 1.1. Nerd Fonts glyphs: MIT and OFL. Ghostty: MIT. "
+          + "Terminal themes: iTerm2-Color-Schemes, MIT; each theme belongs to its author.")
           .font(Helm.sans(12))
           .foregroundStyle(Helm.muted)
       }

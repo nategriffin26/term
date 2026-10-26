@@ -33,7 +33,8 @@ final class SessionHUD: UIView {
     layer.cornerRadius = 22
     layer.cornerCurve = .continuous
     layer.borderWidth = 0.5
-    layer.borderColor = Helm.UI.line2.cgColor
+    registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.updateBorder() }
+    updateBorder()
     layer.shadowColor = UIColor.black.cgColor
     layer.shadowOpacity = 0.35
     layer.shadowRadius = 20
@@ -57,6 +58,11 @@ final class SessionHUD: UIView {
   }
 
   required init?(coder: NSCoder) { fatalError("not used") }
+
+  /// A layer's CGColor does not follow the app theme by itself.
+  private func updateBorder() {
+    layer.borderColor = Helm.UI.line2.resolvedColor(with: traitCollection).cgColor
+  }
 
   /// Shows the strip at `position` (a session index, fractional mid-swipe),
   /// centered on `center`.

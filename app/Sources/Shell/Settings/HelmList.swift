@@ -12,11 +12,11 @@ extension View {
       .font(Helm.sans(14, .medium))
       .foregroundStyle(Helm.fg)
       .tint(Helm.accent)
-      .preferredColorScheme(.dark)
+      .preferredColorScheme(Helm.isDark ? .dark : .light)
       .navigationBarTitleDisplayMode(.inline)
       .toolbarBackground(Helm.raised, for: .navigationBar)
       .toolbarBackground(.visible, for: .navigationBar)
-      .toolbarColorScheme(.dark, for: .navigationBar)
+      .toolbarColorScheme(Helm.isDark ? .dark : .light, for: .navigationBar)
   }
 }
 
@@ -96,6 +96,22 @@ struct HelmLabel: View {
       Text(title)
     } icon: {
       Image(systemName: symbol).foregroundStyle(Helm.muted)
+    }
+  }
+}
+
+/// A setting row: label left, value in mono right, the slider under them.
+struct HelmSlider: View {
+  let label: String
+  @Binding var value: Double
+  let range: ClosedRange<Double>
+  let step: Double
+  let text: String
+
+  var body: some View {
+    VStack(spacing: 4) {
+      LabeledContent { HelmValue(text) } label: { Text(label) }
+      Slider(value: $value, in: range, step: step)
     }
   }
 }

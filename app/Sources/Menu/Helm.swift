@@ -24,6 +24,9 @@ enum Helm {
   @MainActor static var bad: Color { theme.bad.color }
   @MainActor static var overlay: Color { theme.overlay.color }
 
+  /// Whether system controls (switches, keyboards, bars) should be dark.
+  @MainActor static var isDark: Bool { theme.isDark }
+
   @MainActor private static var theme: AppTheme { AppSettings.shared.appTheme }
 
   /// UIKit twins of the colours above: dynamic, resolved against the

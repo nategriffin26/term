@@ -142,7 +142,6 @@ final class Session {
 
     func setTheme(_ theme: TermTheme) {
         var t = theme
-        NSLog("SETTHEME style=%d blink=%d", Int(t.cursor_style), Int(t.cursor_blink))
         term_session_set_theme(core, &t)
     }
 

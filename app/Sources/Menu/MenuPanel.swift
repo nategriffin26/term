@@ -47,6 +47,12 @@ final class MenuPanel: UIViewController {
     view.isHidden = true
   }
 
+  /// A layer's CGColor and the system controls' style do not follow the app theme by themselves.
+  private func applyAppTheme() {
+    card.layer.borderColor = Helm.UI.line2.resolvedColor(with: traitCollection).cgColor
+    host.overrideUserInterfaceStyle = traitCollection[AppThemeTrait.self].isDark ? .dark : .light
+  }
+
   override func viewDidLoad() {
     super.viewDidLoad()
     scrim.backgroundColor = Helm.UI.overlay
@@ -56,7 +62,8 @@ final class MenuPanel: UIViewController {
 
     card.backgroundColor = Helm.UI.raised
     card.layer.cornerCurve = .continuous
-    card.layer.borderColor = Helm.UI.line2.cgColor
+    registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.applyAppTheme() }
+    applyAppTheme()
     card.layer.borderWidth = 1 / max(traitCollection.displayScale, 1)
     card.layer.shadowColor = UIColor.black.cgColor
     card.layer.shadowOpacity = 0.45
@@ -72,7 +79,6 @@ final class MenuPanel: UIViewController {
     addChild(host)
     host.safeAreaRegions = []
     host.view.backgroundColor = .clear
-    host.overrideUserInterfaceStyle = .dark
     clip.addSubview(host.view)
     host.didMove(toParent: self)
 

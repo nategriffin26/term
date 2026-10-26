@@ -34,7 +34,14 @@ final class AppSettings {
   /// Off: the user's cursor whatever programs ask for.
   var cursorFollowsPrograms: Bool { didSet { store(cursorFollowsPrograms, "cursorFollowsPrograms") } }
   var boldIsBright: Bool { didSet { store(boldIsBright, "boldIsBright") } }
-  var appTheme: AppTheme { didSet { store(appTheme.name, "appTheme") } }
+  /// The app's colours follow the terminal theme; off, the fixed palette.
+  var appMatchesTerminal: Bool { didSet { store(appMatchesTerminal, "appMatchesTerminal") } }
+  /// 0xRRGGBB for the colour that marks what needs you; nil takes it from the theme.
+  var appAccent: UInt32? {
+    didSet {
+      if let appAccent { store(Int(appAccent), "appAccent") } else { remove("appAccent") }
+    }
+  }
   var smartKeysWithHardwareKeyboard: Bool { didSet { store(smartKeysWithHardwareKeyboard, "smartKeysWithHardwareKeyboard") } }
   var keyClickSound: Bool { didSet { store(keyClickSound, "keyClickSound") } }
   /// Inner display of iPhone Duo: two sessions side by side even when flat.
@@ -57,7 +64,8 @@ final class AppSettings {
     cursorColor = defaults.string(forKey: "cursorColor").flatMap(CursorColor.init(rawValue:)) ?? .theme
     cursorFollowsPrograms = (defaults.object(forKey: "cursorFollowsPrograms") as? Bool) ?? true
     boldIsBright = (defaults.object(forKey: "boldIsBright") as? Bool) ?? false
-    appTheme = AppTheme.named(defaults.string(forKey: "appTheme") ?? "")
+    appMatchesTerminal = (defaults.object(forKey: "appMatchesTerminal") as? Bool) ?? false
+    appAccent = (defaults.object(forKey: "appAccent") as? Int).flatMap { UInt32(exactly: $0) }.map { $0 & 0xFFFFFF }
     smartKeysWithHardwareKeyboard = (defaults.object(forKey: "smartKeysWithHardwareKeyboard") as? Bool) ?? false
     keyClickSound = (defaults.object(forKey: "keyClickSound") as? Bool) ?? true
     splitWhenFlat = (defaults.object(forKey: "splitWhenFlat") as? Bool) ?? false
@@ -68,6 +76,10 @@ final class AppSettings {
   }
 
   var theme: Theme { Theme.named(themeName) }
+
+  var appTheme: AppTheme {
+    appMatchesTerminal ? AppTheme.derived(from: theme, accent: appAccent) : AppTheme.fixed(accent: appAccent)
+  }
 
   /// What sessions draw with: the theme's colours, the cursor colour
   /// picked, and the user's cursor as the terminal's default.
@@ -86,6 +98,11 @@ final class AppSettings {
 
   private func store(_ value: Any, _ key: String) {
     defaults.set(value, forKey: key)
+    NotificationCenter.default.post(name: .termSettingsChanged, object: self)
+  }
+
+  private func remove(_ key: String) {
+    defaults.removeObject(forKey: key)
     NotificationCenter.default.post(name: .termSettingsChanged, object: self)
   }
 }

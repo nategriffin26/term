@@ -19,6 +19,7 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **A floating menu** for Sessions, tmux, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
 - **Smart Keys** for Esc, Ctrl, Alt, symbols and arrows, with configurable key repeat.
 - **Pinch to resize.** JetBrains Mono and Iosevka Nerd Fonts are built in.
+- **Your look.** Settings › Appearance picks from 45 terminal themes with a live preview, the font, size and line height, and the cursor: block, bar or underline, blinking or steady, and whether programs like vim may change it. The app's own colors can follow the terminal theme.
 - **iPhone Duo layouts** for both displays, two windows side by side, and a menu dock in the inner display's status band.
 
 <p align="center">
@@ -184,6 +185,7 @@ docs/                   README images
 - [swift-cmark](https://github.com/swiftlang/swift-cmark) for Markdown (BSD-2-Clause).
 - [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) and [Iosevka](https://github.com/be5invis/Iosevka) as patched by [Nerd Fonts](https://www.nerdfonts.com) (SIL OFL 1.1; licenses in [`app/Resources/Fonts`](app/Resources/Fonts)).
 - [Geist and Geist Mono](https://github.com/vercel/geist-font) for the app's chrome (SIL OFL 1.1; license in [`app/Sources/Menu/Fonts`](app/Sources/Menu/Fonts)).
+- [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) for the terminal themes, in Ghostty's format (MIT; license in [`app/Resources/Themes`](app/Resources/Themes)).
 
 ## License
 
