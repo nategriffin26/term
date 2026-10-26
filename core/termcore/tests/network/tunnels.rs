@@ -46,10 +46,11 @@ fn echo(mut stream: impl Read + Write) {
 fn round_trip(params: &Params, target: &str, length: usize) {
     let log = Box::<TunnelLog>::default();
     let target = CString::new(target).unwrap();
-    let t = unsafe { term_tunnel_open(&params.raw(), target.as_ptr(), log.callbacks()) };
     let mut payload: Vec<u8> = (0..length).map(|i| (i % 251) as u8).collect();
     *payload.last_mut().unwrap() = 255;
     let start = Instant::now();
+    let t = unsafe { term_tunnel_open(&params.raw(), target.as_ptr(), log.callbacks()) };
+    assert!(log.events.lock().unwrap().is_empty(), "write must be queued before OPEN");
     unsafe { term_tunnel_write(t, payload.as_ptr(), payload.len()) };
     log.wait(3);
     unsafe { term_tunnel_free(t) };
@@ -58,8 +59,13 @@ fn round_trip(params: &Params, target: &str, length: usize) {
     assert_eq!(events.last().unwrap(), &(3, Vec::new()));
     let received: Vec<u8> = events.iter().filter(|e| e.0 == 2).flat_map(|e| e.1.iter().copied()).collect();
     assert_eq!(received.len(), payload.len());
+    let elapsed = start.elapsed();
+    use sha2::Digest;
+    let checksum = sha2::Sha256::digest(&received);
+    assert_eq!(checksum, sha2::Sha256::digest(&payload));
     assert!(received == payload, "echo reordered or changed bytes");
-    println!("{} bytes matched; {:.1} MB/s round trip in {:.3}s", length, length as f64 / start.elapsed().as_secs_f64() / 1e6, start.elapsed().as_secs_f64());
+    let checksum: String = checksum.iter().map(|b| format!("{b:02x}")).collect();
+    println!("{} bytes matched; SHA-256 {}; {:.1} MB/s round trip in {:.3}s", length, checksum, length as f64 / elapsed.as_secs_f64() / 1e6, elapsed.as_secs_f64());
 }
 #[test]
 fn tunnels_keep_preopen_writes_and_order_for_tcp_unix_and_home_paths() {
@@ -113,4 +119,36 @@ fn freeing_tunnel_inside_callback_prevents_later_callbacks() {
     server.join().unwrap();
     std::thread::sleep(Duration::from_millis(100));
     assert_eq!(log.events.lock().unwrap().iter().map(|e| e.0).collect::<Vec<_>>(), [1, 2]);
+}
+
+#[test]
+fn private_sshd_tunnels_transfer_tcp_unix_and_expanded_home_paths() {
+    let Some(key) = std::env::var_os("TERM_TEST_SSH_KEY") else {
+        eprintln!("Skipped private sshd: set TERM_TEST_SSH_KEY and TERM_TEST_SSH_PORT.");
+        return;
+    };
+    let params = Params {
+        transport: 99, host: CString::new("127.0.0.1").unwrap(),
+        port: std::env::var("TERM_TEST_SSH_PORT").unwrap().parse().unwrap(),
+        cols: 0, rows: 0, user: CString::new(std::env::var("USER").unwrap()).unwrap(),
+        key: CString::new(std::fs::read_to_string(key).unwrap()).unwrap(),
+        pin: None, command: None, mosh_server: None, predict: 0, idle_timeout: 0,
+    };
+    let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+    let target = tcp.local_addr().unwrap().to_string();
+    let server = std::thread::spawn(move || echo(tcp.accept().unwrap().0));
+    round_trip(&params, &target, 50_000_000);
+    server.join().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir_in(std::env::var("HOME").unwrap()).unwrap();
+    for (dir, expand) in [(temp.path(), false), (home.path(), true)] {
+        let path = dir.join("echo.sock");
+        let unix = UnixListener::bind(&path).unwrap();
+        let server = std::thread::spawn(move || echo(unix.accept().unwrap().0));
+        let target = if expand {
+            format!("~/{}", path.strip_prefix(std::env::var("HOME").unwrap()).unwrap().display())
+        } else { path.display().to_string() };
+        round_trip(&params, &target, 50_000_000);
+        server.join().unwrap();
+    }
 }

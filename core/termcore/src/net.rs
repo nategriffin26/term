@@ -71,6 +71,20 @@ pub(crate) unsafe fn opt_string(p: *const c_char) -> Option<String> {
     let s = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
     (!s.is_empty()).then_some(s)
 }
+pub(crate) unsafe fn ssh_config(c: *const TermConnect) -> Result<ssh::Config, String> {
+    let c = unsafe { c.as_ref() }.ok_or("no connect parameters")?;
+    Ok(ssh::Config {
+        host: unsafe { opt_string(c.host) }.ok_or("no host")?,
+        port: if c.port == 0 { 22 } else { c.port },
+        user: unsafe { opt_string(c.user) }.ok_or("no user")?,
+        auth: match (unsafe { opt_string(c.private_key) }, unsafe { opt_string(c.password) }) {
+            (Some(key), _) => ssh::Auth::Key(key),
+            (None, Some(password)) => ssh::Auth::Password(password),
+            _ => return Err("no key or password for this host".into()),
+        },
+        host_key: unsafe { opt_string(c.host_key) },
+    })
+}
 
 impl ConnectParams {
     /// # Safety
@@ -83,22 +97,9 @@ impl ConnectParams {
             transport::SSH => Transport::Ssh,
             t => return Err(format!("unknown transport {t}")),
         };
-        let host = unsafe { opt_string(c.host) }.ok_or("no host")?;
-        let user = unsafe { opt_string(c.user) }.ok_or("no user")?;
-        let auth = match (unsafe { opt_string(c.private_key) }, unsafe { opt_string(c.password) }) {
-            (Some(key), _) => ssh::Auth::Key(key),
-            (None, Some(password)) => ssh::Auth::Password(password),
-            (None, None) => return Err("no key or password for this host".into()),
-        };
         Ok(Self {
             transport,
-            ssh: ssh::Config {
-                host,
-                port: if c.port == 0 { 22 } else { c.port },
-                user,
-                auth,
-                host_key: unsafe { opt_string(c.host_key) },
-            },
+            ssh: unsafe { ssh_config(c) }?,
             cols: c.cols.max(1),
             rows: c.rows.max(1),
             command: unsafe { opt_string(c.command) },

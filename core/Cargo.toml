@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["vt", "mosh", "ssh", "termcore"]
+members = ["vt", "mosh", "ssh", "vnc", "termcore"]
 
 [workspace.package]
 edition = "2024"

@@ -298,7 +298,7 @@ impl Connection {
 
     /// Opens a socket on the SSH server without a shell or PTY.
     pub async fn tunnel(&self, target: &str) -> Result<Tunnel> {
-        let channel = if target.contains('/') {
+        let channel = if target.contains('/') || !target.contains(':') {
             let path = if let Some(rest) = target.strip_prefix("~/") {
                 let home = self.exec("printf '%s' \"$HOME\"").await?;
                 if home.exit_status != 0 || !home.stdout.starts_with(b"/") {

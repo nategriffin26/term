@@ -4,7 +4,7 @@ use std::ffi::c_char;
 use std::sync::{Arc, Condvar, Mutex};
 use tokio::sync::{mpsc, watch};
 use crate::{TermCallbacks, TermConnect};
-use crate::net::{opt_string, runtime};
+use crate::net::{opt_string, runtime, ssh_config};
 
 thread_local! { static FIRING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) }; }
 
@@ -40,20 +40,6 @@ impl CallbackGate {
     }
 }
 
-pub(crate) unsafe fn ssh_config(c: *const TermConnect) -> Result<ssh::Config, String> {
-    let c = unsafe { c.as_ref() }.ok_or("no connect parameters")?;
-    Ok(ssh::Config {
-        host: unsafe { opt_string(c.host) }.ok_or("no host")?,
-        port: if c.port == 0 { 22 } else { c.port },
-        user: unsafe { opt_string(c.user) }.ok_or("no user")?,
-        auth: match (unsafe { opt_string(c.private_key) }, unsafe { opt_string(c.password) }) {
-            (Some(key), _) => ssh::Auth::Key(key),
-            (None, Some(password)) => ssh::Auth::Password(password),
-            _ => return Err("no key or password for this host".into()),
-        },
-        host_key: unsafe { opt_string(c.host_key) },
-    })
-}
 
 pub struct TermTunnel {
     gate: CallbackGate,
@@ -109,7 +95,7 @@ pub unsafe extern "C" fn term_tunnel_open(c: *const TermConnect, target: *const 
         let reason = tokio::select! {
             _ = cancelled.changed() => None,
             result = sending => Some(result.err().unwrap_or_default()),
-            _ = receiving => Some(String::new()),
+            _ = receiving => Some(if connection.is_closed() { "The SSH connection closed.".into() } else { String::new() }),
         };
         rx.close();
         if let Some(reason) = reason { task.gate.fire(3, reason.as_bytes()); }

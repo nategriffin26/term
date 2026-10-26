@@ -451,6 +451,8 @@ typedef enum {
 // (a mismatch closes it with a reason naming both keys; NULL accepts any, as
 // term_exec does); c's other fields are ignored. The core reads the next chunk
 // only after cb.event returns.
+// A socket-open failure has prefix "The host could not open TARGET: ".
+// OPEN is not emitted in that case; SSH authentication failures lack the prefix.
 TermTunnel *term_tunnel_open(const TermConnect *c, const char *target, TermCallbacks cb);
 
 // Queues bytes for the socket: kept until OPEN, dropped after CLOSED.
@@ -494,8 +496,9 @@ typedef struct {
 } TermVncFrame;
 
 // Holds the framebuffer still and describes it in *out: no pixel changes
-// until term_vnc_unlock, which must follow promptly (copy the dirty rectangle
-// out, then unlock). Returns false, holding nothing, before the first frame.
+// until term_vnc_unlock, which must follow promptly on the same thread, before
+// any other call on v (copy the dirty rectangle out, then unlock).
+// Returns false, holding nothing, before the first frame.
 bool term_vnc_lock(TermVnc *v, TermVncFrame *out);
 void term_vnc_unlock(TermVnc *v);
 

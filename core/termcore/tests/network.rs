@@ -10,6 +10,8 @@ mod files;
 mod reconnect;
 #[path = "network/tunnels.rs"]
 mod tunnels;
+#[path = "network/vnc.rs"]
+mod vnc;
 
 use std::ffi::{CString, c_char, c_void};
 use std::io::BufRead;
