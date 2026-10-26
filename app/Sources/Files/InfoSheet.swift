@@ -13,65 +13,40 @@ struct InfoSheet: View {
   var body: some View {
     let folder = FilePath.parent(entry.path)
     VStack(alignment: .leading, spacing: 0) {
-      HStack(spacing: 12) {
+      HStack(spacing: Chrome.Space.m) {
         FileThumb(entry: entry, browser: browser)
         Text(entry.name).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg).lineLimit(2).truncationMode(.middle)
       }
-      .padding(.horizontal, 16)
-      .padding(.top, 22)
-      .padding(.bottom, 14)
-      VStack(spacing: 0) {
-        row("Kind", kind)
-        row("Size", size)
-        row("Modified", entry.mtime.formatted(date: .abbreviated, time: .shortened))
-        HStack {
-          Text("Permissions").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-          Spacer()
-          Text(FileFormat.permissions(entry.mode)).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2)
-        }
-        .rowStyle()
+      .infoHead()
+      InsetGroup {
+        InfoRow("Kind", kind, mono: false)
+        InfoRow("Size", size)
+        InfoRow("Modified", entry.mtime.formatted(date: .abbreviated, time: .shortened))
+        InfoRow("Permissions", FileFormat.permissions(entry.mode))
         if !entry.isDirectory {
-          HStack {
-            Text("Executable").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-            Spacer()
-            CapsuleSegmented(options: [(true, "On"), (false, "Off")], selection: entry.isExecutable, busy: changing) { on in
-              changing = true
-              Task {
-                if let updated = await browser.setExecutable(entry, on) { entry = updated }
-                changing = false
-              }
+          Toggle("Executable", isOn: Binding(get: { entry.isExecutable }, set: { on in
+            changing = true
+            Task {
+              if let updated = await browser.setExecutable(entry, on) { entry = updated }
+              changing = false
             }
-            .fixedSize()
-          }
-          .rowStyle()
+          }))
+          .font(Chrome.font(.body))
+          .foregroundStyle(Chrome.fg)
+          .tint(Chrome.accent)
+          .disabled(changing)
+          .padding(.horizontal, Chrome.Space.l)
+          .frame(minHeight: Chrome.Size.row)
         }
         if let change = browser.git[folder]?.change(at: entry.path, isDirectory: entry.isDirectory) {
-          HStack {
-            Text("Git").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-            Spacer()
-            Text(String(describing: change)).font(Chrome.mono(.secondary)).foregroundStyle(FileRow.tone(change))
-          }
-          .rowStyle()
+          InfoRow("Git", String(describing: change), tone: FileRow.tone(change))
         }
-        Button { browser.copyPath(entry.path) } label: {
-          HStack(alignment: .firstTextBaseline) {
-            Text("Path").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-            Spacer(minLength: 16)
-            Text(entry.path).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).multilineTextAlignment(.trailing)
-          }
-          .rowStyle()
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(RowPressStyle())
+        Button { browser.copyPath(entry.path) } label: { InfoRow("Path", entry.path) }
+          .buttonStyle(RowStyle())
       }
       Spacer(minLength: 0)
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Chrome.raised)
-    .presentationDetents([.medium])
-    .presentationBackground(Chrome.raised)
-    .presentationDragIndicator(.visible)
-    .environment(\.colorScheme, .dark)
+    .infoSheet()
     .task {
       guard entry.isDirectory, folderSize == nil else { return }
       sizing = true
@@ -92,22 +67,53 @@ struct InfoSheet: View {
     if let folderSize { return FileFormat.size(folderSize) }
     return sizing ? "…" : "—"
   }
+}
 
-  private func row(_ label: String, _ value: String) -> some View {
-    HStack {
-      Text(label).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-      Spacer()
-      Text(value).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(1)
+/// A fact in an info sheet: the label in words, the value right (SF Mono for machine facts).
+struct InfoRow: View {
+  let label: String
+  let value: String
+  var mono = true
+  var tone: Color?
+
+  init(_ label: String, _ value: String, mono: Bool = true, tone: Color? = nil) {
+    self.label = label
+    self.value = value
+    self.mono = mono
+    self.tone = tone
+  }
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: Chrome.Space.l) {
+      Text(label).font(Chrome.font(.body)).foregroundStyle(Chrome.fg)
+      Spacer(minLength: 0)
+      Text(value)
+        .font(mono ? Chrome.mono(.secondary) : Chrome.font(.body))
+        .foregroundStyle(tone ?? Chrome.fg2)
+        .multilineTextAlignment(.trailing)
     }
-    .rowStyle()
+    .padding(.horizontal, Chrome.Space.l)
+    .padding(.vertical, Chrome.Space.m)
+    .frame(minHeight: Chrome.Size.row)
+    .contentShape(Rectangle())
   }
 }
 
-private extension View {
-  /// A hairline key/value row.
-  func rowStyle() -> some View {
-    padding(.horizontal, 16)
-      .frame(minHeight: 44)
-      .overlay(alignment: .top) { Chrome.line.frame(height: 1) }
+extension View {
+  /// An info sheet's title row, lined up with its group's text.
+  func infoHead() -> some View {
+    padding(.horizontal, Chrome.Space.m + Chrome.Space.l)
+      .padding(.top, Chrome.Space.xl)
+      .padding(.bottom, Chrome.Space.l)
+  }
+
+  /// An info sheet: half height on the page's ground.
+  func infoSheet() -> some View {
+    frame(maxWidth: .infinity, alignment: .leading)
+      .background(Chrome.raised)
+      .presentationDetents([.medium])
+      .presentationBackground(Chrome.raised)
+      .presentationDragIndicator(.visible)
+      .environment(\.colorScheme, Chrome.colorScheme)
   }
 }

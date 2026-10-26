@@ -47,7 +47,7 @@ struct FilesPane: View {
       }
     }
     .background(Chrome.raised)
-    .environment(\.colorScheme, .dark)
+    .environment(\.colorScheme, Chrome.colorScheme)
   }
 }
 
@@ -58,7 +58,7 @@ private struct HostChooser: View {
 
   var body: some View {
     if config.hosts.isEmpty {
-      VStack(spacing: 6) {
+      VStack(spacing: Chrome.Space.xs) {
         Text("No hosts").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg)
         Text("Add one in Settings › Hosts").font(Chrome.font(.secondary)).foregroundStyle(Chrome.muted)
       }
@@ -66,26 +66,12 @@ private struct HostChooser: View {
       .padding(.top, 72)
     } else {
       ScrollView {
-        LazyVStack(spacing: 0) {
+        InsetGroup(dividerInset: Row.symbolInset) {
           ForEach(config.hosts) { host in
-            Button { choose(host) } label: {
-              HStack(spacing: 12) {
-                Image(systemName: "server.rack").font(.system(size: 17)).foregroundStyle(Chrome.muted).frame(width: 38)
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(host.alias).font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg)
-                  Text("\(host.user)@\(host.hostname)").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).lineLimit(1)
-                }
-                Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Chrome.faint)
-              }
-              .padding(.horizontal, 16)
-              .frame(height: 60)
-              .contentShape(Rectangle())
-            }
-            .buttonStyle(RowPressStyle())
-            .overlay(alignment: .bottom) { Chrome.line.frame(height: 1).padding(.leading, 66) }
+            Row(symbol: "server.rack", title: host.alias, detail: "\(host.user)@\(host.hostname)", mono: true) { choose(host) }
           }
         }
+        .padding(.top, Chrome.Space.s)
       }
     }
   }
@@ -102,14 +88,14 @@ struct BrowserView: View {
   var body: some View {
     Group {
       if let error = browser.homeError {
-        VStack(spacing: 10) {
+        VStack(spacing: Chrome.Space.s) {
           Text("Can't reach \(browser.fs.spec.label)").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg)
           Text(error).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).multilineTextAlignment(.center)
           Button("Retry") { Task { await browser.retryStart() } }
             .buttonStyle(CapsuleButtonStyle())
-            .padding(.top, 6)
+            .padding(.top, Chrome.Space.s)
         }
-        .padding(.horizontal, 32)
+        .padding(.horizontal, Chrome.Space.xl)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .padding(.top, 72)
       } else if let root = browser.root {
@@ -134,7 +120,7 @@ struct BrowserView: View {
           }
           .animation(Chrome.spring, value: browser.transfers.items.map(\.id))
         }
-        .overlay(alignment: .bottom) { ToastView(browser: browser).padding(.bottom, 64) }
+        .overlay(alignment: .bottom) { ToastView(browser: browser).padding(.bottom, Chrome.Size.row + Chrome.Space.l) }
       } else {
         ProgressView().tint(Chrome.muted).frame(maxWidth: .infinity, maxHeight: .infinity)
       }
@@ -199,18 +185,17 @@ private struct PickBar: View {
   var body: some View {
     if let pick = browser.pick, let here = browser.current {
       let count = pick.entries.count == 1 ? pick.entries[0].name : "\(pick.entries.count) items"
-      HStack(spacing: 10) {
+      HStack(spacing: Chrome.Space.s) {
         Text("\(pick.op == .move ? "Move" : "Copy") \(count)")
           .font(Chrome.font(.secondary, .medium)).foregroundStyle(Chrome.fg2).lineLimit(1).truncationMode(.middle)
-        Spacer(minLength: 8)
+        Spacer(minLength: Chrome.Space.s)
         Button("Cancel") { browser.pick = nil }.buttonStyle(CapsuleButtonStyle(kind: .plain))
         Button(pick.op == .move ? "Move Here" : "Copy Here") { Task { await browser.finishPick(into: here) } }
           .buttonStyle(CapsuleButtonStyle(kind: .prominent))
       }
-      .padding(.horizontal, 16)
-      .frame(height: 52)
-      .background(Chrome.bg.opacity(0.92))
-      .overlay(alignment: .top) { Chrome.line2.frame(height: 1) }
+      .padding(.leading, Chrome.Space.l)
+      .padding(.trailing, Chrome.Space.s)
+      .filesBar()
     }
   }
 }
@@ -221,13 +206,13 @@ private struct SelectBar: View {
 
   var body: some View {
     let chosen = selected
-    HStack(spacing: 2) {
+    HStack(spacing: 0) {
       Button("Done") {
         browser.selecting = false
         browser.selection = []
       }
       .buttonStyle(CapsuleButtonStyle(kind: .plain))
-      Text("\(chosen.count)").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).padding(.leading, 4)
+      Text("\(chosen.count)").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
       Spacer()
       icon("square.and.arrow.down", "Save to Files", chosen.contains(where: \.isDirectory) || chosen.isEmpty) {
         Task { await browser.export(chosen) }
@@ -240,10 +225,8 @@ private struct SelectBar: View {
       icon("archivebox", "Compress", chosen.isEmpty) { Task { await browser.compress(chosen) } }
       icon("trash", "Delete", chosen.isEmpty) { Task { await browser.delete(chosen) } }
     }
-    .padding(.horizontal, 8)
-    .frame(height: 52)
-    .background(Chrome.bg.opacity(0.92))
-    .overlay(alignment: .top) { Chrome.line2.frame(height: 1) }
+    .padding(.horizontal, Chrome.Space.xs)
+    .filesBar()
   }
 
   private var selected: [RemoteEntry] {
@@ -252,13 +235,10 @@ private struct SelectBar: View {
   }
 
   private func icon(_ symbol: String, _ label: String, _ disabled: Bool, _ action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-      Image(systemName: symbol).font(.system(size: 17)).frame(width: 40, height: 40).contentShape(Rectangle())
-    }
-    .buttonStyle(IconButtonStyle())
-    .disabled(disabled)
-    .opacity(disabled ? 0.4 : 1)
-    .accessibilityLabel(label)
+    Button(action: action) { FilesGlyph(symbol: symbol) }
+      .buttonStyle(IconButtonStyle())
+      .disabled(disabled)
+      .accessibilityLabel(label)
   }
 }
 
@@ -268,41 +248,86 @@ private struct ToastView: View {
   var body: some View {
     if let toast = browser.toast {
       Button { browser.toastTapped() } label: {
-        HStack(spacing: 12) {
-          Text(toast.text).font(Chrome.font(.secondary, .medium)).foregroundStyle(toast.isError ? Chrome.bad : Chrome.fg)
-            .lineLimit(2).multilineTextAlignment(.leading)
-          if let action = toast.action {
-            Text(action).font(Chrome.font(.secondary, .semibold)).foregroundStyle(Chrome.accent)
-          }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .background(Chrome.bg, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Chrome.line2))
-        .shadow(color: .black.opacity(0.3), radius: 25, y: 18)
+        ToastCard(text: toast.text, isError: toast.isError, action: toast.action)
       }
       .buttonStyle(.plain)
-      .padding(.horizontal, 16)
       .transition(.move(edge: .bottom).combined(with: .opacity))
       .id(toast.id)
     }
   }
 }
 
-// MARK: - Styles
+/// A passing message over the bottom of the page; an action word (Undo) when it has one.
+struct ToastCard: View {
+  let text: String
+  let isError: Bool
+  var action: String?
 
-/// A row lit with fill2 while pressed (lists, hosts).
-struct RowPressStyle: ButtonStyle {
-  func makeBody(configuration: Configuration) -> some View {
-    configuration.label.background(configuration.isPressed ? Chrome.fill2 : .clear)
+  var body: some View {
+    HStack(spacing: Chrome.Space.m) {
+      Text(text).font(Chrome.font(.secondary, .medium)).foregroundStyle(isError ? Chrome.bad : Chrome.fg)
+        .lineLimit(2).multilineTextAlignment(.leading)
+      if let action {
+        Text(action).font(Chrome.font(.secondary, .semibold)).foregroundStyle(Chrome.fg)
+          .padding(.horizontal, Chrome.Space.m)
+          .frame(height: 28)
+          .background(Capsule().fill(Chrome.fill2))
+      }
+    }
+    .padding(.horizontal, Chrome.Space.l)
+    .padding(.vertical, Chrome.Space.m)
+    .background(Chrome.bg, in: RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous))
+    .overlay(RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous).strokeBorder(Chrome.line2))
+    .shadow(color: .black.opacity(0.3), radius: 24, y: 16)
+    .padding(.horizontal, Chrome.Space.l)
   }
 }
 
+// MARK: - Styles
+
+/// A bar's symbol: one weight and size, a 44 pt target.
+struct FilesGlyph: View {
+  let symbol: String
+
+  var body: some View {
+    Image(systemName: symbol)
+      .font(Chrome.symbol(.control))
+      .frame(width: Chrome.Size.target, height: Chrome.Size.target)
+      .contentShape(Rectangle())
+  }
+}
+
+/// A symbol button in a bar: fg, a `fill2` circle while pressed, faint when it can't act.
 struct IconButtonStyle: ButtonStyle {
+  @Environment(\.isEnabled) private var isEnabled
+
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .foregroundStyle(configuration.isPressed ? Chrome.fg : Chrome.fg2)
-      .background(configuration.isPressed ? Chrome.fill2 : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .foregroundStyle(isEnabled ? Chrome.fg : Chrome.faint)
+      .background {
+        Circle().fill(Chrome.fill2).frame(width: Chrome.Size.circle, height: Chrome.Size.circle)
+          .opacity(configuration.isPressed ? 1 : 0)
+      }
       .scaleEffect(configuration.isPressed ? 0.94 : 1)
+      .animation(Chrome.quick, value: configuration.isPressed)
+  }
+}
+
+extension View {
+  /// A bar along the bottom of the browser: a row tall, on the page's ground under a hairline.
+  func filesBar() -> some View {
+    frame(height: Chrome.Size.row)
+      .background(Chrome.raised)
+      .overlay(alignment: .top) { Chrome.line.frame(height: 1) }
+  }
+
+  /// The bar over a page: a `fill` capsule a target and a step tall, on the
+  /// page's ground, which rows scroll under.
+  func filesBarCapsule() -> some View {
+    frame(height: Chrome.Size.target + Chrome.Space.xs)
+      .background(Capsule().fill(Chrome.fill))
+      .padding(.horizontal, Chrome.Space.m)
+      .padding(.vertical, Chrome.Space.s)
+      .background(Chrome.raised)
   }
 }

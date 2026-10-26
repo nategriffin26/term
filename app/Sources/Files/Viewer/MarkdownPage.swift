@@ -2,17 +2,17 @@ import Foundation
 import cmark_gfm
 import cmark_gfm_extensions
 
-/// Markdown as an HTML page in the app's dark look, rendered by cmark-gfm (GitHub's
+/// Markdown as an HTML page in the app theme's colours, rendered by cmark-gfm (GitHub's
 /// renderer): tables, task lists, strikethrough, autolinks, footnotes, raw
 /// HTML with GitHub's tag filter (the page runs no JavaScript either way),
 /// heading anchors for in-page links, and YAML front matter as a table.
 enum MarkdownPage {
-  static func html(_ markdown: String) -> String {
+  static func html(_ markdown: String, theme: AppTheme) -> String {
     let (front, body) = splitFrontMatter(markdown)
     return """
       <!doctype html><html><head><meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>\(css)</style></head><body>
+      <style>\(css(theme))</style></head><body>
       \(front.map(frontMatterHTML) ?? "")\(render(body))</body></html>
       """
   }
@@ -137,42 +137,55 @@ enum MarkdownPage {
     return text
   }
 
-  /// Dark: SF Pro for prose, SF Mono for code, hairlines, the accent only on links.
-  static let css = """
-    :root { color-scheme: dark; }
-    html { -webkit-text-size-adjust: 100%; }
-    body { margin: 0; padding: 14px 16px 56px; background: #121722; color: #a2abbf; font: 15px/1.6 -apple-system, sans-serif;
-      letter-spacing: -0.005em; overflow-wrap: break-word; -webkit-font-smoothing: antialiased; }
-    body > :first-child { margin-top: 0; }
-    h1, h2, h3, h4, h5, h6 { color: #e6eaf3; font-weight: 600; line-height: 1.3; margin: 1.5em 0 0.55em; letter-spacing: -0.01em; }
-    h1 { font-size: 22px; } h2 { font-size: 18px; } h3 { font-size: 16px; } h4, h5, h6 { font-size: 15px; }
-    h1, h2 { padding-bottom: 0.35em; border-bottom: 1px solid rgba(150,175,255,.075); }
-    p, ul, ol, blockquote, pre, table, details { margin: 0 0 14px; }
-    a { color: #6f8cff; text-decoration: none; }
-    strong { color: #e6eaf3; font-weight: 600; }
-    del { color: #7c85a1; }
-    code { font: 13px/1.5 ui-monospace, monospace; background: rgba(150,175,255,.08); border-radius: 5px; padding: 0.1em 0.35em; color: #e6eaf3; }
-    pre { background: #0a0d13; border: 1px solid rgba(150,175,255,.075); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
-    pre code { background: none; padding: 0; border-radius: 0; font-size: 12.5px; color: #a2abbf; }
-    blockquote { margin-left: 0; padding-left: 14px; border-left: 2px solid rgba(150,175,255,.14); color: #7c85a1; }
-    hr { border: 0; border-top: 1px solid rgba(150,175,255,.14); margin: 24px 0; }
-    img { max-width: 100%; }
-    ul, ol { padding-left: 22px; }
-    li + li, li > ul, li > ol { margin-top: 4px; }
-    li > ul, li > ol { margin-bottom: 0; }
-    li:has(> input[type=checkbox]) { list-style: none; }
-    input[type=checkbox] { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin: 0 7px 0 -21px;
-      vertical-align: -2px; border: 1px solid rgba(150,175,255,.3); border-radius: 4px; }
-    input[type=checkbox]:checked { background: #a2abbf; border-color: #a2abbf;
-      box-shadow: inset 0 0 0 3px #121722; }
-    table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13.5px; }
-    th, td { border-bottom: 1px solid rgba(150,175,255,.075); padding: 7px 14px 7px 0; text-align: left; vertical-align: top; }
-    th { color: #e6eaf3; font-weight: 600; border-bottom-color: rgba(150,175,255,.14); }
-    table.front { font: 12px/1.5 ui-monospace, monospace; margin-bottom: 22px; }
-    table.front th { color: #7c85a1; font-weight: 400; border-bottom-color: rgba(150,175,255,.075); white-space: nowrap; }
-    table.front td { color: #a2abbf; }
-    pre.front { font-size: 12px; color: #7c85a1; }
-    .footnotes { font-size: 13px; color: #7c85a1; }
-    summary { color: #e6eaf3; }
-    """
+  /// A tone as CSS: #rrggbb, or rgba() when it is see-through.
+  static func css(_ tone: AppTheme.Tone) -> String {
+    let r = (tone.rgb >> 16) & 0xFF, g = (tone.rgb >> 8) & 0xFF, b = tone.rgb & 0xFF
+    if tone.opacity >= 1 { return String(format: "#%06x", tone.rgb & 0xFFFFFF) }
+    return "rgba(\(r), \(g), \(b), \(String(format: "%.3g", tone.opacity)))"
+  }
+
+  /// The page in the app's colours: the viewer's ground, prose in fg2 with
+  /// headings in fg, hairlines and washes in the text colour, links
+  /// underlined rather than coloured (the accent marks only what needs him).
+  /// SF Pro for prose, SF Mono for code.
+  static func css(_ theme: AppTheme) -> String {
+    let ground = css(theme.raised), fg = css(theme.fg), fg2 = css(theme.fg2), muted = css(theme.muted)
+    let fill = css(theme.fill), line = css(theme.line), line2 = css(theme.line2)
+    return """
+      :root { color-scheme: \(theme.isDark ? "dark" : "light"); }
+      html { -webkit-text-size-adjust: 100%; }
+      body { margin: 0; padding: 12px 16px 56px; background: \(ground); color: \(fg2); font: 15px/1.6 -apple-system, sans-serif;
+        letter-spacing: -0.005em; overflow-wrap: break-word; -webkit-font-smoothing: antialiased; }
+      body > :first-child { margin-top: 0; }
+      h1, h2, h3, h4, h5, h6 { color: \(fg); font-weight: 600; line-height: 1.3; margin: 1.5em 0 0.55em; letter-spacing: -0.01em; }
+      h1 { font-size: 22px; } h2 { font-size: 18px; } h3 { font-size: 16px; } h4, h5, h6 { font-size: 15px; }
+      h1, h2 { padding-bottom: 0.35em; border-bottom: 1px solid \(line); }
+      p, ul, ol, blockquote, pre, table, details { margin: 0 0 16px; }
+      a { color: \(fg); text-decoration: underline; text-decoration-color: \(line2); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+      strong { color: \(fg); font-weight: 600; }
+      del { color: \(muted); }
+      code { font: 13px/1.5 ui-monospace, monospace; background: \(fill); border-radius: 6px; padding: 0.1em 0.35em; color: \(fg); }
+      pre { background: \(fill); border-radius: 16px; padding: 12px 16px; overflow-x: auto; }
+      pre code { background: none; padding: 0; border-radius: 0; font-size: 13px; color: \(fg2); }
+      blockquote { margin-left: 0; padding-left: 12px; border-left: 2px solid \(line2); color: \(muted); }
+      hr { border: 0; border-top: 1px solid \(line2); margin: 24px 0; }
+      img { max-width: 100%; border-radius: 6px; }
+      ul, ol { padding-left: 24px; }
+      li + li, li > ul, li > ol { margin-top: 4px; }
+      li > ul, li > ol { margin-bottom: 0; }
+      li:has(> input[type=checkbox]) { list-style: none; }
+      input[type=checkbox] { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin: 0 8px 0 -22px;
+        vertical-align: -2px; border: 1px solid \(line2); border-radius: 4px; }
+      input[type=checkbox]:checked { background: \(fg2); border-color: \(fg2); box-shadow: inset 0 0 0 3px \(ground); }
+      table { border-collapse: collapse; display: block; overflow-x: auto; font-size: 13px; }
+      th, td { border-bottom: 1px solid \(line); padding: 8px 16px 8px 0; text-align: left; vertical-align: top; }
+      th { color: \(fg); font-weight: 600; border-bottom-color: \(line2); }
+      table.front { font: 13px/1.5 ui-monospace, monospace; margin-bottom: 24px; }
+      table.front th { color: \(muted); font-weight: 400; border-bottom-color: \(line); white-space: nowrap; }
+      table.front td { color: \(fg2); }
+      pre.front { font-size: 13px; color: \(muted); }
+      .footnotes { font-size: 13px; color: \(muted); }
+      summary { color: \(fg); }
+      """
+  }
 }

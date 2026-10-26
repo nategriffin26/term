@@ -224,12 +224,33 @@ final class BrowserLogicTests: XCTestCase {
   }
 
   func testSizes() {
-    XCTAssertEqual(FileFormat.size(999), "999 bytes")
+    XCTAssertEqual(FileFormat.size(0), "0 B")
+    XCTAssertEqual(FileFormat.size(999), "999 B")
     XCTAssertEqual(FileFormat.size(1000), "1.0 KB")
     XCTAssertEqual(FileFormat.size(99_949), "99.9 KB")
     XCTAssertEqual(FileFormat.size(785_000), "785 KB")
     XCTAssertEqual(FileFormat.size(999_999), "1.0 MB")
     XCTAssertEqual(FileFormat.size(11_700_000), "11.7 MB")
+  }
+
+  /// Each unit's last value and the next unit's first, as rows show them.
+  func testAges() {
+    let now = Date(timeIntervalSince1970: 2_000_000_000)
+    func age(_ seconds: Int) -> String { FileFormat.age(now.addingTimeInterval(-Double(seconds)), now: now) }
+    let day = 86400
+    XCTAssertEqual(age(-300), "now", "a host clock ahead of the phone")
+    XCTAssertEqual(age(59), "now")
+    XCTAssertEqual(age(60), "1m")
+    XCTAssertEqual(age(3599), "59m")
+    XCTAssertEqual(age(3600), "1h")
+    XCTAssertEqual(age(day - 1), "23h")
+    XCTAssertEqual(age(day), "1d")
+    XCTAssertEqual(age(7 * day - 1), "6d")
+    XCTAssertEqual(age(7 * day), "1w")
+    XCTAssertEqual(age(30 * day - 1), "4w")
+    XCTAssertEqual(age(30 * day), "1mo")
+    XCTAssertEqual(age(365 * day - 1), "12mo")
+    XCTAssertEqual(age(365 * day), "1y")
   }
 
   // MARK: - Git

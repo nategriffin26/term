@@ -23,9 +23,9 @@ import TreeSitterTSXRunestone
 import TreeSitterTypeScriptRunestone
 import TreeSitterYAMLRunestone
 
-/// The editor in the terminal's colours: its background and foreground, and
-/// syntax drawn from its ANSI palette (bright colours on dark themes, normal
-/// ones on light), so code looks like it does in the terminal.
+/// The editor in the terminal's colours: its foreground on the panel ground
+/// derived from it, and syntax drawn from its ANSI palette (bright colours on
+/// dark themes, normal ones on light), so code looks like it does in the terminal.
 final class EditorTheme: Runestone.Theme {
   let font: UIFont
   let textColor: UIColor
@@ -49,7 +49,8 @@ final class EditorTheme: Runestone.Theme {
     self.font = font
     bold = font.adding(.traitBold)
     italic = font.adding(.traitItalic)
-    let bg = UIColor(rgb: theme.background)
+    // The viewer's ground (the app's panel colour for this theme), so the bar above meets the code with no seam.
+    let bg = UIColor(rgb: AppTheme.derived(from: theme).raised.rgb)
     let fg = UIColor(rgb: theme.foreground)
     background = bg
     textColor = fg

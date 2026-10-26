@@ -1,8 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// The glass bar: ‹ › (hold either for the history) · the path (tap for the
-/// folders above, the places, pins and recents) · search · new/upload · view.
+/// The bar over a folder: ‹ › (hold either for the history) · the folder's
+/// name and git branch (tap for the folders above, the places, pins and
+/// recents) · search · new/upload · view.
 struct AddressBar: View {
   let path: String
   /// The page's place in the history: its ‹ › and their menus are the
@@ -21,7 +22,7 @@ struct AddressBar: View {
       Menu {
         history(backward: true)
       } label: {
-        glyph("chevron.left").opacity(canBack ? 1 : 0.3)
+        FilesGlyph(symbol: "chevron.left").foregroundStyle(canBack ? Chrome.fg : Chrome.muted)
       } primaryAction: {
         browser.back()
       }
@@ -31,7 +32,7 @@ struct AddressBar: View {
       Menu {
         history(backward: false)
       } label: {
-        glyph("chevron.right").opacity(canForward ? 1 : 0.3)
+        FilesGlyph(symbol: "chevron.right").foregroundStyle(canForward ? Chrome.fg : Chrome.muted)
       } primaryAction: {
         browser.forward()
       }
@@ -45,54 +46,40 @@ struct AddressBar: View {
       }
       .accessibilityLabel("Where: \(FilePath.tilde(path, home: browser.home))")
 
-      Button(action: onSearch) { glyph("magnifyingglass") }
+      Button(action: onSearch) { FilesGlyph(symbol: "magnifyingglass") }
         .buttonStyle(IconButtonStyle())
         .accessibilityLabel("Search")
 
-      Menu { addMenu } label: { glyph("plus") }
+      Menu { addMenu } label: { FilesGlyph(symbol: "plus") }
         .accessibilityLabel("Add")
 
-      Menu { viewMenu } label: { glyph("ellipsis") }
+      Menu { viewMenu } label: { FilesGlyph(symbol: "ellipsis") }
         .accessibilityLabel("View options")
     }
     .foregroundStyle(Chrome.fg)
-    .padding(.horizontal, 3)
-    .frame(height: 46)
-    .glassEffect(.regular.tint(Chrome.bg.opacity(0.35)).interactive(), in: .capsule)
-    .padding(.horizontal, 10)
-    .padding(.top, 8)
-    .padding(.bottom, 6)
-  }
-
-  private func glyph(_ name: String) -> some View {
-    Image(systemName: name)
-      .font(.system(size: 17, weight: .medium))
-      .frame(width: 40, height: 40)
-      .contentShape(Rectangle())
+    .padding(.horizontal, Chrome.Space.xs)
+    .filesBarCapsule()
   }
 
   // MARK: - Path
 
   private var pathLabel: some View {
-    let display = path == "/" ? browser.fs.spec.label : FilePath.tilde(path, home: browser.home)
-    let cut = display.lastIndex(of: "/")
-    let lead = cut.map { String(display[...$0]) } ?? ""
-    let leaf = cut.map { String(display[display.index(after: $0)...]) } ?? display
     let branch = browser.git[path]?.branch
-    return VStack(spacing: 1) {
-      Text("\(Text(lead).foregroundStyle(Chrome.muted))\(Text(leaf).foregroundStyle(Chrome.fg))")
-        .font(Chrome.font(.body, .medium))
+    return VStack(spacing: 0) {
+      Text(title(path))
+        .font(Chrome.font(.title, .semibold))
+        .foregroundStyle(Chrome.fg)
         .lineLimit(1)
-        .truncationMode(.head)
+        .truncationMode(.middle)
       if let branch, !branch.isEmpty {
-        HStack(spacing: 3) {
-          Image(systemName: "arrow.triangle.branch").font(.system(size: 9, weight: .semibold))
+        HStack(spacing: Chrome.Space.xs) {
+          Image(systemName: "arrow.triangle.branch").font(Chrome.font(.caption, .medium))
           Text(branch).font(Chrome.mono(.caption)).lineLimit(1).truncationMode(.middle)
         }
         .foregroundStyle(Chrome.muted)
       }
     }
-    .padding(.horizontal, 6)
+    .padding(.horizontal, Chrome.Space.xs)
   }
 
   @ViewBuilder
@@ -237,36 +224,35 @@ struct SearchResults: View {
     List {
       if let failure {
         Text(failure).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.bad)
-          .listRowBackground(Color.clear).listRowSeparator(.hidden)
+          .listRowBackground(Chrome.fill)
       }
-      ForEach(results?.hits ?? []) { hit in
-        Button {
-          focused = false
-          Task {
-            if hit.isDirectory { browser.go(hit.path) } else { await browser.reveal(hit.path, line: hit.line) }
+      Section {
+        ForEach(results?.hits ?? []) { hit in
+          Button {
+            focused = false
+            Task {
+              if hit.isDirectory { browser.go(hit.path) } else { await browser.reveal(hit.path, line: hit.line) }
+            }
+          } label: {
+            HitRow(hit: hit, dir: dir)
           }
-        } label: {
-          HitRow(hit: hit, dir: dir, browser: browser)
+          .buttonStyle(RowStyle())
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Chrome.fill)
+          .listRowSeparatorTint(Chrome.line)
+          .alignmentGuide(.listRowSeparatorLeading) { _ in Row.symbolInset }
+          .alignmentGuide(.listRowSeparatorTrailing) { d in d.width }
         }
-        .buttonStyle(RowPressStyle())
-        .listRowInsets(EdgeInsets())
-        .listRowBackground(Color.clear)
-        .listRowSeparatorTint(Chrome.line)
-        .alignmentGuide(.listRowSeparatorLeading) { _ in 66 }
-      }
-      if let results, results.stopped, !results.hits.isEmpty {
-        Text("Stopped after \(FileSearch.seconds) s")
-          .font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 14)
-          .listRowBackground(Color.clear)
-          .listRowSeparator(.hidden)
+      } footer: {
+        if let results, results.stopped, !results.hits.isEmpty {
+          Text("Stopped after \(FileSearch.seconds) s")
+            .font(Chrome.font(.secondary)).foregroundStyle(Chrome.muted)
+            .frame(maxWidth: .infinity)
+        }
       }
     }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden)
+    .filesList()
     .scrollDismissesKeyboard(.immediately)
-    .environment(\.defaultMinListRowHeight, 1)
     .overlay {
       if let results, results.hits.isEmpty, running == nil, failure == nil, !query.trimmingCharacters(in: .whitespaces).isEmpty {
         Text(results.stopped ? "No matches in \(FileSearch.seconds) s" : "No matches").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg2)
@@ -281,30 +267,26 @@ struct SearchResults: View {
   private var key: String { "\(scope.rawValue)\u{0}\(query)" }
 
   private var bar: some View {
-    VStack(spacing: 8) {
-      HStack(spacing: 10) {
-        HStack(spacing: 6) {
-          Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(Chrome.muted)
-          TextField("Search \(dir == browser.home ? "Home" : FilePath.name(dir))", text: $query)
-            .font(Chrome.font(.title))
-            .foregroundStyle(Chrome.fg)
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.never)
-            .submitLabel(.search)
-            .focused($focused)
-          if running != nil { ProgressView().controlSize(.small).tint(Chrome.muted) }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 40)
-        .glassEffect(.regular.tint(Chrome.bg.opacity(0.35)), in: .capsule)
-        Button("Cancel", action: onCancel).font(Chrome.font(.body)).foregroundStyle(Chrome.accent)
+    VStack(spacing: 0) {
+      HStack(spacing: Chrome.Space.s) {
+        Image(systemName: "magnifyingglass").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.muted)
+        TextField("Search \(dir == browser.home ? "Home" : FilePath.name(dir))", text: $query)
+          .font(Chrome.font(.body))
+          .foregroundStyle(Chrome.fg)
+          .autocorrectionDisabled()
+          .textInputAutocapitalization(.never)
+          .submitLabel(.search)
+          .focused($focused)
+        if running != nil { ProgressView().controlSize(.small).tint(Chrome.muted) }
+        Button("Cancel", action: onCancel).buttonStyle(CapsuleButtonStyle(kind: .plain))
       }
+      .padding(.leading, Chrome.Space.l)
+      .filesBarCapsule()
       CapsuleSegmented(options: FileSearch.Scope.allCases.map { ($0, $0.label) }, selection: scope) { scope = $0 }
+        .padding(.horizontal, Chrome.Space.m)
+        .padding(.bottom, Chrome.Space.s)
+        .background(Chrome.raised)
     }
-    .padding(.horizontal, 12)
-    .padding(.top, 8)
-    .padding(.bottom, 8)
-    .background(Chrome.raised.opacity(0.94))
   }
 
   private func search() async {
@@ -337,19 +319,18 @@ struct SearchResults: View {
 private struct HitRow: View {
   let hit: FileSearch.Hit
   let dir: String
-  let browser: FilesBrowser
 
   var body: some View {
     let name = FilePath.name(hit.path)
     let folder = FilePath.relative(FilePath.parent(hit.path), to: dir).map { $0.isEmpty ? "." : $0 } ?? FilePath.parent(hit.path)
-    HStack(spacing: 12) {
+    HStack(alignment: .firstTextBaseline, spacing: Chrome.Space.m) {
       Image(systemName: hit.isDirectory ? FileKind.folder.symbol : FileKind.of(name: name).symbol)
-        .font(.system(size: hit.isDirectory ? 24 : 20))
-        .foregroundStyle(hit.isDirectory ? Chrome.fg2 : Chrome.muted)
-        .frame(width: 38, height: 38)
-      VStack(alignment: .leading, spacing: 3) {
+        .font(Chrome.symbol(.control))
+        .foregroundStyle(hit.isDirectory ? Chrome.folder : Chrome.fg2)
+        .frame(width: Row.symbolInset - Chrome.Space.l - Chrome.Space.m)
+      VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 0) {
-          Text(name).font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
+          Text(name).font(Chrome.font(.body)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
           if let line = hit.line {
             Text(":\(line)").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
           }
@@ -357,13 +338,13 @@ private struct HitRow: View {
         if let text = hit.text {
           Text(text).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(1)
         }
-        Text(folder).font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted).lineLimit(1).truncationMode(.head)
+        Text(folder).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).lineLimit(1).truncationMode(.head)
       }
       Spacer(minLength: 0)
     }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 9)
-    .frame(minHeight: 60)
+    .padding(.horizontal, Chrome.Space.l)
+    .padding(.vertical, Chrome.Space.s)
+    .frame(minHeight: Chrome.Size.row)
     .contentShape(Rectangle())
   }
 }

@@ -90,7 +90,7 @@ final class MarkdownPageTests: XCTestCase {
   /// Bug: a SKILL.md's front matter renders as a rule and a big setext
   /// heading ("description: …" underlined by the closing ---).
   func testFrontMatterIsATable() {
-    let page = MarkdownPage.html("---\nname: glass\ndescription: \"The <default> look\"\n---\n# Glass\n")
+    let page = MarkdownPage.html("---\nname: glass\ndescription: \"The <default> look\"\n---\n# Glass\n", theme: .fixed())
     XCTAssertTrue(page.contains("<table class=\"front\"><tr><th>name</th><td>glass</td></tr><tr><th>description</th><td>The &lt;default&gt; look</td></tr></table>"), page)
     XCTAssertFalse(page.contains("<h2>"), page)
     XCTAssertFalse(page.contains("<hr"), page)
@@ -100,10 +100,30 @@ final class MarkdownPageTests: XCTestCase {
   /// Nested YAML can't be a flat table: shown as its source. A lone "---"
   /// with no closing line is a rule, not front matter.
   func testFrontMatterEdges() {
-    let nested = MarkdownPage.html("---\nmetadata:\n  kind: style\n---\nbody\n")
+    let nested = MarkdownPage.html("---\nmetadata:\n  kind: style\n---\nbody\n", theme: .fixed())
     XCTAssertTrue(nested.contains("<pre class=\"front\">metadata:\n  kind: style</pre>"), nested)
     XCTAssertNil(MarkdownPage.splitFrontMatter("---\nnot closed\n").front)
     XCTAssertNil(MarkdownPage.splitFrontMatter("text\n---\nmore\n---\n").front)
     XCTAssertEqual(MarkdownPage.splitFrontMatter("---\r\na: 1\r\n---\r\nbody").front, "a: 1")
+  }
+
+  /// Bug: the page kept a hard-coded blue-black ink palette, so a light
+  /// terminal theme showed a dark page under light chrome.
+  func testPageTakesTheAppTheme() {
+    typealias Tone = AppTheme.Tone
+    let light = AppTheme(
+      name: "Paper", bg: Tone(rgb: 0xFFFFFF), raised: Tone(rgb: 0xF7F6F2), fg: Tone(rgb: 0x1B1A18), fg2: Tone(rgb: 0x4A4843),
+      muted: Tone(rgb: 0x77746D), faint: Tone(rgb: 0xB5B2AC), fill: Tone(rgb: 0x1B1A18, opacity: 0.06),
+      fill2: Tone(rgb: 0x1B1A18, opacity: 0.1), fill3: Tone(rgb: 0x1B1A18, opacity: 0.16), line: Tone(rgb: 0x1B1A18, opacity: 0.09),
+      line2: Tone(rgb: 0x1B1A18, opacity: 0.18), accent: Tone(rgb: 0xC77700), onAccent: Tone(rgb: 0xFFFFFF),
+      ok: Tone(rgb: 0x2E7D32), warn: Tone(rgb: 0xC77700), bad: Tone(rgb: 0xC62828), overlay: Tone(rgb: 0, opacity: 0.3),
+      folder: Tone(rgb: 0x2F5BB7))
+    let page = MarkdownPage.html("# Title\n\n[link](x.md) and `code`\n", theme: light)
+    XCTAssertTrue(page.contains("color-scheme: light"), page)
+    XCTAssertTrue(page.contains("background: #f7f6f2; color: #4a4843"), "ground is raised, prose fg2")
+    XCTAssertTrue(page.contains("h1, h2, h3, h4, h5, h6 { color: #1b1a18"), "headings in fg")
+    XCTAssertTrue(page.contains("background: rgba(27, 26, 24, 0.06)"), "code wash is fill")
+    XCTAssertFalse(page.contains("#121722"), "the old ink ground")
+    XCTAssertFalse(page.contains("#c77700"), "the accent marks nothing on a page")
   }
 }

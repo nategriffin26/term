@@ -26,7 +26,8 @@ struct FolderPage: View {
           }
           .overlay {
             if dropTargeted {
-              RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Chrome.accent, lineWidth: 1.5).padding(6)
+              RoundedRectangle(cornerRadius: Chrome.Radius.group, style: .continuous).stroke(Chrome.accent, lineWidth: 1.5)
+                .padding(Chrome.Space.s)
                 .allowsHitTesting(false)
             }
           }
@@ -76,40 +77,31 @@ private struct FolderList: View {
     let selection = Binding(get: { browser.selection }, set: { browser.selection = $0 })
     List(selection: selecting ? selection : nil) {
       if let error = listing.error {
-        HStack(spacing: 10) {
-          Image(systemName: "exclamationmark.triangle").foregroundStyle(Chrome.warn)
+        HStack(spacing: Chrome.Space.m) {
+          Image(systemName: "exclamationmark.triangle").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.warn)
           Text(entries.isEmpty ? error : "Couldn't refresh: \(error)").font(Chrome.font(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(3)
-          Spacer(minLength: 8)
+          Spacer(minLength: Chrome.Space.s)
           Button("Retry") { Task { await browser.load(path) } }.buttonStyle(CapsuleButtonStyle())
         }
-        .padding(.vertical, 10)
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-        .listRowBackground(Color.clear)
-        .listRowSeparatorTint(Chrome.line)
+        .padding(.vertical, Chrome.Space.s)
+        .listRowInsets(EdgeInsets(top: 0, leading: Chrome.Space.l, bottom: 0, trailing: Chrome.Space.s))
+        .listRowBackground(Chrome.fill)
       }
-      ForEach(entries, id: \.path) { entry in
-        row(entry, selecting: selecting)
-          .tag(entry.path)
-          .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-          .listRowBackground(Color.clear)
-          .listRowSeparatorTint(Chrome.line)
-          .alignmentGuide(.listRowSeparatorLeading) { _ in 66 }
-      }
-      if !entries.isEmpty {
-        Text(entries.count == 1 ? "1 item" : "\(entries.count) items")
-          .font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 14)
-          .listRowBackground(Color.clear)
-          .listRowSeparator(.hidden)
-          .selectionDisabled()
+      Section {
+        ForEach(entries, id: \.path) { entry in
+          row(entry, selecting: selecting)
+            .tag(entry.path)
+            .listRowInsets(EdgeInsets())
+            .listRowBackground(Chrome.fill)
+            .listRowSeparatorTint(Chrome.line)
+            .alignmentGuide(.listRowSeparatorLeading) { _ in Row.symbolInset }
+            .alignmentGuide(.listRowSeparatorTrailing) { d in d.width }
+        }
       }
     }
-    .listStyle(.plain)
-    .scrollContentBackground(.hidden)
-    .environment(\.defaultMinListRowHeight, 1)
+    .filesList()
     .environment(\.editMode, .constant(selecting ? .active : .inactive))
-    .tint(Chrome.accent)
+    .tint(Chrome.fg)
     .refreshable {
       await browser.load(path)
       await browser.refreshGit(path)
@@ -124,7 +116,7 @@ private struct FolderList: View {
           Text("Empty folder").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg2)
             .frame(maxHeight: .infinity, alignment: .top).padding(.top, 72).allowsHitTesting(false)
         } else {
-          Pending().frame(maxHeight: .infinity, alignment: .top).padding(.top, 80)
+          Pending().frame(maxHeight: .infinity, alignment: .top).padding(.top, 72)
         }
       }
     }
@@ -144,7 +136,7 @@ private struct FolderList: View {
       content
     } else {
       Button { browser.open(entry) } label: { content }
-        .buttonStyle(RowPressStyle())
+        .buttonStyle(RowStyle())
         .contextMenu { EntryMenu(entry: entry, browser: browser, context: context) }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
           // The list's accent tint would otherwise paint it blue.
@@ -171,54 +163,51 @@ private struct Pending: View {
   }
 }
 
-/// A row: thumbnail or glyph, the name (middle-cut, like Finder), date and
-/// size, the git badge, a chevron for folders.
+/// A row as the mockup draws it: the glyph or thumbnail, the name, a git
+/// dot, then the size and age on the right.
 struct FileRow: View {
   let entry: RemoteEntry
   let browser: FilesBrowser
   let change: GitStatus.Change?
-  var meta: String?
 
   var body: some View {
-    HStack(spacing: 12) {
+    HStack(spacing: Chrome.Space.m) {
       FileThumb(entry: entry, browser: browser)
-      VStack(alignment: .leading, spacing: 3) {
+      HStack(spacing: Chrome.Space.s) {
         if browser.renaming == entry.path {
           RenameField(entry: entry, browser: browser)
         } else {
           Text(entry.name)
-            .font(Chrome.font(.body, .medium))
-            .foregroundStyle(entry.isBroken ? Chrome.muted : Chrome.fg)
+            .font(Chrome.font(.body))
+            .foregroundStyle(entry.isHidden || entry.isBroken ? Chrome.muted : Chrome.fg)
             .lineLimit(1).truncationMode(.middle)
         }
-        Text(meta ?? defaultMeta)
-          .font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted).lineLimit(1)
-          .truncationMode(meta == nil ? .tail : .head)
+        if entry.isSymlink {
+          Image(systemName: entry.isBroken ? "exclamationmark.triangle" : "arrow.turn.up.right")
+            .font(Chrome.symbol(.inline))
+            .foregroundStyle(entry.isBroken ? Chrome.bad : Chrome.muted)
+            .accessibilityLabel(entry.isBroken ? "broken link" : "link")
+        }
+        if let change {
+          Circle().fill(Self.tone(change)).frame(width: Chrome.Space.s, height: Chrome.Space.s)
+            .accessibilityLabel("git \(String(describing: change))")
+        }
       }
-      Spacer(minLength: 6)
-      if let change {
-        Text(change.letter)
-          .font(Chrome.mono(.caption, .semibold))
-          .foregroundStyle(Self.tone(change))
-          .frame(minWidth: 14)
-          .accessibilityLabel("git \(String(describing: change))")
+      .layoutPriority(1)
+      Spacer(minLength: Chrome.Space.s)
+      HStack(spacing: Chrome.Space.s) {
+        if !entry.isDirectory { Text(FileFormat.size(entry.size)) }
+        Text(FileFormat.age(entry.mtime))
       }
-      // Files keep the chevron's slot so git letters line up down the list.
-      Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Chrome.faint)
-        .opacity(entry.isDirectory ? 1 : 0)
-        .accessibilityHidden(true)
+      .font(Chrome.font(.secondary))
+      .monospacedDigit()
+      .foregroundStyle(Chrome.muted)
+      .lineLimit(1)
+      .fixedSize()
     }
-    .padding(.leading, 16)
-    .padding(.trailing, 14)
-    .frame(height: 60)
+    .padding(.horizontal, Chrome.Space.l)
+    .frame(height: Chrome.Size.row)
     .contentShape(Rectangle())
-    .opacity(entry.isHidden ? 0.55 : 1)
-  }
-
-  private var defaultMeta: String {
-    let when = FileFormat.when(entry.mtime)
-    if entry.isBroken { return "broken link" }
-    return entry.isDirectory ? when : "\(when) · \(FileFormat.size(entry.size))"
   }
 
   static func tone(_ change: GitStatus.Change) -> Color {
@@ -230,38 +219,48 @@ struct FileRow: View {
   }
 }
 
-/// The 38 pt lead: an image's thumbnail, else its kind's glyph.
+/// The lead: an image's thumbnail, else its kind's glyph (folders filled in
+/// `folder`), in a symbol's column so names line up with or without one.
 struct FileThumb: View {
   let entry: RemoteEntry
   let browser: FilesBrowser
   @State private var image: UIImage?
 
+  /// A thumbnail overhangs the symbol column evenly on both sides.
+  private static let thumb: CGFloat = 28
+
   var body: some View {
     ZStack {
       if let image = image ?? browser.thumbnails.cached(entry, fs: browser.fs) {
         Image(uiImage: image).resizable().scaledToFill()
-          .frame(width: 38, height: 38)
-          .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          .frame(width: Self.thumb, height: Self.thumb)
+          .clipShape(RoundedRectangle(cornerRadius: Chrome.Radius.thumb, style: .continuous))
+          .opacity(entry.isHidden ? 0.5 : 1)
       } else {
         Image(systemName: FileKind.of(entry).symbol)
-          .font(.system(size: entry.isDirectory ? 24 : 20, weight: .regular))
-          .foregroundStyle(entry.isDirectory ? Chrome.fg2 : Chrome.muted)
-          .symbolRenderingMode(.hierarchical)
-      }
-      if entry.isSymlink {
-        Image(systemName: entry.isBroken ? "exclamationmark" : "arrow.turn.up.right")
-          .font(.system(size: 8, weight: .bold))
-          .foregroundStyle(entry.isBroken ? Chrome.bad : Chrome.fg2)
-          .padding(3)
-          .background(Chrome.raised, in: Circle())
-          .offset(x: 13, y: 13)
+          .font(Chrome.symbol(.control))
+          .foregroundStyle(entry.isDirectory ? Chrome.folder : entry.isHidden ? Chrome.faint : Chrome.fg2)
+          .opacity(entry.isDirectory && entry.isHidden ? 0.5 : 1)
       }
     }
-    .frame(width: 38, height: 38)
+    .frame(width: Row.symbolInset - Chrome.Space.l - Chrome.Space.m, height: Self.thumb)
     .task(id: entry) {
       guard image == nil, Thumbnails.wants(entry) else { return }
       image = await browser.thumbnails.image(entry, fs: browser.fs)
     }
+  }
+}
+
+extension View {
+  /// A folder's rows (or search hits) as one inset group of `fill` on the page's ground.
+  func filesList() -> some View {
+    listStyle(.insetGrouped)
+      .scrollContentBackground(.hidden)
+      .contentMargins(.horizontal, Chrome.Space.m, for: .scrollContent)
+      .contentMargins(.top, Chrome.Space.xs, for: .scrollContent)
+      .listSectionSpacing(Chrome.Space.m)
+      .environment(\.defaultMinListRowHeight, 1)
+      .environment(\.defaultMinListHeaderHeight, 0)
   }
 }
 
@@ -276,7 +275,7 @@ private struct RenameField: View {
 
   var body: some View {
     TextField("Name", text: $name, selection: $selection)
-      .font(Chrome.font(.body, .medium))
+      .font(Chrome.font(.body))
       .foregroundStyle(Chrome.fg)
       .autocorrectionDisabled()
       .textInputAutocapitalization(.never)

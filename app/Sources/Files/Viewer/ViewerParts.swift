@@ -12,7 +12,7 @@ struct DiffSheet: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      HStack(spacing: 8) {
+      HStack(spacing: Chrome.Space.s) {
         if let actions {
           Button("Reload") {
             dismiss()
@@ -20,7 +20,7 @@ struct DiffSheet: View {
           }
           .buttonStyle(CapsuleButtonStyle(kind: .plain))
         }
-        Text(title).font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
+        Text(title).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
           .frame(maxWidth: .infinity)
         if let actions {
           Button("Overwrite") {
@@ -30,7 +30,7 @@ struct DiffSheet: View {
           .buttonStyle(CapsuleButtonStyle(kind: .prominent))
         }
       }
-      .padding(.horizontal, 12)
+      .padding(.horizontal, Chrome.Space.m)
       .frame(height: 52)
       .overlay(alignment: .bottom) { Chrome.line.frame(height: 1) }
       if rows.isEmpty {
@@ -51,7 +51,7 @@ struct DiffSheet: View {
     .background(Chrome.raised)
     .presentationBackground(Chrome.raised)
     .presentationDragIndicator(.visible)
-    .environment(\.colorScheme, .dark)
+    .environment(\.colorScheme, Chrome.colorScheme)
   }
 }
 
@@ -127,33 +127,19 @@ struct ViewerInfo: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Text(entry.name).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg).lineLimit(2).truncationMode(.middle)
-        .padding(.horizontal, 16)
-        .padding(.top, 22)
-        .padding(.bottom, 14)
-      row("Kind", kind)
-      row("Size", FileFormat.size(entry.size))
-      row("Modified", entry.mtime.formatted(date: .abbreviated, time: .shortened))
-      row("Permissions", FileFormat.permissions(entry.mode))
-      if let document { row("Format", format(document)) }
-      Button(action: copyPath) {
-        HStack(alignment: .firstTextBaseline) {
-          Text("Path").font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-          Spacer(minLength: 16)
-          Text(entry.path).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).multilineTextAlignment(.trailing)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
+        .infoHead()
+      InsetGroup {
+        InfoRow("Kind", kind, mono: false)
+        InfoRow("Size", FileFormat.size(entry.size))
+        InfoRow("Modified", entry.mtime.formatted(date: .abbreviated, time: .shortened))
+        InfoRow("Permissions", FileFormat.permissions(entry.mode))
+        if let document { InfoRow("Format", format(document)) }
+        Button(action: copyPath) { InfoRow("Path", entry.path) }
+          .buttonStyle(RowStyle())
       }
-      .buttonStyle(RowPressStyle())
       Spacer(minLength: 0)
     }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(Chrome.raised)
-    .presentationDetents([.medium])
-    .presentationBackground(Chrome.raised)
-    .presentationDragIndicator(.visible)
-    .environment(\.colorScheme, .dark)
+    .infoSheet()
   }
 
   private var kind: String {
@@ -168,17 +154,6 @@ struct ViewerInfo: View {
     case .spaces(let n): "\(n) spaces"
     }
     return ["UTF-8", document.lineBreak == .crlf ? "CRLF" : "LF", indent].joined(separator: " · ")
-  }
-
-  private func row(_ label: String, _ value: String) -> some View {
-    HStack {
-      Text(label).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-      Spacer()
-      Text(value).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.fg2).lineLimit(1)
-    }
-    .padding(.horizontal, 16)
-    .padding(.vertical, 12)
-    .overlay(alignment: .bottom) { Chrome.line.frame(height: 1) }
   }
 }
 
@@ -196,31 +171,31 @@ struct BinaryBody: View {
       let width = geometry.size.width - 32 >= 78 * 6.7 ? 16 : 8
       let rows = HexDump.rows(head, width: width)
       ScrollView {
-        VStack(spacing: 6) {
-          Image(systemName: "doc").font(.system(size: 44, weight: .ultraLight)).foregroundStyle(Chrome.muted)
-            .padding(.bottom, 8)
+        VStack(spacing: Chrome.Space.xs) {
+          Image(systemName: "doc").font(Chrome.symbol(.hero)).foregroundStyle(Chrome.muted)
+            .padding(.bottom, Chrome.Space.s)
           Text(entry.name).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg)
             .multilineTextAlignment(.center).lineLimit(3)
           Text([kind, FileFormat.size(entry.size)].joined(separator: " · ")).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
-          HStack(spacing: 10) {
+          HStack(spacing: Chrome.Space.s) {
             Button("Share", action: share).buttonStyle(CapsuleButtonStyle(kind: .prominent))
             Button("Save to Files", action: export).buttonStyle(CapsuleButtonStyle())
           }
-          .padding(.top, 14)
+          .padding(.top, Chrome.Space.l)
         }
-        .padding(.horizontal, 32)
-        .padding(.top, 40)
-        .padding(.bottom, 28)
+        .padding(.horizontal, Chrome.Space.xl)
+        .padding(.top, Chrome.Space.xl + Chrome.Space.l)
+        .padding(.bottom, Chrome.Space.xl)
         LazyVStack(alignment: .leading, spacing: 2) {
           ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
             Text(row).font(Chrome.mono(.caption)).foregroundStyle(Chrome.fg2).lineLimit(1).fixedSize()
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.horizontal, Chrome.Space.l)
+        .padding(.vertical, Chrome.Space.m)
         .overlay(alignment: .top) { Chrome.line.frame(height: 1) }
-        .padding(.bottom, 24)
+        .padding(.bottom, Chrome.Space.xl)
       }
     }
   }
@@ -236,17 +211,16 @@ struct BinaryBody: View {
 struct LoadingBody: View {
   let progress: Double?
   let size: UInt64
-  var onDark = false
   @State private var due = false
 
   var body: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: Chrome.Space.s) {
       if due {
         if let progress {
           GeometryReader { geometry in
             ZStack(alignment: .leading) {
-              Capsule().fill(onDark ? Color.white.opacity(0.18) : Chrome.line2)
-              Capsule().fill(Chrome.accent).frame(width: geometry.size.width * progress)
+              Capsule().fill(Chrome.line2)
+              Capsule().fill(Chrome.fg).frame(width: geometry.size.width * progress)
             }
           }
           .frame(height: 4)
@@ -262,7 +236,7 @@ struct LoadingBody: View {
       }
     }
     .frame(maxWidth: 300)
-    .padding(.horizontal, 32)
+    .padding(.horizontal, Chrome.Space.xl)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .animation(Chrome.fade, value: progress)
     .task {
@@ -279,13 +253,13 @@ struct FailedBody: View {
   let retry: () -> Void
 
   var body: some View {
-    VStack(spacing: 10) {
+    VStack(spacing: Chrome.Space.s) {
       Text("Couldn't open \(name)").font(Chrome.font(.body, .semibold)).foregroundStyle(Chrome.fg)
         .multilineTextAlignment(.center)
       Text(message).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted).multilineTextAlignment(.center)
-      Button("Retry", action: retry).buttonStyle(CapsuleButtonStyle()).padding(.top, 6)
+      Button("Retry", action: retry).buttonStyle(CapsuleButtonStyle()).padding(.top, Chrome.Space.s)
     }
-    .padding(.horizontal, 32)
+    .padding(.horizontal, Chrome.Space.xl)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     .padding(.top, 72)
   }

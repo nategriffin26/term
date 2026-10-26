@@ -84,7 +84,7 @@ final class EditorKeysBar: UIInputView {
       config.attributedTitle = AttributedString(text, attributes: AttributeContainer([.font: Chrome.uiMono(.title)]))
     }
     if let symbol {
-      config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium))
+      config.image = UIImage(systemName: symbol, withConfiguration: Chrome.uiSymbol(.control))
     }
     let button = UIButton(configuration: config, primaryAction: UIAction { _ in
       UIDevice.current.playInputClick()

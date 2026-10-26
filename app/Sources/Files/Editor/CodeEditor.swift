@@ -89,7 +89,8 @@ final class CodeEditorController: UIViewController, @preconcurrency TextViewDele
     textView.smartDashesType = .no
     textView.smartInsertDeleteType = .no
     textView.spellCheckingType = .no
-    textView.keyboardAppearance = .dark
+    // The editor is drawn in the terminal theme, so the keyboard follows it.
+    textView.keyboardAppearance = AppSettings.shared.theme.isDark ? .dark : .light
     textView.characterPairs = [Pair("{", "}"), Pair("[", "]"), Pair("(", ")")]
     textView.characterPairTrailingComponentDeletionMode = .immediatelyFollowingLeadingComponent
     textView.isFindInteractionEnabled = true

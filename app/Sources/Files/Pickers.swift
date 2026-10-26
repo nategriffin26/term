@@ -11,7 +11,7 @@ struct DocumentImporter: UIViewControllerRepresentable {
     let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
     picker.allowsMultipleSelection = true
     picker.delegate = context.coordinator
-    picker.overrideUserInterfaceStyle = .dark
+    picker.overrideUserInterfaceStyle = Chrome.isDark ? .dark : .light
     return picker
   }
 
@@ -39,7 +39,7 @@ struct DocumentExporter: UIViewControllerRepresentable {
 
   func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
     let picker = UIDocumentPickerViewController(forExporting: urls, asCopy: true)
-    picker.overrideUserInterfaceStyle = .dark
+    picker.overrideUserInterfaceStyle = Chrome.isDark ? .dark : .light
     return picker
   }
 
@@ -66,7 +66,7 @@ struct PhotoPicker: UIViewControllerRepresentable {
     config.preferredAssetRepresentationMode = .current
     let picker = PHPickerViewController(configuration: config)
     picker.delegate = context.coordinator
-    picker.overrideUserInterfaceStyle = .dark
+    picker.overrideUserInterfaceStyle = Chrome.isDark ? .dark : .light
     return picker
   }
 

@@ -83,9 +83,10 @@ final class WebHandle {
 }
 
 /// A page in a web view with JavaScript off: rendered Markdown, an HTML file,
-/// an SVG, from the text in the viewer (edits show). Relative URLs reach the
-/// host through termfs://. A tapped web link opens in Safari; a link to
-/// another file on the host calls `onOpen`.
+/// an SVG, from the text in the viewer (edits show), in the app theme's
+/// colours (a theme change redraws it). Relative URLs reach the host through
+/// termfs://. A tapped web link opens in Safari; a link to another file on
+/// the host calls `onOpen`.
 struct WebPage: UIViewRepresentable {
   enum Source: Equatable {
     /// Relative links resolve from `base`, the file's folder.
@@ -95,6 +96,7 @@ struct WebPage: UIViewRepresentable {
   }
 
   let source: Source
+  let theme: AppTheme
   let fs: RemoteFS
   let handle: WebHandle
   var onOpen: (String) -> Void = { _ in }
@@ -119,28 +121,29 @@ struct WebPage: UIViewRepresentable {
 
   func updateUIView(_ view: WKWebView, context: Context) {
     context.coordinator.onOpen = onOpen
-    guard context.coordinator.loaded != source else { return }
+    guard context.coordinator.loaded != source || context.coordinator.theme != theme else { return }
     context.coordinator.loaded = source
+    context.coordinator.theme = theme
     switch source {
     case .markdown(let text, let base):
       context.coordinator.page = base
-      view.loadHTMLString(MarkdownPage.html(text), baseURL: base)
+      view.loadHTMLString(MarkdownPage.html(text, theme: theme), baseURL: base)
     case .html(let html, let base):
       context.coordinator.page = base
       view.loadHTMLString(html, baseURL: base)
     case .svg(let svg):
       context.coordinator.page = nil
-      view.loadHTMLString(Self.svgDocument(svg), baseURL: nil)
+      view.loadHTMLString(Self.svgDocument(svg, theme: theme), baseURL: nil)
     }
   }
 
   /// An SVG as an image (scripts in it never run) on a light checkerboard, so
-  /// black strokes and transparency both show.
-  static func svgDocument(_ svg: String) -> String {
+  /// black strokes and transparency both show, on the page's ground.
+  static func svgDocument(_ svg: String, theme: AppTheme) -> String {
     let data = Data(svg.utf8).base64EncodedString()
     return """
       <!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
-      <style>html, body { margin: 0; height: 100%; background: #121722; }
+      <style>html, body { margin: 0; height: 100%; background: \(MarkdownPage.css(theme.raised)); }
       body { display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; }
       img { width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px;
         background: repeating-conic-gradient(#e9ecf2 0 25%, #fff 0 50%) 50% / 16px 16px; }</style>
@@ -151,6 +154,7 @@ struct WebPage: UIViewRepresentable {
   @MainActor
   final class Coordinator: NSObject, WKNavigationDelegate {
     var loaded: Source?
+    var theme: AppTheme?
     var page: URL?
     var onOpen: (String) -> Void = { _ in }
 

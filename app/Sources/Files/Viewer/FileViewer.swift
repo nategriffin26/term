@@ -40,7 +40,7 @@ struct FileViewer: View {
 
   var body: some View {
     ZStack {
-      (onBlack ? Color.black : Chrome.raised).ignoresSafeArea()
+      (onImage ? Chrome.bg : Chrome.raised).ignoresSafeArea()
       content
     }
     .safeAreaInset(edge: .top, spacing: 0) {
@@ -54,7 +54,7 @@ struct FileViewer: View {
     .toolbar(.hidden, for: .navigationBar)
     // Unsaved edits: the back swipe is off so only Back (which asks) leaves.
     .navigationBarBackButtonHidden(dirty)
-    .environment(\.colorScheme, .dark)
+    .environment(\.colorScheme, Chrome.colorScheme)
     .task { await model.loadOnce() }
     .navigationDestination(item: $linked) { entry in
       FileViewer(entry: entry, fs: model.fs, context: context)
@@ -89,7 +89,7 @@ struct FileViewer: View {
   private var content: some View {
     switch model.phase {
     case .loading:
-      LoadingBody(progress: model.progress, size: model.entry.size, onDark: onBlack)
+      LoadingBody(progress: model.progress, size: model.entry.size)
     case .failed(let message):
       FailedBody(name: model.entry.name, message: message) { Task { await model.load() } }
     case .ready(.text(let document)):
@@ -113,7 +113,7 @@ struct FileViewer: View {
       if rendered {
         // The editor's text once edited, else the file's.
         let text = document.isDirty ? (editor.text ?? document.baseline) : document.baseline
-        WebPage(source: page(text, document), fs: model.fs, handle: web, onOpen: openLinked)
+        WebPage(source: page(text, document), theme: AppSettings.shared.appTheme, fs: model.fs, handle: web, onOpen: openLinked)
       }
     }
   }
@@ -134,6 +134,8 @@ struct FileViewer: View {
         .ignoresSafeArea()
     case .video, .audio:
       MediaPlayer(url: url)
+    case .pdf:
+      PDFPreview(url: url)
     default:
       QuickLookPreview(url: url)
     }
@@ -144,17 +146,17 @@ struct FileViewer: View {
   private var header: some View {
     VStack(spacing: 0) {
       HStack(spacing: 0) {
-        Button(action: back) { glyph("chevron.left") }
+        Button(action: back) { FilesGlyph(symbol: "chevron.left") }
           .buttonStyle(IconButtonStyle())
           .accessibilityLabel("Back")
-        HStack(spacing: 6) {
-          Text(model.entry.name).font(Chrome.font(.body, .medium)).foregroundStyle(Chrome.fg)
+        HStack(spacing: Chrome.Space.s) {
+          Text(model.entry.name).font(Chrome.font(.title, .semibold)).foregroundStyle(Chrome.fg)
             .lineLimit(1).truncationMode(.middle)
           if dirty {
-            Circle().fill(Chrome.accent).frame(width: 7, height: 7).accessibilityLabel("Unsaved")
+            Circle().fill(Chrome.fg2).frame(width: Chrome.Space.s, height: Chrome.Space.s).accessibilityLabel("Unsaved")
           }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, Chrome.Space.xs)
         .frame(maxWidth: .infinity)
         if editing {
           if dirty || saving {
@@ -174,31 +176,28 @@ struct FileViewer: View {
               sourceShown = true
             }
           } label: {
-            glyph(source ? "eye" : "chevron.left.forwardslash.chevron.right")
+            FilesGlyph(symbol: source ? "eye" : "chevron.left.forwardslash.chevron.right")
           }
           .buttonStyle(IconButtonStyle())
           .accessibilityLabel(source ? "Rendered" : "Source")
         }
-        Menu { menu } label: { glyph("ellipsis") }
+        Menu { menu } label: { FilesGlyph(symbol: "ellipsis") }
           .accessibilityLabel("More")
       }
       .foregroundStyle(Chrome.fg)
-      .padding(.horizontal, 3)
-      .frame(height: 46)
-      .glassEffect(.regular.tint(Chrome.bg.opacity(0.35)).interactive(), in: .capsule)
-      .padding(.horizontal, 10)
-      .padding(.top, 8)
-      .padding(.bottom, 6)
+      .padding(.horizontal, Chrome.Space.xs)
+      .modifier(ViewerBar(overImage: model.kind == .image))
       .animation(Chrome.fade, value: editing)
       .animation(Chrome.fade, value: dirty)
       if let reason = model.document?.readOnlyReason {
-        Text(reason).font(Chrome.mono(.caption)).foregroundStyle(Chrome.muted)
+        Text(reason).font(Chrome.font(.secondary)).foregroundStyle(Chrome.muted)
           .frame(maxWidth: .infinity)
-          .padding(.bottom, 6)
+          .padding(.bottom, Chrome.Space.s)
+          .background(Chrome.raised)
       }
       if case .ready = model.phase, let progress = model.progress {
         GeometryReader { geometry in
-          Chrome.accent.frame(width: geometry.size.width * progress)
+          Chrome.fg.frame(width: geometry.size.width * progress)
         }
         .frame(height: 2)
       }
@@ -246,25 +245,11 @@ struct FileViewer: View {
     }
   }
 
-  private func glyph(_ name: String) -> some View {
-    Image(systemName: name)
-      .font(.system(size: 17, weight: .medium))
-      .frame(width: 40, height: 40)
-      .contentShape(Rectangle())
-  }
-
   @ViewBuilder
   private var toastView: some View {
     if let toast {
-      Text(toast.text).font(Chrome.font(.secondary, .medium)).foregroundStyle(toast.isError ? Chrome.bad : Chrome.fg)
-        .lineLimit(2).multilineTextAlignment(.leading)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .background(Chrome.bg, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Chrome.line2))
-        .shadow(color: .black.opacity(0.3), radius: 25, y: 18)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 16)
+      ToastCard(text: toast.text, isError: toast.isError)
+        .padding(.bottom, Chrome.Space.l)
         .transition(.move(edge: .bottom).combined(with: .opacity))
         .id(toast.id)
         .task(id: toast.id) {
@@ -277,7 +262,7 @@ struct FileViewer: View {
   // MARK: - State
 
   private var dirty: Bool { model.document?.isDirty == true }
-  private var onBlack: Bool { model.kind == .image || model.kind == .video }
+  private var onImage: Bool { model.kind == .image || model.kind == .video }
   private var hasRendered: Bool { model.kind == .markdown || model.kind == .html || model.kind == .svg }
   private var showsEditor: Bool { model.document != nil && (!hasRendered || source) }
 
@@ -413,4 +398,22 @@ private struct ViewerToast: Equatable {
   let id = UUID()
   var text: String
   var isError: Bool
+}
+
+/// The viewer's bar: the browser's capsule on the page's ground; over a
+/// picture, which runs edge to edge beneath it, a glass capsule.
+private struct ViewerBar: ViewModifier {
+  let overImage: Bool
+
+  func body(content: Content) -> some View {
+    if overImage {
+      content
+        .frame(height: Chrome.Size.target + Chrome.Space.xs)
+        .glassEffect(Chrome.glass, in: .capsule)
+        .padding(.horizontal, Chrome.Space.m)
+        .padding(.vertical, Chrome.Space.s)
+    } else {
+      content.filesBarCapsule()
+    }
+  }
 }

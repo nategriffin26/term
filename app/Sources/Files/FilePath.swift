@@ -124,6 +124,7 @@ enum FileKind: String, CaseIterable {
     return map
   }()
 
+  /// Outline page glyphs, so the column reads as one shape; folders filled (in `Chrome.folder`).
   var symbol: String {
     switch self {
     case .folder: "folder.fill"
@@ -131,13 +132,8 @@ enum FileKind: String, CaseIterable {
     case .video: "film"
     case .audio: "waveform"
     case .pdf: "doc.richtext"
-    case .markdown: "doc.plaintext"
-    case .code: "chevron.left.forwardslash.chevron.right"
-    case .json: "curlybraces"
-    case .text: "doc.text"
-    case .html: "globe"
-    case .archive: "archivebox"
-    case .other: "doc"
+    case .archive: "doc.zipper"
+    case .markdown, .code, .json, .text, .html, .other: "doc"
     }
   }
 
@@ -148,11 +144,10 @@ enum FileKind: String, CaseIterable {
   }
 }
 
-/// How rows write dates and sizes: "9:41 AM", "Yesterday", "Tue", "Oct 4", "2025"; "785 KB", "11.7 MB".
+/// How rows write sizes and ages: "880 B", "785 KB", "11.7 MB"; "now", "4m", "2h", "3d", "2w", "5mo", "2y".
 enum FileFormat {
   static func size(_ bytes: UInt64) -> String {
-    if bytes == 1 { return "1 byte" }
-    if bytes < 1000 { return "\(bytes) bytes" }
+    if bytes < 1000 { return "\(bytes) B" }
     let units = ["KB", "MB", "GB", "TB", "PB"]
     var value = Double(bytes) / 1000
     var i = 0
@@ -164,16 +159,23 @@ enum FileFormat {
     return "\(number) \(units[i])"
   }
 
-  static func when(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-    let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
-    let style = Date.FormatStyle(calendar: calendar, timeZone: calendar.timeZone)
-    if days <= 0 { return date.formatted(style.hour().minute()) }
-    if days == 1 { return "Yesterday" }
-    if days < 7 { return date.formatted(style.weekday(.abbreviated)) }
-    if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
-      return date.formatted(style.month(.abbreviated).day())
+  /// Time since `date`, compactly, as the tmux tab writes a session's (a
+  /// date in the future, from a host's clock running ahead, is "now").
+  static func age(_ date: Date, now: Date = Date()) -> String {
+    let seconds = Int(now.timeIntervalSince(date))
+    let days = seconds / 86400
+    switch seconds {
+    case ..<60: return "now"
+    case ..<3600: return "\(seconds / 60)m"
+    case ..<86400: return "\(seconds / 3600)h"
+    default:
+      switch days {
+      case ..<7: return "\(days)d"
+      case ..<30: return "\(days / 7)w"
+      case ..<365: return "\(days / 30)mo"
+      default: return "\(days / 365)y"
+      }
     }
-    return String(calendar.component(.year, from: date))
   }
 
   /// "drwxr-xr-x".

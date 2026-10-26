@@ -99,18 +99,18 @@ struct TransfersStrip: View {
           if item.id != transfers.items.last?.id { Chrome.line.frame(height: 1) }
         }
       }
-      .background(Chrome.bg.opacity(0.92))
-      .overlay(alignment: .top) { Chrome.line2.frame(height: 1) }
+      .background(Chrome.raised)
+      .overlay(alignment: .top) { Chrome.line.frame(height: 1) }
       .transition(.move(edge: .bottom).combined(with: .opacity))
     }
   }
 
   private func row(_ item: Transfers.Item) -> some View {
-    HStack(spacing: 10) {
+    HStack(spacing: Chrome.Space.m) {
       Image(systemName: item.upload ? "arrow.up" : "arrow.down")
-        .font(.system(size: 12, weight: .semibold))
+        .font(Chrome.symbol(.inline))
         .foregroundStyle(item.failure == nil ? Chrome.fg2 : Chrome.bad)
-        .frame(width: 16)
+        .frame(width: Chrome.Space.l)
       VStack(alignment: .leading, spacing: 5) {
         HStack {
           Text(item.name).font(Chrome.font(.secondary, .medium)).foregroundStyle(Chrome.fg).lineLimit(1).truncationMode(.middle)
@@ -135,14 +135,14 @@ struct TransfersStrip: View {
       Button {
         if item.failure != nil { transfers.dismiss(item.id) } else { transfers.cancel(item.id) }
       } label: {
-        Image(systemName: "xmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(Chrome.muted)
-          .frame(width: 30, height: 30).contentShape(Rectangle())
+        Image(systemName: "xmark").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.muted)
+          .frame(width: Chrome.Size.target, height: Chrome.Size.target).contentShape(Rectangle())
       }
       .buttonStyle(.plain)
       .accessibilityLabel(item.failure == nil ? "Cancel \(item.name)" : "Dismiss")
     }
-    .padding(.leading, 16)
-    .padding(.trailing, 8)
-    .frame(height: 48)
+    .padding(.leading, Chrome.Space.l)
+    .padding(.trailing, Chrome.Space.xs)
+    .frame(height: Chrome.Size.row)
   }
 }

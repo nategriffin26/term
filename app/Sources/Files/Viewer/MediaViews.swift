@@ -1,11 +1,12 @@
 import AVKit
 import ImageIO
+import PDFKit
 import QuickLook
 import SwiftUI
 import UIKit
 
-/// A picture on black: pinch and double-tap to zoom, drag to pan, one tap
-/// shows or hides the chrome.
+/// A picture on the theme's ground: pinch and double-tap to zoom, drag to
+/// pan, one tap shows or hides the chrome.
 struct ZoomableImage: UIViewRepresentable {
   let url: URL
   var onTap: () -> Void
@@ -31,7 +32,7 @@ final class ZoomingImageView: UIScrollView, UIScrollViewDelegate {
 
   override init(frame: CGRect) {
     super.init(frame: frame)
-    backgroundColor = .black
+    backgroundColor = Chrome.UI.bg
     delegate = self
     showsVerticalScrollIndicator = false
     showsHorizontalScrollIndicator = false
@@ -126,7 +127,7 @@ struct MediaPlayer: UIViewControllerRepresentable {
     try? AVAudioSession.sharedInstance().setCategory(.playback)
     let controller = AVPlayerViewController()
     controller.player = AVPlayer(url: url)
-    controller.view.backgroundColor = .black
+    controller.view.backgroundColor = Chrome.UI.bg
     return controller
   }
 
@@ -137,7 +138,23 @@ struct MediaPlayer: UIViewControllerRepresentable {
   }
 }
 
-/// PDF, Office, iWork, USDZ: whatever Quick Look draws.
+/// A PDF on the page's ground, pages one under another, fitted to the width.
+struct PDFPreview: UIViewRepresentable {
+  let url: URL
+
+  func makeUIView(context: Context) -> PDFView {
+    let view = PDFView()
+    view.backgroundColor = Chrome.UI.raised
+    view.displayMode = .singlePageContinuous
+    view.autoScales = true
+    view.document = PDFDocument(url: url)
+    return view
+  }
+
+  func updateUIView(_ view: PDFView, context: Context) {}
+}
+
+/// Office, iWork, USDZ: whatever Quick Look draws.
 struct QuickLookPreview: UIViewControllerRepresentable {
   let url: URL
 
