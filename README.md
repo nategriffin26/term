@@ -58,6 +58,8 @@ ln -s "$PWD/integrations/omp/term-agent.ts" ~/.omp/agent/extensions/term-agent.t
 
 New omp sessions load it. Without it, Term still reads omp's terminal title for working, asks you or idle.
 
+Cancelled or unfinished runs report **aborted**, not done. Stops and acknowledgements use fractional Unix seconds (older integer values still work); Term acknowledges the stop it displayed, so a later stop cannot be cleared by a delayed request. Exiting omp drains its pending update before removing `@agent`.
+
 ### Connecting
 
 <p align="center">
@@ -133,6 +135,7 @@ cd app && xcodebuild test -project Term.xcodeproj -scheme Term \
   -destination 'platform=iOS Simulator,name=<simulator name>'
 python3 formal/mosh-resume.py              # TLA+ models, about 20 s
 python3 formal/mosh-fragment.py fallback   # property tests, about 2 s (25 s on a cold build)
+bun test integrations/omp/term-agent.test.ts # extension lifecycle; needs tmux and python3
 ```
 
 `mosh-resume.py` runs two TLA+ models with TLC. The first checks that suspend, save, kill and restore, run twice with lost, duplicated and reordered packets within small bounds, never reuses an encryption nonce or loses the state needed to apply the server's next update. The second checks that a reconnect racing a suspend never leaves a checkpoint pointing at a server it ended. Before TLC runs, the script executes a probe against the real mosh crate and checks fingerprints of the Rust functions the models describe, so a model can't quietly drift from the code. It needs Java 21 and downloads a checksum-pinned TLC.

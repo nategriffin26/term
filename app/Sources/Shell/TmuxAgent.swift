@@ -108,10 +108,14 @@ extension Tmux {
     [path, agentsScript, "exit 0"].joined(separator: "; ")
   }
 
-  /// Marks sessions (ids) seen now, by the host's clock (the one their stops
-  /// are stamped with).
-  static func seenCommand(ids: [String]) -> String {
-    ([path, "n=$(date +%s)"] + ids.map { "tmux set-option -t \(Command.shellQuote($0)) @seen \"$n\"" }).joined(separator: "; ")
+  /// Acknowledge the stops actually displayed, not a later clock reading.
+  /// tmux takes the maximum atomically so delayed requests cannot undo a newer acknowledgement.
+  static func seenCommand(stops: [String: Date]) -> String {
+    ([path] + stops.sorted { $0.key < $1.key }.map { id, stop in
+      let at = String(stop.timeIntervalSince1970)
+      let value = "#{?#{e|>|f|0:#{?@seen,#{@seen},0},\(at)},#{@seen},\(at)}"
+      return "tmux set-option -F -t \(Command.shellQuote(id)) @seen \(Command.shellQuote(value))"
+    }).joined(separator: "; ")
   }
 
   /// Each session's agent (by session id) from an agent section: the one
@@ -174,14 +178,16 @@ extension Tmux {
     agent.subagents = p["subs"] as? Int ?? 0
     agent.path = p["cwd"] as? String
     agent.branch = p["branch"] as? String
-    agent.stoppedAt = (p["stop"] as? [String: Any]).flatMap { date("at", $0) }
+    var stoppedAt = (p["stop"] as? [String: Any])?["at"] as? TimeInterval
     // Mid-turn, silent past its heartbeat, and its pane is back at a shell: omp died there.
     if [.working, .ask, .approval].contains(state), let written = date("t", p),
        now.timeIntervalSince(written) > agentStaleAfter, isShell(command) {
       agent.state = .exited
-      agent.stoppedAt = written
+      stoppedAt = p["t"] as? TimeInterval
     }
-    agent.unread = agent.state.isStop && (agent.stoppedAt?.timeIntervalSince1970 ?? 0) > seen
+    agent.stoppedAt = stoppedAt.map { Date(timeIntervalSince1970: $0) }
+    // Compare wire values directly: Date's reference-epoch conversion can round a fraction.
+    agent.unread = agent.state.isStop && (stoppedAt ?? 0) > seen
     return agent
   }
 

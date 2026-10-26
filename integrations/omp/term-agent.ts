@@ -3,7 +3,7 @@
 // `tmux list-panes -a -f '#{@agent}'`. When you prompt or answer omp, it sets the session option `@seen`, so a stop
 // you have already seen is not announced again on any device. Outside tmux it does nothing.
 //
-// The payload, version 1 (fields are omitted when unknown; times are unix seconds):
+// The payload, version 1 (fields are omitted when unknown; times are fractional unix seconds):
 //   v 1 · state working|ask|approval|done|error|aborted|idle · since (the state began) · t (written; a heartbeat
 //   rewrites it every 30 s) · pid · title · doing (current step) · todo [done, total, current] · q and opts (the
 //   question and its choices, or the tool waiting for approval) · last (the final answer, cut) · took (seconds the
@@ -30,7 +30,9 @@ function findTmux() {
   return ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"].find((p) => existsSync(p));
 }
 
-const now = () => Math.floor(Date.now() / 1000);
+// Keep events ordered even when a prompt, answer and stop share a clock tick.
+let lastTime = 0;
+const now = () => (lastTime = Math.max(Date.now(), lastTime + 1)) / 1000;
 
 /** One line, collapsed whitespace, at most `max` characters. */
 function cut(text, max) {
@@ -67,16 +69,16 @@ function textOf(message) {
   return message.content.filter((b) => b?.type === "text").map((b) => b.text).join("\n");
 }
 
-/** What a turn's end means for him, from its last assistant message. */
+/** Only an explicit terminal response is success; a tool-only or pre-model end is interrupted. */
 function stopKind(message) {
   switch (message?.stopReason) {
+    case "stop":
+      return "done";
     case "error":
     case "length":
       return "error";
-    case "aborted":
-      return "aborted";
     default:
-      return "done";
+      return "aborted";
   }
 }
 
@@ -100,7 +102,8 @@ const s = {
   written: "",
   lastWrite: 0,
   timer: undefined,
-  writing: false,
+  writing: undefined,
+  closing: false,
   again: false,
   heartbeat: undefined,
   settle: undefined,
@@ -162,7 +165,7 @@ function payload() {
 }
 
 async function write(force) {
-  if (!tmux || !s.ctx) return;
+  if (!tmux || !s.ctx || s.closing) return;
   if (s.writing) {
     s.again = true;
     return;
@@ -173,13 +176,13 @@ async function write(force) {
   } catch {
     return;
   }
-  // `t` changes every second; compare without it so only real changes (or the heartbeat) write.
-  const key = json.replace(/"t":\d+,/, "");
+  // Ignore the heartbeat timestamp when comparing real changes.
+  const key = json.replace(/"t":[\d.]+,/, "");
   if (!force && key === s.written) return;
-  s.writing = true;
   s.lastWrite = Date.now();
-  if (await run(["set-option", "-p", "-t", pane, "@agent", json])) s.written = key;
-  s.writing = false;
+  s.writing = run(["set-option", "-p", "-t", pane, "@agent", json]);
+  if (await s.writing) s.written = key;
+  s.writing = undefined;
   if (s.again) {
     s.again = false;
     void write(false);
@@ -188,7 +191,7 @@ async function write(force) {
 
 /** A state change writes at once; progress at most every PROGRESS_MS. */
 function changed(progress = false) {
-  if (!tmux || !s.ctx) return;
+  if (!tmux || !s.ctx || s.closing) return;
   const wait = progress ? Math.max(0, s.lastWrite + PROGRESS_MS - Date.now()) : 0;
   if (s.timer) {
     if (progress) return;
@@ -207,7 +210,11 @@ function setState(state) {
 
 /** He prompted or answered: whatever stopped for him is seen, on every device. */
 function seen() {
-  if (tmux) void run(["set-option", "-t", pane, "@seen", String(now())]);
+  if (!tmux || s.closing) return;
+  const at = now();
+  // A delayed acknowledgement must never move the shared watermark backwards.
+  const value = `#{?#{e|>|f|0:#{?@seen,#{@seen},0},${at}},#{@seen},${at}}`;
+  void run(["set-option", "-F", "-t", pane, "@seen", value]);
 }
 
 function refreshBranch() {
@@ -280,7 +287,7 @@ function settle() {
   s.ending = undefined;
   if (s.state === "ask" || s.state === "approval") return true;
   setState(e.kind);
-  s.stop = { at: s.since, why: e.kind };
+  s.stop = { at: now(), why: e.kind };
   s.took = s.workStart ? s.since - s.workStart : undefined;
   s.last = e.last;
   s.q = s.opts = s.doing = undefined;
@@ -302,7 +309,7 @@ function waitForIdle() {
 
 function stopFor(why, q, opts) {
   setState(why);
-  s.stop = { at: s.since, why };
+  s.stop = { at: now(), why };
   s.q = q;
   s.opts = opts;
   changed();
@@ -320,7 +327,7 @@ export default function termAgent(pi) {
   const main = (ctx) => ctx?.agent?.kind !== "sub" && (ctx?.mode === undefined || ctx.mode === "tui");
   const on = (event, handler) =>
     pi.on(event, async (e, ctx) => {
-      if (!main(ctx)) return;
+      if (!main(ctx) || s.closing) return;
       try {
         if (event !== "session_start" && event !== "session_switch" && ctx) s.ctx = ctx;
         handler(e ?? {}, ctx);
@@ -407,11 +414,14 @@ export default function termAgent(pi) {
   pi.on("session_shutdown", async (_e, ctx) => {
     if (!main(ctx)) return;
     try {
+      s.closing = true;
+      s.again = false;
       cancel(s.timer);
       cancel(s.settle);
       cancel(s.heartbeat);
       s.timer = s.settle = s.heartbeat = undefined;
       s.ctx = undefined;
+      await s.writing;
       await run(["set-option", "-p", "-u", "-t", pane, "@agent"], 1_000);
     } catch {}
   });

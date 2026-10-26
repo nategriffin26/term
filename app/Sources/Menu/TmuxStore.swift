@@ -303,7 +303,10 @@ final class TmuxStore {
       cleared[key, default: [:]][id] = agents[key]?[id]?.stoppedAt
       agents[key]?[id]?.unread = false
     }
-    let command = Tmux.seenCommand(ids: ids)
+    let stops = Dictionary(uniqueKeysWithValues: ids.compactMap { id in
+      agents[key]?[id]?.stoppedAt.map { (id, $0) }
+    })
+    let command = Tmux.seenCommand(stops: stops)
     Task { _ = await RemoteExec.run(Tab.spec(for: host), command) }
   }
 

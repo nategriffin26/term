@@ -87,6 +87,20 @@ final class TmuxAgentTests: XCTestCase {
     }
   }
 
+  func testFractionalStopComparisonPreservesEqualityAndSubsecondOrder() {
+    for (seen, unread) in [("1000", true), ("1000.000", true), ("1000.001", false), ("1000.002", false)] {
+      let p = #"{"v":1,"state":"done","stop":{"at":1000.001,"why":"done"}}"#
+      XCTAssertEqual(agents(line(seen: seen, payload: p))["$0"]?.unread, unread, seen)
+    }
+  }
+
+  /// Captured from a real omp prompt immediately cancelled on a private tmux server.
+  func testLiveSameSecondStopIsUnreadUntilAcknowledged() {
+    let p = #"{"v":1,"state":"aborted","since":1792989716.768,"t":1792989716.789,"stop":{"at":1792989716.769,"why":"aborted"}}"#
+    XCTAssertEqual(agents(line(seen: "1792989716.211", payload: p))["$0"]?.unread, true)
+    XCTAssertEqual(agents(line(seen: "1792989716.769", payload: p))["$0"]?.unread, false)
+  }
+
   func testEveryKindOfStopNotifies() {
     for state in ["done", "error", "aborted", "ask", "approval"] {
       XCTAssertEqual(agents(line(payload: payload(state: state, stop: 1_792_987_200)))["$0"]?.unread, true, state)
@@ -256,11 +270,11 @@ final class TmuxAgentTests: XCTestCase {
     XCTAssertLessThan(agents.upperBound, screens.lowerBound)
   }
 
-  /// Seen is stamped by the host's clock, the one stops are stamped with,
-  /// and "$3" is quoted so the shell doesn't expand it.
+  /// A delayed acknowledgement must clear only what he saw, never a later stop.
   func testSeenCommand() {
-    XCTAssertEqual(Tmux.seenCommand(ids: ["$3", "$12"]),
-                   #"\#(Tmux.path); n=$(date +%s); tmux set-option -t '$3' @seen "$n"; tmux set-option -t '$12' @seen "$n""#)
+    XCTAssertEqual(Tmux.seenCommand(stops: ["$3": at(1_792_987_200.125)]),
+                   #"\#(Tmux.path); tmux set-option -F -t '$3' @seen '#{?#{e|>|f|0:#{?@seen,#{@seen},0},1792987200.125},#{@seen},1792987200.125}'"#)
+    XCTAssertEqual(Tmux.seenCommand(stops: [:]), Tmux.path)
   }
 
   // MARK: - Seen here before the host says so
