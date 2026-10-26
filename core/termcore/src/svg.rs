@@ -55,21 +55,34 @@ pub unsafe extern "C" fn term_svg_fonts(paths: *const *const c_char, count: u32)
 }
 
 fn set_fonts(files: &[String]) -> u32 {
+    let db = database(files);
+    let loaded = db.len() as u32;
+    *FONTS.lock().unwrap_or_else(|e| e.into_inner()) = (loaded > 0).then(|| Arc::new(db));
+    loaded
+}
+
+/// The faces in `files`, mapped from disk rather than read: a terminal font
+/// is ~14 MB a face, and reading two would put ~29 MB on the heap for as long
+/// as diagrams can be drawn. Each file is mapped once and shared by every
+/// render.
+fn database(files: &[String]) -> fontdb::Database {
     let mut db = fontdb::Database::new();
     for f in files {
-        if let Ok(data) = std::fs::read(f) {
-            db.load_font_data(data);
-        }
+        let _ = db.load_font_file(f);
     }
-    let loaded = db.len() as u32;
+    let ids: Vec<_> = db.faces().map(|f| f.id).collect();
+    for id in ids {
+        // SAFETY: the files are the app's bundled fonts or the system's,
+        // which nothing rewrites while the app runs.
+        let _ = unsafe { db.make_shared_face_data(id) };
+    }
     let family = db.faces().next().and_then(|f| f.families.first()).map(|(name, _)| name.clone());
     if let Some(family) = family {
         db.set_serif_family(family.clone());
         db.set_sans_serif_family(family.clone());
         db.set_monospace_family(family);
     }
-    *FONTS.lock().unwrap_or_else(|e| e.into_inner()) = (loaded > 0).then(|| Arc::new(db));
-    loaded
+    db
 }
 
 /// term.h `term_svg_render`.
@@ -162,5 +175,16 @@ mod tests {
     fn an_empty_font_database_is_not_a_blank_diagram() {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><text x="2" y="14">hi</text></svg>"#;
         assert_eq!(render(svg, 0, 0xFF000000, None).unwrap_err(), svg_status::NO_FONTS);
+    }
+
+    #[test]
+    fn font_files_are_mapped_not_copied_onto_the_heap() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../app/Resources/Fonts/");
+        let files = ["IosevkaNerdFontMono-Regular.ttf", "IosevkaNerdFontMono-Bold.ttf"].map(|f| format!("{dir}{f}"));
+        let db = database(&files);
+        assert_eq!(db.len(), 2);
+        for face in db.faces() {
+            assert!(matches!(face.source, fontdb::Source::SharedFile(..)), "{} is not a shared mapping", face.post_script_name);
+        }
     }
 }
