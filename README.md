@@ -12,10 +12,10 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 
 - **mosh that survives iOS.** Local echo prediction, roaming between Wi-Fi and cellular, and sessions that come back after iOS kills the app in the background.
 - **SSH** with Ed25519 keys made or imported in the app. Host keys are pinned on first use.
-- **tmux, native.** A session picker, a scrollable history viewer, a Mission Control style overview (three fingers up), and a swipe between sessions that names where you're going.
+- **tmux, native.** A tmux tab lists every session on your hosts with a snapshot of its screen: tap one to open it in a window, swipe or select to close them. Plus a scrollable history viewer, an overview of your open windows (three fingers up), and a swipe between windows that names where you're going.
 - **Reconnect in place.** When a tmux session's mosh-server dies, Term starts a new one and swaps it in under the same screen. Nothing to tap.
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
-- **A floating menu** for Sessions, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
+- **A floating menu** for Sessions, tmux, Files and Settings: double-tap ⌘ on the Smart Keys bar, or tap with three fingers.
 - **Smart Keys** for Esc, Ctrl, Alt, symbols and arrows, with configurable key repeat.
 - **Pinch to resize.** JetBrains Mono and Iosevka Nerd Fonts are built in.
 - **iPhone Duo layouts** for both displays, two windows side by side, and a menu dock in the inner display's status band.
@@ -43,7 +43,7 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 
 `mosh` is a sans-IO client for the mosh 1.4 protocol: time and datagrams go in, datagrams come out. That shape is why the same code can run in unit tests, against a real mosh-server, and under a model checker.
 
-`ssh` is [russh](https://github.com/Eugeny/russh). It starts mosh-server, runs the commands behind the tmux picker and history, and carries SFTP for Files.
+`ssh` is [russh](https://github.com/Eugeny/russh). It starts mosh-server, runs the commands behind the tmux tab and history, and carries SFTP for Files.
 
 tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads history with `tmux capture-pane`, and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
 
@@ -144,8 +144,8 @@ Term is installed and tested end to end on an iPhone 11. A few things are not pr
 ```
 app/                    Swift app (UIKit + Metal), XcodeGen project in project.yml
   Sources/Terminal      renderer, input, gestures, Smart Keys
-  Sources/Shell         tabs, hosts, keys, tmux picker and history, reconnect
-  Sources/Menu          floating menu, Sessions overview, swipe HUD
+  Sources/Shell         tabs, hosts, keys, tmux sessions and history, reconnect
+  Sources/Menu          floating menu, Sessions overview, tmux tab, swipe HUD
   Sources/Files         SFTP browser, viewers, editor
 core/                   Rust workspace
   termcore              C ABI (include/term.h), sessions, tokio runtime, SFTP
