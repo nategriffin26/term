@@ -263,13 +263,14 @@ final class SmartKeysBar: UIInputView, UIInputViewAudioFeedback {
     }
 
     /// One tap toggles the alternate cursor keys; a double tap toggles the
-    /// menu panel (Blink's double-Cmd).
+    /// menu panel (Blink's double-Cmd). The action is sent from the terminal:
+    /// the bar sits in the keyboard's window, whose first responder is nil.
     private func commandTapped() {
         let now = CACurrentMediaTime()
         command.toggle()
         if now - lastCommandTap < 0.35 {
             lastCommandTap = 0
-            UIApplication.shared.sendAction(Selector(("toggleMenu:")), to: nil, from: self, for: nil)
+            UIApplication.shared.sendAction(Selector(("toggleMenu:")), to: nil, from: terminal, for: nil)
         } else {
             lastCommandTap = now
         }

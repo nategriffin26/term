@@ -119,6 +119,29 @@ final class KeyboardSwipeTests: XCTestCase {
     }
   }
 
+  /// The Smart Keys bar lives in the retained accessory host, in the keyboard's
+  /// window, whose first responder is nil: a nil-targeted action sent from the
+  /// bar found no responder, so double ⌘ stopped opening the menu after a
+  /// session switch.
+  func testDoubleCommandOpensTheMenuAfterASessionSwitch() async throws {
+    try await open(tabs: 2)
+    space.select(space.tabs[1])
+    try await settle()
+    let accessory = try XCTUnwrap(space.focusedTab?.view.inputAccessoryView)
+    let command = try XCTUnwrap(Self.commandKey(in: accessory))
+    command.onTap?()
+    command.onTap?()
+    try await settle()
+    let panel = try XCTUnwrap(space.children.compactMap { $0 as? MenuPanel }.first)
+    XCTAssertTrue(panel.isOpen, "double ⌘ after a session switch must open the menu")
+  }
+
+  private static func commandKey(in view: UIView) -> KeyCap? {
+    if let cap = view as? KeyCap, cap.accessibilityLabel == "Command" { return cap }
+    for child in view.subviews { if let cap = commandKey(in: child) { return cap } }
+    return nil
+  }
+
   func testRotationKeepsKeyboardStableWhenReturningToPreviouslyHiddenTabs() async throws {
     try await open(tabs: 3)
     let scene = try XCTUnwrap(window?.windowScene)
