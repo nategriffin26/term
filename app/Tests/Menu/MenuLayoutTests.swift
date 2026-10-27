@@ -17,14 +17,12 @@ final class MenuLayoutTests: XCTestCase {
     XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 862), phoneFull)
     XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: nil), phoneFull)
     XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 896), phoneFull)
-    XCTAssertTrue(MenuLayout.fitsAboveKeyboard(bounds: phone, safe: phoneSafe, keyboardTop: 862))
   }
 
   // Bug: the panel drawn behind the keyboard instead of over the visible terminal.
   func testKeyboardUpEndsThePanelAboveIt() {
     let panel = MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 520)
     XCTAssertEqual(panel, CGRect(x: 8, y: 56, width: 398, height: 456))
-    XCTAssertTrue(MenuLayout.fitsAboveKeyboard(bounds: phone, safe: phoneSafe, keyboardTop: 520))
   }
 
   // Bug: the split keyboard on the Duo's inner display ignored, or the panel under the vertical bar.
@@ -38,27 +36,18 @@ final class MenuLayoutTests: XCTestCase {
                    CGRect(x: 8, y: 8, width: 851, height: 619))
   }
 
-  // Bug: a cramped panel squeezed above the keyboard (under 280 pt), or the
-  // keyboard dismissed when 280 pt fit.
-  func testPanelNeeds280PointsAboveTheKeyboard() {
-    // Visible terminal 48...(48 + h): the panel is h - 16 tall.
-    let below = MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 48 + 295)
-    XCTAssertFalse(MenuLayout.fitsAboveKeyboard(bounds: phone, safe: phoneSafe, keyboardTop: 48 + 295))
-    XCTAssertEqual(below, phoneFull, "279 pt does not fit: the panel takes the whole safe area")
-
-    XCTAssertTrue(MenuLayout.fitsAboveKeyboard(bounds: phone, safe: phoneSafe, keyboardTop: 48 + 296))
-    XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 48 + 296),
-                   CGRect(x: 8, y: 56, width: 398, height: 280))
-
-    XCTAssertTrue(MenuLayout.fitsAboveKeyboard(bounds: phone, safe: phoneSafe, keyboardTop: 48 + 297))
-    XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 48 + 297),
-                   CGRect(x: 8, y: 56, width: 398, height: 281))
+  // A short viewport must not dismiss the keyboard or put the panel behind it.
+  func testShortPanelStaysAboveTheKeyboard() {
+    for height in [279.0, 280.0, 281.0] {
+      XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 48 + height + 16),
+                     CGRect(x: 8, y: 56, width: 398, height: height))
+    }
   }
 
-  // Bug: a keyboard floating above the safe area giving a negative-height panel.
-  func testKeyboardAboveTheSafeAreaDoesNotFit() {
-    XCTAssertFalse(MenuLayout.fitsAboveKeyboard(bounds: phone, safe: phoneSafe, keyboardTop: 20))
-    XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 20), phoneFull)
+  // No available height still produces a nonnegative, on-screen frame.
+  func testKeyboardAboveTheSafeAreaLeavesAnEmptyPanel() {
+    XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 20),
+                   CGRect(x: 8, y: 48, width: 398, height: 0))
   }
 
   // Bug (seen on the Duo): a hidden tab keeps 48 rows while its tile fits 31,

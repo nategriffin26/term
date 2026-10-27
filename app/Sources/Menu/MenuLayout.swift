@@ -6,8 +6,6 @@ import UIKit
 enum MenuLayout {
   /// Space between the panel and the visible area's edges.
   static let margin: CGFloat = 8
-  /// Shortest useful panel; when the keyboard leaves less, it goes away.
-  static let minimumHeight: CGFloat = 280
 
   /// The part of the window the terminal shows: the safe area, cut at the
   /// keyboard's top edge when the keyboard reaches into it. `keyboardTop` is
@@ -20,17 +18,9 @@ enum MenuLayout {
     return area
   }
 
-  /// Whether the panel fits above the keyboard; when not, it opens over the
-  /// whole safe area and the keyboard is dismissed while it is open.
-  static func fitsAboveKeyboard(bounds: CGRect, safe: UIEdgeInsets, keyboardTop: CGFloat?) -> Bool {
-    visibleArea(bounds: bounds, safe: safe, keyboardTop: keyboardTop).height - 2 * margin >= minimumHeight
-  }
-
   static func panelFrame(bounds: CGRect, safe: UIEdgeInsets, keyboardTop: CGFloat?) -> CGRect {
-    let area = fitsAboveKeyboard(bounds: bounds, safe: safe, keyboardTop: keyboardTop)
-      ? visibleArea(bounds: bounds, safe: safe, keyboardTop: keyboardTop)
-      : visibleArea(bounds: bounds, safe: safe, keyboardTop: nil)
-    return area.insetBy(dx: margin, dy: margin)
+    let area = visibleArea(bounds: bounds, safe: safe, keyboardTop: keyboardTop)
+    return area.insetBy(dx: min(margin, area.width / 2), dy: min(margin, area.height / 2))
   }
 
   /// The first grid row (or column) a thumbnail `visible` cells tall (or

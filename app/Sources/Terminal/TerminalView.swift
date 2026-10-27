@@ -299,13 +299,17 @@ final class TerminalView: UIView {
         setNeedsRender(build: false)
     }
 
-    /// A swipe slides the view with a transform and animates it back. Its
-    /// insets follow where it is on screen, corner adaptation of the safe
-    /// area included: on a display with a rounded corner a page sliding in
-    /// under it measures 15 pt lower than at rest. A sliding view keeps the
-    /// geometry it had at rest; the swipe lays it out at rest.
-    private var isSliding: Bool {
-        !transform.isIdentity || !(layer.presentation()?.affineTransform().isIdentity ?? true)
+    /// Safe-area corners and keyboard guides follow transforms, including a
+    /// pane zooming into Sessions. Only resting geometry may size the grid.
+    private var isTransforming: Bool {
+        var ancestor: UIView? = self
+        while let view = ancestor, !(view is UIWindow) {
+            if !view.transform.isIdentity || !(view.layer.presentation()?.affineTransform().isIdentity ?? true) {
+                return true
+            }
+            ancestor = view.superview
+        }
+        return false
     }
 
     /// Fits the grid inside the safe area, clear of rounded display corners
@@ -313,7 +317,8 @@ final class TerminalView: UIView {
     /// keyboard and rotation animations pass through in-between sizes, and
     /// each resize would make the remote (tmux) redraw.
     func layoutGrid() {
-        guard !isSliding, let m = renderer?.fonts.metrics, bounds.width > 0, bounds.height > 0 else { return }
+        resizeTask?.cancel()
+        guard !isTransforming, let m = renderer?.fonts.metrics, bounds.width > 0, bounds.height > 0 else { return }
         // Corner adaptation of the safe area itself, so a corner already under
         // a bar costs nothing. One axis alone stops at the corner's 45° point,
         // which still clips the first cell; both together clear it.
@@ -331,14 +336,13 @@ final class TerminalView: UIView {
         gridOrigin = CGPoint(x: x0 + CGFloat(max(0, widthPx - cols * m.width) / 2), y: y0)
         if !isPinching {
             let grid = GridSize(cols: cols, rows: rows, cellWidth: m.width, cellHeight: m.height)
-            resizeTask?.cancel()
             if !sessionSized {
                 sessionSized = true
                 size(grid)
             } else {
                 resizeTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(120))
-                    guard !Task.isCancelled, let self else { return }
+                    guard !Task.isCancelled, let self, !self.isTransforming else { return }
                     self.size(grid)
                 }
             }

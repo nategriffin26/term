@@ -89,7 +89,6 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     panel.didMove(toParent: self)
     panel.iconFrame = { [weak self] tab in self?.dockIconFrame(tab) }
     panel.willClose = { [weak self] in self?.menuWillClose() }
-    panel.keyboardCrowds = { [weak self] in self?.keyboardCrowdsPanel() }
     dock.onTap = { [weak self] tab in self?.dockTapped(tab) }
     view.addSubview(dock)
 
@@ -854,7 +853,6 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     if drag != nil { finishDrag(to: nil, animated: false) }
     let terminal = focusedTab?.view
     menuRestoresFocus = terminal?.isFirstResponder == true
-    if menuRestoresFocus, !panel.fitsAboveKeyboard { terminal?.resignFirstResponder() }
     view.bringSubviewToFront(panel.view)
     view.bringSubviewToFront(dock)
 
@@ -869,14 +867,6 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   func closeMenu() {
     panel.close()
-  }
-
-  /// As when the panel opens without room above the keyboard: the terminal
-  /// gives up the keyboard while the panel is open and gets it back on close.
-  private func keyboardCrowdsPanel() {
-    guard let terminal = focusedTab?.view, terminal.isFirstResponder else { return }
-    menuRestoresFocus = true
-    terminal.resignFirstResponder()
   }
 
   /// The card fades in while the terminal shrinks into its window above it,
@@ -980,6 +970,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       container.layer.mask = nil
       container.transform = .identity
       view.insertSubview(container, belowSubview: divider)
+      terminal.setNeedsLayout()
       view.setNeedsLayout()
       completion()
     }

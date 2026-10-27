@@ -13,9 +13,6 @@ final class MenuPanel: UIViewController {
   var iconFrame: ((MenuTab) -> CGRect?)?
   /// Runs as the panel starts closing.
   var willClose: (() -> Void)?
-  /// Runs when the window changes under the open panel (a fold, a rotation)
-  /// and the keyboard leaves it too little room.
-  var keyboardCrowds: (() -> Void)?
 
   private let scrim = UIView()
   private let card = UIView()
@@ -89,12 +86,6 @@ final class MenuPanel: UIViewController {
   /// Top of the keyboard in this view's space (the safe area's bottom when it is down).
   private var keyboardTop: CGFloat { keyboardSpacer.frame.maxY }
 
-  /// Whether the keyboard leaves the panel enough room.
-  var fitsAboveKeyboard: Bool {
-    view.layoutIfNeeded()
-    return MenuLayout.fitsAboveKeyboard(bounds: view.bounds, safe: view.safeAreaInsets, keyboardTop: keyboardTop)
-  }
-
   private var targetFrame: CGRect {
     MenuLayout.panelFrame(bounds: view.bounds, safe: view.safeAreaInsets, keyboardTop: keyboardTop)
   }
@@ -103,9 +94,6 @@ final class MenuPanel: UIViewController {
     super.viewDidLayoutSubviews()
     scrim.frame = view.bounds
     guard isOpen, cardAnimator == nil else { return }
-    if !MenuLayout.fitsAboveKeyboard(bounds: view.bounds, safe: view.safeAreaInsets, keyboardTop: keyboardTop) {
-      keyboardCrowds?()
-    }
     place(targetFrame)
   }
 

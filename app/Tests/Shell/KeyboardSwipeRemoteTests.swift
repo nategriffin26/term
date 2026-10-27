@@ -86,7 +86,7 @@ final class KeyboardSwipeRemoteTests: XCTestCase {
       var target = try XCTUnwrap(host)
       target.startupCommand = "/opt/homebrew/bin/tmux -L termtest new-session -s \(name) /bin/sh"
       tab.connect(target, tmuxSession: name)
-      let deadline = Date.now.addingTimeInterval(15)
+      let deadline = Date.now.addingTimeInterval(60)
       while tab.remote == nil, Date.now < deadline { try await Task.sleep(for: .milliseconds(50)) }
       let remote = try XCTUnwrap(tab.remote, String(decoding: tab.local.history(), as: UTF8.self))
       remote.write(Data("printf '\\033[2J\\033[H'; i=1; while [ $i -le 90 ]; do printf '\\033[36mSession \(index + 1)\\033[0m  retained transcript line %03d\\n' $i; i=$((i+1)); done\r".utf8))
@@ -204,6 +204,13 @@ final class KeyboardSwipeRemoteTests: XCTestCase {
     try await Task.sleep(for: .seconds(1))
     XCTAssertTrue(terminal.isFirstResponder)
     XCTAssertFalse(field.isFirstResponder)
+    let renameDeadline = Date.now.addingTimeInterval(15)
+    while browser.listings[directory]?.entries.contains(where: { $0.name == "swipe.txt" }) != true,
+          browser.toast?.isError != true, Date.now < renameDeadline {
+      try await Task.sleep(for: .milliseconds(50))
+    }
+    XCTAssertTrue(browser.listings[directory]?.entries.contains(where: { $0.name == "swipe.txt" }) == true,
+                  browser.toast?.text ?? "rename did not finish")
     _ = try await execute("test -f \(directory)/swipe.txt")
   }
 
