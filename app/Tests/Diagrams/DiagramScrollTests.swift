@@ -77,7 +77,13 @@ final class DiagramScrollTests: XCTestCase {
     let pie = "pie title Pets adopted\n \"Dogs\" : 386\n \"Cats\" : 85\n \"Rats\" : 15"
     view.session.diagrams?.merge([.init(hash: "cold-pie", time: 2, source: pie)])
     frame((0..<17).map { "paragraph \($0)" } + ["```mermaid", "pie title Pets adopted", " \"Dogs\" : 386"], in: view)
-    try await Task.sleep(for: .milliseconds(200))
+    for _ in 0..<100 {
+      if !view.diagramOverlay.isUpdating { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    XCTAssertFalse(view.diagramOverlay.isUpdating, "Matching and image rendering must finish before checking absence")
+    XCTAssertTrue(view.diagramOverlay.drawings.contains { $0.hash == "cold-pie" },
+                  "The partial source must be identified before testing its withheld image")
     XCTAssertFalse(view.diagramOverlay.shown.contains { $0.drawing.hash == "cold-pie" },
                    "An unknown block height must not show a large half-pie")
   }
@@ -126,10 +132,10 @@ final class DiagramScrollTests: XCTestCase {
     XCTAssertFalse(path.contains(CGPoint(x: view.cellSizePoints.width * 38, y: 5), using: .evenOdd))
   }
 
-  func testTerminalPresentationSharesTheDiagramLayerTransaction() throws {
+  func testTerminalWithoutDiagramsUsesAsynchronousPresentation() throws {
     let view = try terminal()
-    XCTAssertTrue(view.metalLayer.presentsWithTransaction,
-                  "The grid must not show an older frame beneath already-moved diagram tiles")
+    XCTAssertFalse(view.metalLayer.presentsWithTransaction,
+                   "Ordinary terminal frames must not wait for diagram transactions")
   }
 
   func testLastKnownRowBesideCopyCounterRemainsCovered() async throws {

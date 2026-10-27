@@ -111,6 +111,10 @@ pub(crate) struct State {
     /// A FRAME event fired and term_session_frame has not run since.
     frame_pending: bool,
     frame_schedule: FrameSchedule,
+    synchronized_reset_prefix: usize,
+    /// Network-side completed frames must not mutate pointers held by the app.
+    /// This buffer changes only during term_session_frame; its capacity is reused.
+    published_ssh_frame: Option<vt::Frame>,
     bells: u32,
     title: String,
     status: u32,
@@ -125,6 +129,7 @@ pub(crate) struct State {
 impl State {
     pub(crate) fn new(term: vt::Terminal, remote: Remote, status: u32) -> State {
         let bells = term.bell_count();
+        let published_ssh_frame = matches!(remote, Remote::Ssh(_)).then(vt::Frame::default);
         State {
             term,
             remote,
@@ -133,6 +138,8 @@ impl State {
             stopped: false,
             frame_pending: false,
             frame_schedule: FrameSchedule::default(),
+            synchronized_reset_prefix: 0,
+            published_ssh_frame,
             bells,
             title: String::new(),
             status,
@@ -148,6 +155,10 @@ impl State {
         if self.frame_schedule.deadline().is_some_and(|deadline| deadline > Instant::now()) {
             return;
         }
+        self.notify_frame(ev);
+    }
+
+    fn notify_frame(&mut self, ev: &mut Vec<Event>) {
         if !self.frame_pending {
             self.frame_pending = true;
             ev.push(Event::new(event::FRAME, Vec::new()));
@@ -197,6 +208,7 @@ impl State {
     pub(crate) fn reconnect_status(&mut self, kind: u32, ev: &mut Vec<Event>) {
         self.status = kind;
         self.frame_schedule = FrameSchedule::default();
+        self.synchronized_reset_prefix = 0;
         self.prediction = Prediction::default();
         ev.push(Event::new(event::STATUS, Vec::new()));
         self.frame_changed(ev);
@@ -226,9 +238,37 @@ impl State {
     /// Host output from an SSH shell; the terminal's replies go back to it.
     pub(crate) fn ssh_output(&mut self, bytes: &[u8], ev: &mut Vec<Event>) {
         if bytes.is_empty() { return; }
-        self.term.write(bytes);
-        self.frame_schedule.input(Instant::now(), self.term.mode(2026, false));
+        let now = Instant::now();
+        const RESET: &[u8] = b"\x1b[?2026l";
+        let mut boundary = None;
+        for (i, &byte) in bytes.iter().enumerate() {
+            if byte == RESET[self.synchronized_reset_prefix] {
+                self.synchronized_reset_prefix += 1;
+                if self.synchronized_reset_prefix == RESET.len() {
+                    boundary = Some(i + 1);
+                    self.synchronized_reset_prefix = 0;
+                }
+            } else {
+                self.synchronized_reset_prefix = usize::from(byte == RESET[0]);
+            }
+        }
+        let mut completed = false;
+        if let Some(boundary) = boundary {
+            self.term.write(&bytes[..boundary]);
+            if !self.term.mode(2026, false) {
+                completed = self.term.update_frame().is_ok();
+                self.frame_schedule.exported();
+            }
+            self.term.write(&bytes[boundary..]);
+            if boundary < bytes.len() || !completed {
+                self.frame_schedule.input(now, self.term.mode(2026, false));
+            }
+        } else {
+            self.term.write(bytes);
+            self.frame_schedule.input(now, self.term.mode(2026, false));
+        }
         self.effects(ev);
+        if completed { self.notify_frame(ev); }
         let replies = self.term.take_responses();
         if let Remote::Ssh(r) = &self.remote
             && !replies.is_empty()
@@ -330,6 +370,12 @@ impl State {
         if self.generation == have {
             return false;
         }
+        let f = if let Some(published) = &mut self.published_ssh_frame {
+            if published.generation != f.generation { published.clone_from(f); }
+            &*published
+        } else {
+            f
+        };
         let predicted = &self.built_from.1;
         let (cursor_col, cursor_row) = match predicted.cursor {
             Some((c, r)) if f.cols > 0 && f.rows > 0 => (c.min(f.cols - 1), r.min(f.rows - 1)),
@@ -542,5 +588,51 @@ mod tests {
         let mut frame = TermFrame::default();
         assert!(state.frame(0, &mut frame));
         assert!(state.term.frame().unwrap().row_text(0).starts_with("final output"));
+    }
+
+    #[test]
+    fn completed_synchronized_frame_precedes_the_next_unfinished_transaction() {
+        for split in 0..8 {
+            let mut state = State::new(vt::Terminal::new(40, 10, 0).unwrap(), Remote::Local, status::CONNECTED);
+            let mut frame = TermFrame::default();
+            assert!(state.frame(0, &mut frame));
+            let generation = frame.generation;
+            let reset = b"\x1b[?2026l";
+            state.ssh_output(b"\x1b[?2026hcomplete", &mut Vec::new());
+            state.ssh_output(&reset[..split], &mut Vec::new());
+            let mut next = reset[split..].to_vec();
+            next.extend_from_slice(b"\x1b[?2026h unfinished");
+            let mut events = Vec::new();
+            state.ssh_output(&next, &mut events);
+            assert!(events.iter().any(|event| event.kind == event::FRAME), "reset split at {split}");
+            assert!(state.frame(generation, &mut frame), "completed transaction must be publishable at split {split}");
+            assert_eq!(state.term.frame().unwrap().row_text(0).trim_end(), "complete");
+        }
+    }
+
+    #[test]
+    fn synchronized_deadline_restarts_after_a_completed_boundary() {
+        let mut state = State::new(vt::Terminal::new(40, 10, 0).unwrap(), Remote::Local, status::CONNECTED);
+        state.ssh_output(b"\x1b[?2026hcomplete", &mut Vec::new());
+        state.frame_schedule.synchronized_since = Some(Instant::now() - Duration::from_millis(100));
+        state.ssh_output(b"\x1b[?2026l\x1b[?2026hnext", &mut Vec::new());
+        let last = state.frame_schedule.pending.unwrap().1;
+        assert_eq!(state.frame_schedule.deadline(), Some(last + Duration::from_millis(150)));
+    }
+
+    #[test]
+    fn completed_input_cannot_mutate_published_frame_pointers() {
+        let mut state = State::new(vt::Terminal::new(40, 10, 0).unwrap(), Remote::Local, status::CONNECTED);
+        state.published_ssh_frame = Some(vt::Frame::default());
+        state.term.write(b"old");
+        let mut frame = TermFrame::default();
+        assert!(state.frame(0, &mut frame));
+        let cells = frame.cells;
+        let generation = frame.generation;
+        state.ssh_output(b"\x1b[?2026h\rnew\x1b[?2026l\x1b[?2026h pending", &mut Vec::new());
+        assert_eq!(unsafe { (*cells).ch }, u32::from('o'), "published cells live until the next frame call");
+        assert!(state.frame(generation, &mut frame));
+        assert_eq!(unsafe { (*frame.cells).ch }, u32::from('n'));
+        assert_eq!(frame.cells, cells, "unchanged grid dimensions reuse publication capacity");
     }
 }

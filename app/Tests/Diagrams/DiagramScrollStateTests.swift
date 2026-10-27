@@ -221,4 +221,32 @@ final class DiagramScrollStateTests: XCTestCase {
     XCTAssertEqual(state.visible.first?.clipTop, 1, "A restored exact source row is not terminal chrome")
   }
 
+  func testColdUpwardScrollExtendsKnownGlyphRowsAndFindsTheRealTop() {
+    let candidate = DiagramMatcher.Candidate(hash: "flow", time: 1, source: "flowchart TD\n A[alpha] --> B[beta]")
+    let old = ["status", "│ alpha │", "│ beta │", "└──────┘"] + (4..<30).map { "paragraph \($0)" }
+    var state = DiagramScrollState()
+    state.update(old)
+    state.merge([.init(top: 1, bottom: 3, hash: "flow", openTop: true)], origin: state.origin, epoch: state.epoch)
+    let up = ["status", "┌──────┐"] + Array(old[1...28])
+    state.update(up, candidates: [candidate])
+    XCTAssertEqual(state.visible.first?.top, 1, "A known image must cover newly arriving glyph rows before an async rematch")
+    XCTAssertEqual(state.visible.first?.openTop, true)
+    state.update(["status", "heading", ""] + Array(up[1...27]), candidates: [candidate])
+    XCTAssertEqual(state.visible.first?.top, 3)
+    XCTAssertEqual(state.visible.first?.openTop, false, "The visible blank separator establishes the real top immediately")
+  }
+
+  func testColdDownwardScrollExtendsKnownGlyphRowsAndFindsTheRealBottom() {
+    let candidate = DiagramMatcher.Candidate(hash: "flow", time: 1, source: "flowchart TD\n A[alpha] --> B[beta]")
+    let old = (0..<27).map { "paragraph \($0)" } + ["┌──────┐", "│ alpha │", "│ beta │"]
+    var state = DiagramScrollState()
+    state.update(old)
+    state.merge([.init(top: 27, bottom: 29, hash: "flow", openBottom: true)], origin: state.origin, epoch: state.epoch)
+    let down = Array(old.dropFirst()) + ["└──────┘"]
+    state.update(down, candidates: [candidate])
+    XCTAssertEqual(state.visible.first?.bottom, 29)
+    state.update(Array(down.dropFirst()) + ["following prose"], candidates: [candidate])
+    XCTAssertEqual(state.visible.first?.bottom, 28)
+    XCTAssertEqual(state.visible.first?.openBottom, false)
+  }
 }

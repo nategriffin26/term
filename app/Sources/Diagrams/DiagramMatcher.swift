@@ -18,10 +18,11 @@ enum DiagramMatcher {
 
     /// The rows `drawn` covers of this block. On a screen `rows` tall it may
     /// go on past either edge; on a whole page (`rows` nil) it ends where it ends.
-    func match(_ drawn: Drawn, screenRows rows: Int?) -> Match {
-      Match(top: top + drawn.trimTop, bottom: bottom - drawn.trimBottom, hash: drawn.hash,
-            openTop: rows != nil && (top == 0 || drawn.trimTop > 0),
-            openBottom: rows.map { bottom == $0 - 1 || drawn.trimBottom > 0 } ?? false)
+    func match(_ drawn: Drawn, screenRows rows: Int?) -> Match? {
+      let match = Match(top: top + drawn.trimTop, bottom: bottom - drawn.trimBottom, hash: drawn.hash,
+                        openTop: rows != nil && (top == 0 || drawn.trimTop > 0),
+                        openBottom: rows.map { bottom == $0 - 1 || drawn.trimBottom > 0 } ?? false)
+      return drawn.ambiguous && (match.openTop || match.openBottom) ? nil : match
     }
 
     /// This block as the source text of `hash` (rows from the fence line to
@@ -52,6 +53,7 @@ enum DiagramMatcher {
     var hash: String
     var trimTop = 0
     var trimBottom = 0
+    var ambiguous = false
   }
 
   /// A published source, its words ready for matching.
@@ -166,25 +168,35 @@ enum DiagramMatcher {
     let lines = rows.map { words($0) }
     guard !lines.isEmpty else { return nil }
     var best: (recall: Double, time: Double, drawn: Drawn)?
+    var firstVocabulary: Set<String>?
+    var ambiguous = false
     for c in candidates {
       var top = 0, bottom = lines.count - 1
       while top < min(maxTrim, bottom), !c.covers(lines[top]) { top += 1 }
       while bottom > max(top, lines.count - 1 - maxTrim), !c.covers(lines[bottom]) { bottom -= 1 }
       let seen = Array(lines[top...bottom].joined())
       guard seen.count >= 2, c.covers(seen) else { continue }
+      if let firstVocabulary {
+        ambiguous = ambiguous || firstVocabulary != c.vocab
+      } else {
+        firstVocabulary = c.vocab
+      }
       let recall = Double(c.vocab.intersection(seen).count) / Double(max(1, c.vocab.count))
       if let b = best, (recall, c.time) <= (b.recall, b.time) { continue }
       best = (recall, c.time, Drawn(hash: c.hash, trimTop: top, trimBottom: lines.count - 1 - bottom))
     }
-    return best?.drawn
+    guard var drawn = best?.drawn else { return nil }
+    drawn.ambiguous = ambiguous
+    return drawn
   }
 
   /// Every drawing and source-text block in `rows` that a candidate draws.
   /// `screen`: the rows are a screen, whose drawings may go on past its edges.
   static func match(_ rows: [String], _ candidates: [Candidate], screen: Bool = true) -> [Match] {
     let edge = screen ? rows.count : nil
-    let drawings = blocks(rows).filter { $0.glyphRows >= minGlyphRows }.compactMap { b in
-      drawn(rows[b.top...b.bottom], in: candidates).map { b.match($0, screenRows: edge) }
+    let drawings = blocks(rows).filter { $0.glyphRows >= minGlyphRows }.compactMap { b -> Match? in
+      guard let drawn = drawn(rows[b.top...b.bottom], in: candidates) else { return nil }
+      return b.match(drawn, screenRows: edge)
     }
     let sources = sourceBlocks(rows).compactMap { b in
       drawn(rows[b.top + 1...b.bottom], in: candidates).map {

@@ -35,6 +35,13 @@ final class DiagramMatcherTests: XCTestCase {
     return try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\n")
   }
 
+  func testSharedParticipantNamesCannotIdentifyAnUnseenPartialDiagram() {
+    let partial = ["▌ unrelated status", "┌───────┐   ┌──────┐   ┌─────┐",
+                   "│ Phone │   │ tmux │   │ omp │", "└───────┘   └──────┘   └─────┘", "", "following prose"]
+    XCTAssertEqual(DiagramMatcher.match(partial, sources), [],
+                   "A partial sequence suffix must not briefly show the flowchart just because its vocabulary is smaller")
+  }
+
   /// Finds both drawings whole at 120 columns, and nothing in omp's banner or composer.
   func testWideScreenMatchesBothDrawingsAndNoChrome() throws {
     XCTAssertEqual(DiagramMatcher.match(try rows("cap-120"), sources),
@@ -214,11 +221,28 @@ final class DiagramPlacementTests: XCTestCase {
     XCTAssertEqual(try XCTUnwrap(place(top: 0, bottom: 44, height: 2000)).image.minY, 0)
   }
 
-  /// Even before both ends are known, the image follows the retained first
-  /// row rather than sticking to the viewport or following the last row.
-  func testOpenDrawingUsesItsRetainedOriginAtEveryImageHeight() throws {
+  func testUnseenTopStaysBottomAnchoredWhenScrollingUpOneRow() throws {
+    var state = DiagramScrollState()
+    let rows = (0..<30).map { "drawing row \($0)" }
+    state.update(rows)
+    state.merge([.init(top: 0, bottom: 5, hash: "cold", openTop: true)], origin: state.origin, epoch: state.epoch)
+    let first = try XCTUnwrap(DiagramPlacement.place(try XCTUnwrap(state.visible.first),
+      cols: 51, rows: 30, cell: cell, size: CGSize(width: 300, height: 300)))
+    XCTAssertEqual(first.image.minY, -198)
+    state.update(["earlier row"] + Array(rows.prefix(29)))
+    state.merge([.init(top: 0, bottom: 6, hash: "cold", openTop: true)], origin: state.origin, epoch: state.epoch)
+    let match = try XCTUnwrap(state.visible.first)
+    XCTAssertTrue(match.openTop, "A partial rematch has not discovered the drawing's real top")
+    let next = try XCTUnwrap(DiagramPlacement.place(match,
+      cols: 51, rows: 30, cell: cell, size: CGSize(width: 300, height: 300)))
+    XCTAssertEqual(next.image.minY, -181)
+    XCTAssertEqual(next.tile.minY + next.image.minY - first.tile.minY - first.image.minY, 17)
+  }
+
+  /// Once its real top is known, an offscreen drawing keeps that origin.
+  func testKnownDrawingUsesItsRetainedOriginAtEveryImageHeight() throws {
     for height: CGFloat in [169, 170, 171] {
-      let match = DiagramMatcher.Match(top: -3, bottom: 9, hash: "", openTop: true)
+      let match = DiagramMatcher.Match(top: -3, bottom: 9, hash: "", openTop: false)
       let p = try XCTUnwrap(DiagramPlacement.place(match, cols: 51, rows: 45, cell: cell,
                                                   size: CGSize(width: 300, height: height)))
       XCTAssertEqual(p.image.minY, -51)

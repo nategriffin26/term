@@ -98,6 +98,7 @@ final class TerminalView: UIView {
     private var haveGeneration: UInt64 = .max
     private var needsBuild = true
     private var needsDraw = true
+    private var presentedDiagrams = false
     private var displayLink: CADisplayLink?
     var scale: CGFloat = 1
 
@@ -178,7 +179,6 @@ final class TerminalView: UIView {
         metalLayer.isOpaque = true
         metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         metalLayer.maximumDrawableCount = 3
-        metalLayer.presentsWithTransaction = true
 
         keyboardSpacer.isHidden = true
         keyboardSpacer.isUserInteractionEnabled = false
@@ -450,16 +450,24 @@ final class TerminalView: UIView {
         }
         guard needsDraw, metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else { return }
         diagramOverlay.isHidden = zoom != 1 || isPinching || selection != nil
+        let showsDiagrams = !diagramOverlay.isHidden && !diagramOverlay.shown.isEmpty
+        // Synchronize the removal frame too, so old source cannot flash after
+        // its last tile disappears and before the replacement grid arrives.
+        metalLayer.presentsWithTransaction = showsDiagrams || presentedDiagrams
         needsDraw = false
         let p = placement
         guard let drawable = metalLayer.nextDrawable(),
               let cb = renderer.encode(into: drawable.texture, placement: p) else { return }
         drawnCursorAlpha = p.cursorAlpha
-        cb.commit()
-        // Present on this thread's transaction, not Metal's scheduled-handler
-        // thread, so the grid and its diagram tiles reach the screen together.
-        cb.waitUntilScheduled()
-        drawable.present()
+        if metalLayer.presentsWithTransaction {
+            cb.commit()
+            cb.waitUntilScheduled()
+            drawable.present()
+        } else {
+            cb.present(drawable)
+            cb.commit()
+        }
+        presentedDiagrams = showsDiagrams
     }
 
     var placement: Renderer.Placement {

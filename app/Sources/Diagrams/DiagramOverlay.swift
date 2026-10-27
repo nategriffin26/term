@@ -29,7 +29,9 @@ struct DiagramPlacement: Equatable {
       scale = min(scale, max(block / size.height, drawing.isText ? 0 : minScale))
     }
     let shown = CGSize(width: size.width * scale, height: size.height * scale)
-    let y = CGFloat(drawing.top - first) * cell.height
+    let y = drawing.openTop && !drawing.openBottom
+      ? CGFloat(drawing.bottom - first + 1) * cell.height - shown.height
+      : CGFloat(drawing.top - first) * cell.height
     let image = CGRect(x: (width - shown.width) / 2, y: y, width: shown.width, height: shown.height)
     return DiagramPlacement(tile: tile, image: image, clipsBottom: !drawing.openBottom && drawing.bottom <= rows - 1 && image.maxY > tile.height + 0.5)
   }
@@ -87,6 +89,8 @@ final class DiagramOverlay: UIView {
     var drawing: Drawing
     var image: UIImage
     var style: DiagramEngine.Style
+    var openTop: Bool
+    var openBottom: Bool
     /// The tile, in the terminal view's coordinates.
     var frame: CGRect
     let tile: UIView
@@ -111,6 +115,7 @@ final class DiagramOverlay: UIView {
   private var pendingImages: Set<DiagramEngine.CacheKey> = []
   private var tiles: [DiagramTile] = []
   private(set) var shown: [Shown] = []
+  var isUpdating: Bool { matching || !pendingImages.isEmpty }
   /// The diagram the long-press menu is for.
   var menuTarget: Shown?
 
@@ -182,8 +187,13 @@ final class DiagramOverlay: UIView {
         gridColumns = s.cols
       }
       rows = Self.screenRows(s)
+      for row in rows.indices where row <= DiagramMatcher.maxTrim || row >= s.rows - DiagramMatcher.maxTrim - 1 {
+        if let columns = copyCounterColumns(row) {
+          rows[row] = String(rows[row].prefix(columns.lowerBound)) + String(repeating: " ", count: columns.count)
+        }
+      }
       rowsTop = s.historyRows - s.viewportOffset
-      scroll.update(rows)
+      scroll.update(rows, candidates: source?.candidates ?? [])
       matches = scroll.visible
     }
     revision += 1
@@ -270,7 +280,8 @@ final class DiagramOverlay: UIView {
         fade.frame = CGRect(x: 0, y: place.tile.height - h, width: place.tile.width, height: h)
         fade.update(background: UIColor(argb: snapshot.bg), foreground: UIColor(argb: snapshot.fg))
       }
-      shown.append(Shown(drawing: drawing, image: image, style: style, frame: tile.frame, tile: tile))
+      shown.append(Shown(drawing: drawing, image: image, style: style,
+                         openTop: m.openTop, openBottom: m.openBottom, frame: tile.frame, tile: tile))
     }
     while tiles.count > used { tiles.removeLast().removeFromSuperview() }
     self.shown = shown
@@ -288,6 +299,19 @@ final class DiagramOverlay: UIView {
     return tile
   }
 
+  private func copyCounterColumns(_ row: Int) -> Range<Int>? {
+    let s = terminal.snapshot
+    guard row >= 0, row < s.rows, s.cols > 0 else { return nil }
+    let start = row * s.cols
+    var last = s.cols - 1
+    while last > 0, s.cells[start + last].ch <= 32 { last -= 1 }
+    let background = s.cells[start + last].bg
+    guard background != s.bg else { return nil }
+    var first = last
+    while first > 0, s.cells[start + first - 1].bg == background { first -= 1 }
+    return first > 0 ? first..<s.cols : nil
+  }
+
   /// A copy-mode position is a colored suffix, not a whole status row.
   /// Preserve its actual cells without exposing the source beside it.
   private func clipping(_ original: DiagramMatcher.Match) -> (DiagramMatcher.Match, [CGRect]) {
@@ -295,17 +319,9 @@ final class DiagramOverlay: UIView {
     var match = original
     var cutouts: [CGRect] = []
     func suffix(_ row: Int) -> CGRect? {
-      guard row >= 0, row < s.rows, s.cols > 0 else { return nil }
-      let start = row * s.cols
-      var last = s.cols - 1
-      while last > 0, s.cells[start + last].ch <= 32 { last -= 1 }
-      let background = s.cells[start + last].bg
-      guard background != s.bg else { return nil }
-      var first = last
-      while first > 0, s.cells[start + first - 1].bg == background { first -= 1 }
-      guard first > 0 else { return nil }
-      return CGRect(x: CGFloat(first) * cell.width, y: CGFloat(row) * cell.height,
-                    width: CGFloat(s.cols - first) * cell.width, height: cell.height)
+      guard let columns = copyCounterColumns(row) else { return nil }
+      return CGRect(x: CGFloat(columns.lowerBound) * cell.width, y: CGFloat(row) * cell.height,
+                    width: CGFloat(columns.count) * cell.width, height: cell.height)
     }
     if let top = match.clipTop, let rect = suffix(top - 1) {
       match.clipTop = top - 1

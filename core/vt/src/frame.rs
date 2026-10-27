@@ -69,7 +69,7 @@ pub struct Grapheme {
 }
 
 /// The viewport, ready to draw. Field meanings match term.h TermFrame.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct Frame {
     pub generation: u64,
     pub cols: u16,
@@ -89,6 +89,35 @@ pub struct Frame {
     pub cells: Vec<Cell>,
     pub graphemes: Vec<Grapheme>,
     pub codepoints: Vec<u32>,
+}
+
+impl Clone for Frame {
+    fn clone(&self) -> Self {
+        let mut frame = Self::default();
+        frame.clone_from(self);
+        frame
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.generation = source.generation;
+        self.cols = source.cols;
+        self.rows = source.rows;
+        self.cursor_col = source.cursor_col;
+        self.cursor_row = source.cursor_row;
+        self.cursor_visible = source.cursor_visible;
+        self.cursor_style = source.cursor_style;
+        self.cursor_blink = source.cursor_blink;
+        self.fg = source.fg;
+        self.bg = source.bg;
+        self.cursor_color = source.cursor_color;
+        self.modes = source.modes;
+        self.history_rows = source.history_rows;
+        self.viewport_offset = source.viewport_offset;
+        self.bell_count = source.bell_count;
+        self.cells.clone_from(&source.cells);
+        self.graphemes.clone_from(&source.graphemes);
+        self.codepoints.clone_from(&source.codepoints);
+    }
 }
 
 impl Frame {

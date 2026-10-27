@@ -17,8 +17,9 @@ actor DiagramMatching {
       if words.count >= 2 { unmatched.insert(words.sorted().joined(separator: " ")) }
     }
     for block in DiagramMatcher.blocks(rows) where block.glyphRows >= DiagramMatcher.minGlyphRows {
-      if let drawn = DiagramMatcher.drawn(rows[block.top...block.bottom], in: candidates) {
-        matches.append(block.match(drawn, screenRows: edge))
+      if let drawn = DiagramMatcher.drawn(rows[block.top...block.bottom], in: candidates),
+         let match = block.match(drawn, screenRows: edge) {
+        matches.append(match)
       } else {
         miss(block)
       }

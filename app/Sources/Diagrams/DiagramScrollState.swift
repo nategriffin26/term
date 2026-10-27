@@ -45,7 +45,7 @@ struct DiagramScrollState {
     bottomInset = 0
   }
 
-  mutating func update(_ next: [String]) {
+  mutating func update(_ next: [String], candidates: [DiagramMatcher.Candidate] = []) {
     guard next != rows else { return }
     let shift = Self.shift(from: rows, to: next)
     if let shift {
@@ -72,6 +72,7 @@ struct DiagramScrollState {
     }
     rows = next
     relocateUnpositionedDrawings()
+    extendOpenEdges(candidates)
     resolveSourceEnds()
     rememberRows()
   }
@@ -112,6 +113,45 @@ struct DiagramScrollState {
     }
     resolveSourceEnds()
     rememberRows()
+  }
+
+  /// Once a block is identified, newly adjacent rows use that same source's
+  /// vocabulary and glyph rules immediately, rather than waiting for a rematch.
+  private mutating func extendOpenEdges(_ candidates: [DiagramMatcher.Candidate]) {
+    for i in drawings.indices where drawings[i].positioned {
+      let bounds = drawings[i].bounds
+      guard !bounds.isText, bounds.clipTop == nil, bounds.clipBottom == nil,
+            bounds.openTop || bounds.openBottom,
+            let candidate = candidates.first(where: { $0.hash == bounds.hash }) else { continue }
+      if bounds.openTop {
+        let edge = expandedEdge(from: bounds.top - origin, step: -1, candidate: candidate)
+        drawings[i].bounds.top = edge.row + origin
+        drawings[i].bounds.openTop = !edge.closed
+      }
+      if bounds.openBottom {
+        let edge = expandedEdge(from: bounds.bottom - origin, step: 1, candidate: candidate)
+        drawings[i].bounds.bottom = edge.row + origin
+        drawings[i].bounds.openBottom = !edge.closed
+      }
+    }
+  }
+
+  private func expandedEdge(from start: Int, step: Int, candidate: DiagramMatcher.Candidate) -> (row: Int, closed: Bool) {
+    guard rows.indices.contains(start) else { return (start, false) }
+    var edge = start, row = start + step, labels = 0
+    while rows.indices.contains(row) {
+      let text = rows[row]
+      let glyph = DiagramMatcher.hasGlyph(text)
+      let accepts = text.contains(where: { !$0.isWhitespace }) && candidate.covers(DiagramMatcher.words(text))
+      if !accepts || (!glyph && labels == 2) {
+        let closed = row >= topInset && row < rows.count - bottomInset
+        return (closed ? edge - step * labels : edge, closed)
+      }
+      labels = glyph ? 0 : labels + 1
+      edge = row
+      row += step
+    }
+    return (edge, false)
   }
 
   private mutating func rememberRows() {

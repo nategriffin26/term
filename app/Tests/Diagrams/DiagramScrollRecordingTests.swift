@@ -94,10 +94,19 @@ final class DiagramScrollRecordingTests: XCTestCase {
     let link = CADisplayLink(target: probe, selector: #selector(DiagramScrollProbe.observe))
     link.add(to: .main, forMode: .common)
     defer { link.invalidate() }
-    _ = try await execute("\(tmux) copy-mode -t \(target); \(tmux) send-keys -t \(target) -X history-top")
+    _ = try await execute("\(tmux) copy-mode -t \(target); \(tmux) send-keys -t \(target) -X history-bottom")
     terminal.scrollAnchor = (col: 10, row: 10)
     try await Task.sleep(for: .seconds(1))
-    // Learn every drawing once, then require immediate image coverage on return.
+    probe.phase = "cold-up"
+    try "ready".write(to: evidence.appending(path: "ready"), atomically: true, encoding: .utf8)
+    probe.begin()
+    try await Task.sleep(for: .seconds(2))
+    for _ in 0..<referenceRows.count {
+      terminal.scroll(points: terminal.cellSizePoints.height)
+      try await Task.sleep(for: .milliseconds(30))
+    }
+    probe.phase = "warm-down"
+    _ = try await execute("\(tmux) send-keys -t \(target) -X history-top")
     for _ in stride(from: 0, through: referenceRows.count, by: 8) {
       terminal.scroll(points: -8 * terminal.cellSizePoints.height)
       try await Task.sleep(for: .milliseconds(160))
@@ -113,9 +122,7 @@ final class DiagramScrollRecordingTests: XCTestCase {
         times.append((CACurrentMediaTime() - start) * 1000)
       }
     }
-    try "ready".write(to: evidence.appending(path: "ready"), atomically: true, encoding: .utf8)
-    probe.begin()
-    try await Task.sleep(for: .seconds(2))
+    try await Task.sleep(for: .seconds(1))
     probe.phase = "slow"
     for _ in 0..<65 {
       terminal.scroll(points: terminal.cellSizePoints.height)
@@ -151,6 +158,8 @@ final class DiagramScrollRecordingTests: XCTestCase {
     XCTAssertGreaterThan(probe.checked, 100, "No real copy-mode screen changes were observed")
     XCTAssertEqual(probe.unlocated, 0, "Every observed screen must be located in the real tmux capture")
     XCTAssertEqual(probe.exposures, 0, "Known diagram rows were exposed; see the coverage report")
+    XCTAssertGreaterThan(probe.alignmentChecks, 100, "Image alignment must be exercised against the full capture")
+    XCTAssertEqual(probe.misaligned, 0, "Diagram image origins did not follow the captured block geometry")
     if profile {
       let report = ["run": label, "mainFrameMilliseconds": times, "diagrams": sources.count] as [String: Any]
       try JSONSerialization.data(withJSONObject: report).write(to: evidence.appending(path: label + "-timing.json"))
@@ -174,6 +183,8 @@ private final class DiagramScrollProbe: NSObject {
   private(set) var checked = 0
   private(set) var unlocated = 0
   private(set) var exposures = 0
+  private(set) var alignmentChecks = 0
+  private(set) var misaligned = 0
 
   init(terminal: TerminalView, reference: [String], matches: [DiagramMatcher.Match]) {
     self.terminal = terminal
@@ -222,9 +233,35 @@ private final class DiagramScrollProbe: NSObject {
       }
     }
     if !uncovered.isEmpty { exposures += 1 }
+    var alignmentErrors: [[String: Any]] = []
+    for shown in terminal.diagramOverlay.shown {
+      guard let block = matches.first(where: { $0.hash == shown.drawing.hash }) else { continue }
+      var origins: [Int: Int] = [:]
+      for row in rows.indices {
+        if let position = locations[row], position >= block.top, position <= block.bottom {
+          origins[position - row, default: 0] += 1
+        }
+      }
+      guard let origin = origins.max(by: { $0.value < $1.value })?.key else { continue }
+      let image = shown.tile.subviews[0].frame
+      let referenceTop = block.top - origin, referenceBottom = block.bottom - origin
+      // Equal provisional bounds do not prove the top when the preceding
+      // separator is still behind terminal chrome.
+      let unseenTop = shown.openTop && !shown.openBottom
+      let expected = terminal.gridOrigin.y / terminal.scale + (unseenTop
+        ? CGFloat(referenceBottom + 1) * terminal.cellSizePoints.height - image.height
+        : CGFloat(referenceTop) * terminal.cellSizePoints.height)
+      let actual = shown.frame.minY + image.minY
+      alignmentChecks += 1
+      if abs(actual - expected) > 0.5 {
+        alignmentErrors.append(["hash": block.hash, "expected": expected, "actual": actual, "unseenTop": unseenTop])
+      }
+    }
+    if !alignmentErrors.isEmpty { misaligned += 1 }
     var observation: [String: Any] = ["time": CACurrentMediaTime() - started, "phase": phase,
                                       "unlocatedRows": unknown, "uncovered": uncovered]
-    if !uncovered.isEmpty || !unknown.isEmpty {
+    observation["alignmentErrors"] = alignmentErrors
+    if !uncovered.isEmpty || !unknown.isEmpty || !alignmentErrors.isEmpty {
       observation["rows"] = rows
       observation["drawings"] = terminal.diagramOverlay.drawings.map { ["hash": $0.hash, "top": $0.top, "bottom": $0.bottom] as [String: Any] }
       observation["shown"] = terminal.diagramOverlay.shown.map { ["hash": $0.drawing.hash, "top": $0.frame.minY, "bottom": $0.frame.maxY] as [String: Any] }
@@ -234,7 +271,7 @@ private final class DiagramScrollProbe: NSObject {
 
   var report: [String: Any] {
     ["checkedFrames": checked, "unlocatedFrames": unlocated, "exposedFrames": exposures,
-     "knownDiagrams": known.sorted(), "frames": observations]
+     "knownDiagrams": known.sorted(), "alignmentChecks": alignmentChecks, "misalignedFrames": misaligned, "frames": observations]
   }
 }
 
