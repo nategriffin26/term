@@ -386,6 +386,12 @@ final class SelectionHandle: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// A short selection puts the two frames over each other; each takes the
+    /// half its knob is in, so the start handle stays grabbable.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        super.point(inside: point, with: event) && (isStart ? point.y < bounds.midY : point.y >= bounds.midY)
+    }
+
     /// `corner` is the selection's top-left (start) or bottom-right (end).
     func place(at corner: CGPoint, lineHeight: CGFloat, color: UIColor) {
         let width: CGFloat = 44

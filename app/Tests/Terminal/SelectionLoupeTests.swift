@@ -146,4 +146,13 @@ final class SelectionHandleLoupeTests: XCTestCase {
     }
     XCTAssertFalse(view.selectionLoupe.isShowing)
   }
+
+  func testAShortSelectionsHandlesAreEachGrabbable() async throws {
+    let view = try await selectedTerminal(endCol: 4)
+    XCTAssertLessThan(view.endHandle.frame.midX - view.startHandle.frame.midX, 44, "the frames must overlap for this to test anything")
+    let startKnob = CGPoint(x: view.startHandle.frame.midX, y: view.startHandle.frame.minY + 10)
+    let endKnob = CGPoint(x: view.endHandle.frame.midX, y: view.endHandle.frame.maxY - 10)
+    XCTAssertTrue(view.hitTest(startKnob, with: nil)?.isDescendant(of: view.startHandle) == true, "the start handle's knob is covered by the end handle")
+    XCTAssertTrue(view.hitTest(endKnob, with: nil)?.isDescendant(of: view.endHandle) == true)
+  }
 }
