@@ -112,4 +112,42 @@ final class TabReorderTests: XCTestCase {
     XCTAssertEqual(after.tiling(forScene: "window"), tiling)
     XCTAssertNil(after.tiling(forScene: "other"))
   }
+
+  // Bug: a session moved (VoiceOver's Move Earlier), then another closed: the stored tiling still had the old order,
+  // so the closed session's room came out of the wrong window and the others changed size.
+  func testAMoveThenACloseKeepsTheSizesShown() throws {
+    let space = try space(tabs: 3)
+    let (a, b, c) = (space.tabs[0], space.tabs[1], space.tabs[2])
+    space.arrange([a.id, b.id, c.id], tiling: .split(.across, [.init(share: 0.5, node: .window(a.id)),
+                                                               .init(share: 0.3, node: .window(b.id)),
+                                                               .init(share: 0.2, node: .window(c.id))]))
+    space.move(b, to: 0)
+    space.close(a)
+
+    let shown = try XCTUnwrap(Tiling.reconciled(space.tiling, order: space.tabs.map(\.id),
+                                                in: CGRect(x: 0, y: 0, width: 600, height: 400), chipWidth: { _ in 60 }))
+    guard case .split(.across, let parts) = shown else { return XCTFail("not a row: \(shown)") }
+    XCTAssertEqual(parts.map(\.node), [.window(b.id), .window(c.id)])
+    XCTAssertEqual(try XCTUnwrap(parts.first).share, 0.5 / 0.7, accuracy: 1e-9, "b kept the half, c its 0.2")
+  }
+
+  // Bug: a new session's window known only to the overview, so closing another re-evened the rest instead of
+  // keeping the sizes it showed.
+  func testANewSessionsWindowIsKeptForLaterChanges() throws {
+    let space = try space(tabs: 2)
+    let (a, b) = (space.tabs[0], space.tabs[1])
+    space.arrange([a.id, b.id], tiling: .split(.across, [.init(share: 0.6, node: .window(a.id)),
+                                                         .init(share: 0.4, node: .window(b.id))]))
+    space.select(a)
+    space.openMenu(.sessions, fromIcon: true)
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: 1))
+    // a's row has no room for a third window: the overview puts the new one under a.
+    space.newTab()
+    let c = try XCTUnwrap(space.tabs.first { $0 !== a && $0 !== b })
+    RunLoop.main.run(until: Date(timeIntervalSinceNow: 1))
+    space.closeMenu()
+    space.close(a)
+
+    XCTAssertEqual(space.tiling, .split(.across, [.init(share: 0.6, node: .window(c.id)), .init(share: 0.4, node: .window(b.id))]))
+  }
 }

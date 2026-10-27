@@ -75,18 +75,20 @@ private struct Arrangement {
     Tiling.dropping(id, drop, in: tree, others: others, area: area, chipWidth: chipWidth)
   }
 
-  /// The window or chip at `point`.
-  func item(at point: CGPoint) -> UUID? {
-    layout.frames.first { $0.value.contains(point) }?.key ?? layout.chips.first { $0.value.contains(point) }?.key
+  /// The window at `point`.
+  func window(at point: CGPoint) -> UUID? {
+    layout.frames.first { $0.value.contains(point) }?.key
   }
 }
 
 /// Every open session as a window tiling the panel, in swipe order: this
-/// window's sessions, then other windows' as chips. Until the user shapes
-/// it the tiling is even. Dragging a border resizes the windows beside it;
-/// double-tapping one evens everything out. A long press lifts a window or
-/// chip: let go on another window's edge it takes that side, on its middle
-/// the two swap, and a window let go on the shelf parks there; released
+/// window's sessions, then other windows' as chips on a shelf under the
+/// windows, which scrolls when its rows outgrow their room. Until the user
+/// shapes it the tiling is even. Dragging a border resizes the windows
+/// beside it; double-tapping one evens everything out. A long press lifts a
+/// window or chip: let go on another window's edge it takes that side, on its
+/// middle the two swap, and a window let go on the shelf parks there (with no
+/// shelf yet, on the empty slot that shows at the board's foot); released
 /// where it lifted, it offers its actions. A tap enters the session.
 struct SessionsOverview: View {
   let model: MenuModel
@@ -94,6 +96,7 @@ struct SessionsOverview: View {
   @State private var resize: Resize?
   /// The window just dropped: it shows where the preview showed it, not flying from its old place.
   @State private var landing: UUID?
+  @State private var space = BoardSpace()
 
   private static let inset = EdgeInsets(top: Chrome.Space.xs, leading: Chrome.Space.m, bottom: Chrome.Space.m,
                                         trailing: Chrome.Space.m)
@@ -105,6 +108,8 @@ struct SessionsOverview: View {
   private static let swapInset: CGFloat = 0.18
   /// Any other drop's preview sits this far inside where the session lands.
   private static let previewInset: CGFloat = 6
+  /// VoiceOver's Wider, Narrower, Taller and Shorter move a border by this fraction of the board.
+  private static let voiceOverStep: CGFloat = 0.1
 
   private struct Lift {
     let id: UUID
@@ -143,8 +148,26 @@ struct SessionsOverview: View {
     GeometryReader { geo in
       let board = arrangement(entries, chipWidth: { widths[$0] ?? 0 }, in: geo.size)
       ZStack(alignment: .topLeading) {
-        ForEach(entries) { entry in
-          item(entry, on: board)
+        ZStack(alignment: .topLeading) {
+          ForEach(entries) { entry in
+            window(entry, on: board)
+          }
+        }
+        .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        .overlay {
+          TilingTouches(space: space, isBoard: true, item: board.window(at:),
+                        border: { Tiling.border(at: $0, in: board.layout.borders) }, frame: { board.layout.frames[$0] },
+                        menu: { menu(for: $0, on: board) }, onEvent: { handle($0, on: board) })
+        }
+        if let rect = board.layout.shelfRect {
+          shelf(entries, on: board, in: rect)
+        }
+        if let lift, board.layout.shelfRect == nil, let slot = parkZone(for: lift.id, on: board), lift.target?.rect != slot {
+          ParkSlot()
+            .frame(width: slot.width, height: slot.height)
+            .position(x: slot.midX, y: slot.midY)
+            .transition(.opacity)
+            .allowsHitTesting(false)
         }
         if let target = lift?.target {
           DropPreview(label: target.label)
@@ -152,6 +175,7 @@ struct SessionsOverview: View {
             .position(x: target.rect.midX, y: target.rect.midY)
             .transition(.opacity.combined(with: .scale(scale: 0.97)))
             .zIndex(1)
+            .allowsHitTesting(false)
         }
         if let lift, let entry = board.entry(lift.id) {
           let width = widths[lift.id] ?? 0
@@ -162,26 +186,14 @@ struct SessionsOverview: View {
             .position(Self.chipCentre(finger: lift.finger, width: width, in: board.area))
             .transition(.scale(scale: 0.8).combined(with: .opacity))
             .zIndex(2)
+            .allowsHitTesting(false)
         }
         if let resize {
           handle(resize, on: board)
+            .allowsHitTesting(false)
         }
       }
       .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
-      .overlay {
-        TilingTouches(
-          item: board.item(at:),
-          border: { Tiling.border(at: $0, in: board.layout.borders) },
-          frame: { board.layout.place(of: $0) },
-          menu: { id in
-            guard let entry = board.entry(id) else { return [] }
-            return actions(for: entry).map { action in
-              UIAction(title: action.title, image: UIImage(systemName: action.symbol),
-                       attributes: action.destructive ? .destructive : []) { _ in action.run() }
-            }
-          },
-          onEvent: { handle($0, on: board) })
-      }
       .animation(Chrome.spring, value: geo.size)
       .animation(Chrome.spring, value: board.tree?.windows ?? [])
       .animation(Chrome.spring, value: board.layout.shelf)
@@ -196,12 +208,22 @@ struct SessionsOverview: View {
         }
         resize = nil
       }
+      .onChange(of: board.shaped, initial: true) { keep(board) }
+      .onChange(of: model.isOpen) { keep(board) }
     }
     .onChange(of: model.isOpen) { _, open in
       guard !open else { return }
       lift = nil
       resize = nil
     }
+  }
+
+  /// The window keeps the tiling as shown: a session that arrived keeps the
+  /// window it was given here, and later moves and closes start from it.
+  private func keep(_ board: Arrangement) {
+    guard model.isOpen, board.area.width > 0, board.area.height > 0, let space = model.space,
+          board.shaped != space.tiling else { return }
+    space.tiling = board.shaped
   }
 
   /// Every window's tabs, this window's first.
@@ -230,28 +252,59 @@ struct SessionsOverview: View {
                        tree: tree, layout: Tiling.layout(tree, others: others, in: area, chipWidth: chipWidth))
   }
 
-  /// `entry` as its window, else its chip.
+  /// `entry` as its window, when it has one.
   @ViewBuilder
-  private func item(_ entry: OverviewEntry, on board: Arrangement) -> some View {
-    let dim = lift?.id == entry.id ? Self.liftedOpacity : 1
+  private func window(_ entry: OverviewEntry, on board: Arrangement) -> some View {
     let lands = landing == entry.id
     if let frame = board.layout.frames[entry.id] {
       TileWindow(model: model, entry: entry, size: resize?.sizes[entry.id] ?? frame.size)
         .frame(width: frame.width, height: frame.height)
         .position(x: frame.midX, y: frame.midY)
         .transaction { if lands { $0.animation = nil } }
-        .opacity(dim)
+        .opacity(lift?.id == entry.id ? Self.liftedOpacity : 1)
         .transition(.scale(scale: 0.9).combined(with: .opacity))
         .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab) },
-                                       actions: actions(for: entry) + moves(for: entry)))
-    } else if let frame = board.layout.chips[entry.id] {
-      TileChip(entry: entry)
-        .frame(width: frame.width, height: frame.height)
-        .opacity(dim)
-        .position(x: frame.midX, y: frame.midY)
-        .transition(.opacity)
-        .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab, fromTile: false) },
-                                       actions: actions(for: entry) + moves(for: entry)))
+                                       actions: actions(for: entry) + arranging(entry, on: board)))
+    }
+  }
+
+  /// The shelf: its chips in rows that scroll when they outgrow `rect`.
+  private func shelf(_ entries: [OverviewEntry], on board: Arrangement, in rect: CGRect) -> some View {
+    // Where the chips sit in the scrolling rows.
+    let chips = board.layout.chips.mapValues { $0.offsetBy(dx: -rect.minX, dy: -rect.minY) }
+    return ScrollView(.vertical) {
+      ZStack(alignment: .topLeading) {
+        ForEach(entries) { entry in
+          if let frame = chips[entry.id] {
+            TileChip(entry: entry)
+              .frame(width: frame.width, height: frame.height)
+              .opacity(lift?.id == entry.id ? Self.liftedOpacity : 1)
+              .position(x: frame.midX, y: frame.midY)
+              .transition(.opacity)
+              .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab, fromTile: false) },
+                                             actions: actions(for: entry) + moves(for: entry)))
+          }
+        }
+      }
+      .frame(width: rect.width, height: board.layout.shelfLength, alignment: .topLeading)
+      .overlay {
+        TilingTouches(space: space, isBoard: false, item: { point in chips.first { $0.value.contains(point) }?.key },
+                      border: { _ in nil }, frame: { chips[$0] }, menu: { menu(for: $0, on: board) },
+                      onEvent: { handle($0, on: board) })
+      }
+    }
+    .scrollBounceBehavior(.basedOnSize)
+    .scrollIndicatorsFlash(onAppear: true)
+    .frame(width: rect.width, height: rect.height)
+    .position(x: rect.midX, y: rect.midY)
+  }
+
+  /// The hold menu of `id`'s window or chip.
+  private func menu(for id: UUID, on board: Arrangement) -> [UIMenuElement] {
+    guard let entry = board.entry(id) else { return [] }
+    return actions(for: entry).map { action in
+      UIAction(title: action.title, image: UIImage(systemName: action.symbol),
+               attributes: action.destructive ? .destructive : []) { _ in action.run() }
     }
   }
 
@@ -313,17 +366,67 @@ struct SessionsOverview: View {
     return moves
   }
 
-  /// What letting `id` go at `point` does: a window over the shelf parks;
-  /// over another window's middle the two swap (only the order changes while
-  /// the tiling is even); over its edge, it takes that side. nil where
-  /// nothing would change.
+  /// VoiceOver's way to do what a window's drags do: reorder, resize (a
+  /// border moves by `voiceOverStep` of the board), park on the shelf, and
+  /// even every split out. Each shows only where it changes something.
+  private func arranging(_ entry: OverviewEntry, on board: Arrangement) -> [WindowAction] {
+    var actions = moves(for: entry)
+    guard let tree = board.tree, board.layout.frames[entry.id] != nil else { return actions }
+    let resizes: [(title: String, symbol: String, axis: Tiling.Axis, sign: CGFloat)] = [
+      ("Wider", "arrow.left.and.right", .across, 1), ("Narrower", "arrow.right.and.line.vertical.and.arrow.left", .across, -1),
+      ("Taller", "arrow.up.and.down", .down, 1), ("Shorter", "arrow.down.and.line.horizontal.and.arrow.up", .down, -1),
+    ]
+    for resize in resizes {
+      let step = (resize.axis == .across ? board.area.width : board.area.height) * Self.voiceOverStep * resize.sign
+      guard let resized = Tiling.resizing(tree, window: entry.id, along: resize.axis, by: step, in: board.layout) else { continue }
+      actions.append(WindowAction(title: resize.title, symbol: resize.symbol) {
+        withAnimation(Chrome.spring) { model.space?.arrange(resized.windows, tiling: resized) }
+      })
+    }
+    if parkZone(for: entry.id, on: board) != nil, let parked = Tiling.parking(entry.id, in: tree) {
+      actions.append(WindowAction(title: "Move to Shelf", symbol: "tray.and.arrow.down") {
+        withAnimation(Chrome.spring) { model.space?.arrange(parked.windows, tiling: parked) }
+      })
+    }
+    if let shaped = board.shaped {
+      let even = Tiling.evenedOut(shaped, others: board.others, in: board.area, chipWidth: board.chipWidth)
+      if even != shaped {
+        actions.append(WindowAction(title: "Even Out", symbol: "square.grid.2x2") {
+          withAnimation(Chrome.spring) { model.space?.arrange(shaped.windows, tiling: even) }
+        })
+      }
+    }
+    return actions
+  }
+
+  /// Where a lifted window parks: the shelf, or with none yet, the slot at
+  /// the board's foot where its chip will sit. nil for a chip, and for the
+  /// only window.
+  private func parkZone(for id: UUID, on board: Arrangement) -> CGRect? {
+    let layout = board.layout
+    guard layout.frames[id] != nil, layout.frames.count > 1 else { return nil }
+    if let shelf = layout.shelfRect { return shelf }
+    return CGRect(x: board.area.minX, y: board.area.maxY - Tiling.shelfHeight,
+                  width: min(board.chipWidth(id), board.area.width), height: Tiling.shelfHeight)
+  }
+
+  /// What letting `id` go at `point` does: a window over the shelf (or below
+  /// the windows, or on the empty slot when there is no shelf) parks; over
+  /// another window's middle the two swap (only the order changes while the
+  /// tiling is even); over its edge, it takes that side. nil where nothing
+  /// would change.
   private func dropTarget(for id: UUID, at point: CGPoint, on board: Arrangement) -> DropTarget? {
     guard let tree = board.tree else { return nil }
     let layout = board.layout
-    if let shelf = layout.chips.values.map(\.minY).min(), point.y >= shelf - Tiling.gap {
-      guard layout.frames[id] != nil, layout.frames.count > 1, let parked = Tiling.parking(id, in: tree) else { return nil }
-      let rect = CGRect(x: board.area.minX, y: shelf, width: board.area.width, height: board.area.maxY - shelf)
-      return DropTarget(order: parked.windows, tiling: parked, rect: rect, label: "Shelf")
+    let zone = parkZone(for: id, on: board)
+    let parks = if let shelf = layout.shelfRect {
+      point.y >= shelf.minY - Tiling.gap
+    } else {
+      point.y > board.area.maxY || (zone?.insetBy(dx: -Tiling.gap, dy: -Tiling.gap).contains(point) ?? false)
+    }
+    if parks {
+      guard let zone, let parked = Tiling.parking(id, in: tree) else { return nil }
+      return DropTarget(order: parked.windows, tiling: parked, rect: zone, label: "Shelf")
     }
     guard let drop = Tiling.drop(at: point, lifted: id, frames: layout.frames) else { return nil }
     switch drop {
@@ -650,9 +753,36 @@ private struct DropPreview: View {
   }
 }
 
-/// The overview's touches: one set of recognizers over every window, chip
-/// and border, hit-tested against their frames. Points elsewhere pass through.
+/// The shelf a lifted window can park on before there is one: a dashed chip
+/// outline where its chip will sit.
+private struct ParkSlot: View {
+  var body: some View {
+    Capsule()
+      .fill(Chrome.bg.opacity(0.9))
+      .overlay { Capsule().strokeBorder(Chrome.fg2, style: StrokeStyle(lineWidth: 1, dash: [4, 3])) }
+      .overlay {
+        Text("Shelf")
+          .font(Chrome.font(.caption, .medium))
+          .foregroundStyle(Chrome.fg2)
+          .fixedSize()
+      }
+  }
+}
+
+/// The board's touch view, in whose coordinates every touch view reports
+/// points: the shelf's, which scrolls, too.
+@MainActor
+final class BoardSpace {
+  weak var view: UIView?
+}
+
+/// The overview's touches: one set of recognizers over every window and
+/// border (the board's), or over the shelf's chips, hit-tested against their
+/// frames. Points elsewhere pass through.
 private struct TilingTouches: UIViewRepresentable {
+  let space: BoardSpace
+  /// The board's, rather than the shelf's.
+  let isBoard: Bool
   let item: (CGPoint) -> UUID?
   let border: (CGPoint) -> Tiling.Border?
   let frame: (UUID) -> CGRect?
@@ -661,11 +791,13 @@ private struct TilingTouches: UIViewRepresentable {
 
   func makeUIView(context: Context) -> TilingTouchView {
     let view = TilingTouchView()
+    if isBoard { space.view = view }
     updateUIView(view, context: context)
     return view
   }
 
   func updateUIView(_ view: TilingTouchView, context: Context) {
+    view.space = space
     view.item = item
     view.border = border
     view.frameOfItem = frame
@@ -692,6 +824,9 @@ final class TilingTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
     case evenOut
   }
 
+  /// Hit-testing and the edit menu use the view's own coordinates; events
+  /// carry points in the board's.
+  var space: BoardSpace?
   var item: (CGPoint) -> UUID? = { _ in nil }
   var border: (CGPoint) -> Tiling.Border? = { _ in nil }
   var frameOfItem: (UUID) -> CGRect? = { _ in nil }
@@ -757,10 +892,10 @@ final class TilingTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
   }
 
   @objc private func pressed(_ g: UILongPressGestureRecognizer) {
-    let point = g.location(in: self)
+    let point = g.location(in: space?.view ?? self)
     switch g.state {
     case .began:
-      guard let id = item(point) else { return }
+      guard let id = item(g.location(in: self)) else { return }
       pressed = (id, point, false)
       Haptics.firm()
       onEvent(.lift(id, point))

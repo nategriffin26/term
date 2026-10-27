@@ -281,6 +281,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     guard let index = tabs.firstIndex(where: { $0 === tab }) else { return }
     tab.disconnect()
     tabs.remove(at: index)
+    // The closed session's split shares its room; the tiling is even again when one session is left.
+    tiling = tiling?.removing(tab.id).flatMap { $0.windows.count > 1 ? $0 : nil }
     if let pane = panes.first(where: { $0.tab === tab }) {
       let before = tabs[..<min(index, tabs.count)].reversed()
       let after = tabs[min(index, tabs.count)...]
@@ -297,18 +299,27 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   }
 
   /// Puts `tab` at `index` of the swipe order (a drop on the overview); the
-  /// panes keep the tabs they show.
+  /// panes keep the tabs they show, and the tiling's windows take the
+  /// sessions in the new order.
   func move(_ tab: Tab, to index: Int) {
     guard let from = tabs.firstIndex(where: { $0 === tab }) else { return }
     let to = min(max(index, 0), tabs.count - 1)
     guard to != from else { return }
     tabs.insert(tabs.remove(at: from), at: to)
+    if let tiling {
+      let tiled = Set(tiling.windows)
+      self.tiling = tiling.relabeled(tabs.map(\.id).filter(tiled.contains))
+    }
     SessionRegistry.shared.setTabs(tabs, forScene: sceneID)
     Self.tabsChanged()
   }
 
-  /// The Sessions tiling of this window as the user shaped it; nil while it is even.
-  var tiling: SplitTree<UUID>? { SessionRegistry.shared.tiling(forScene: sceneID) }
+  /// The Sessions tiling of this window as the user shaped it, in the tabs'
+  /// order; nil while it is even.
+  var tiling: SplitTree<UUID>? {
+    get { SessionRegistry.shared.tiling(forScene: sceneID) }
+    set { SessionRegistry.shared.setTiling(newValue, forScene: sceneID) }
+  }
 
   /// A drop, border drag or evening out on the overview: the tabs take
   /// `order` (the tiling's reading order; tabs it lacks keep theirs after
@@ -317,7 +328,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let placed = order.compactMap { id in tabs.first { $0.id == id } }
     tabs = placed + tabs.filter { tab in !placed.contains { $0 === tab } }
     SessionRegistry.shared.setTabs(tabs, forScene: sceneID)
-    SessionRegistry.shared.setTiling(tiling, forScene: sceneID)
+    self.tiling = tiling
     Self.tabsChanged()
   }
 

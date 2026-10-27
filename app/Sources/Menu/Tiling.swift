@@ -79,41 +79,64 @@ enum Tiling {
     var frames: [ID: CGRect] = [:]
     /// Sessions without a window, in swipe order.
     var shelf: [ID] = []
-    /// Where each shelved session's chip sits.
+    /// Where each shelved session's chip sits with the shelf scrolled to its top.
     var chips: [ID: CGRect] = [:]
+    /// The part of the panel that shows the shelf; nil when it has no chips.
+    var shelfRect: CGRect?
     var borders: [Border] = []
 
     /// Where `id` shows: its window, else its chip.
     func place(of id: ID) -> CGRect? { frames[id] ?? chips[id] }
+
+    /// The height of the shelf's rows: what scrolls through `shelfRect`.
+    var shelfLength: CGFloat {
+      guard let shelfRect, let bottom = chips.values.map(\.maxY).max() else { return 0 }
+      return bottom - shelfRect.minY
+    }
   }
 
   // MARK: Layout
 
+  /// Chips on the shelf: where each sits with the shelf scrolled to its top,
+  /// and the part of the panel showing them (nil with none).
+  struct Shelf<ID: Hashable> {
+    var chips: [ID: CGRect] = [:]
+    var rect: CGRect?
+
+    /// What `area` keeps for windows above it and a gap.
+    func room(in area: CGRect) -> CGRect {
+      guard let rect else { return area }
+      return CGRect(x: area.minX, y: area.minY, width: area.width, height: max(0, rect.minY - area.minY - gap))
+    }
+  }
+
   /// Where `tree`'s windows go in `area`, with `others` (sessions of other
   /// windows) as chips after its shelf. Windows parked with no share start on
-  /// the shelf; then, while any window is smaller than `minTile`, the last
-  /// such window in reading order joins them and the rest re-share its room.
-  /// The shelf takes its rows of chips (each `chipWidth` wide) and a gap off
-  /// the bottom.
+  /// the shelf, which shows as many of its rows as leave every window
+  /// `minTile` (`shelves`); while even one row leaves a window smaller, the
+  /// last such window in reading order joins the shelf and the rest re-share
+  /// its room. With no window left, the shelf shows as many rows as `area`
+  /// holds.
   static func layout<ID: Hashable & Codable>(_ tree: SplitTree<ID>?, others: [ID] = [], in area: CGRect,
                                    chipWidth: (ID) -> CGFloat) -> Layout<ID> {
     let order = tree?.windows ?? []
     var hidden = tree?.parked ?? []
     while true {
-      let shelf = order.filter(hidden.contains) + others
-      let chips = self.chips(shelf, in: area, chipWidth: chipWidth)
+      let shelved = order.filter(hidden.contains) + others
       guard let tree, hidden.count < order.count else {
-        return Layout(shelf: shelf, chips: chips.frames)
+        let shelf = self.shelf(shelved, in: area, chipWidth: chipWidth)
+        return Layout(shelf: shelved, chips: shelf.chips, shelfRect: shelf.rect)
       }
-      let rect = shelf.isEmpty ? area
-        : CGRect(x: area.minX, y: area.minY, width: area.width, height: max(0, chips.top - area.minY - gap))
-      var frames: [ID: CGRect] = [:]
-      var borders: [Border] = []
-      place(tree, in: rect, path: [], hidden: hidden, frames: &frames, borders: &borders)
-      guard let small = order.last(where: { frames[$0].map(isTooSmall) ?? false }) else {
-        return Layout(frames: frames, shelf: shelf, chips: chips.frames, borders: borders)
+      let shelves = self.shelves(shelved, in: area, chipWidth: chipWidth)
+      for (i, shelf) in shelves.enumerated() {
+        var frames: [ID: CGRect] = [:]
+        var borders: [Border] = []
+        place(tree, in: shelf.room(in: area), path: [], hidden: hidden, frames: &frames, borders: &borders)
+        guard let small = order.last(where: { frames[$0].map(isTooSmall) ?? false }) else {
+          return Layout(frames: frames, shelf: shelved, chips: shelf.chips, shelfRect: shelf.rect, borders: borders)
+        }
+        if i == shelves.count - 1 { hidden.insert(small) }
       }
-      hidden.insert(small)
     }
   }
 
@@ -158,7 +181,10 @@ enum Tiling {
     }
   }
 
-  /// The least room `node`'s shown windows need along `axis`.
+  /// The least room `node`'s shown windows need along `axis`. A split along
+  /// `axis` keeps its parts' proportions while a border outside it moves, so
+  /// it needs the length at which its tightest part gets its own least room,
+  /// plus its gaps.
   private static func minExtent<ID: Hashable & Codable>(_ node: SplitTree<ID>, along axis: Axis, hidden: Set<ID>) -> CGFloat {
     switch node {
     case .window(let id):
@@ -166,57 +192,88 @@ enum Tiling {
     case .split(let splitAxis, let parts):
       let shown = parts.filter { $0.node.windows.contains { !hidden.contains($0) } }
       let extents = shown.map { minExtent($0.node, along: axis, hidden: hidden) }
-      return splitAxis == axis ? extents.reduce(0, +) + gap * CGFloat(max(0, shown.count - 1)) : extents.max() ?? 0
+      guard splitAxis == axis else { return extents.max() ?? 0 }
+      // Shares as `place` reads them: of the shown parts only.
+      let total = shown.reduce(0) { $0 + $1.share }
+      let length = zip(shown, extents).map { part, extent in
+        let share = total > 0 ? part.share / total : 1 / CGFloat(shown.count)
+        return share > 0 ? extent / share : .infinity
+      }.max() ?? 0
+      return length + gap * CGFloat(max(0, shown.count - 1))
     }
   }
 
-  /// `ids`' chips left to right, wrapping into rows that sit at the bottom of
-  /// `area` (from its top when they need more than its height); `top` is the
-  /// first row's top.
-  static func chips<ID: Hashable>(_ ids: [ID], in area: CGRect, chipWidth: (ID) -> CGFloat)
-    -> (frames: [ID: CGRect], top: CGFloat) {
-    guard !ids.isEmpty else { return ([:], area.maxY) }
-    var rows: [[(id: ID, width: CGFloat)]] = [[]]
+  /// The shelves `ids` can make under windows in `area`, the most rows
+  /// showing first: from as many as leave a row of windows above them down
+  /// to one; rows past those showing scroll. The empty shelf when there are
+  /// no ids.
+  static func shelves<ID: Hashable>(_ ids: [ID], in area: CGRect, chipWidth: (ID) -> CGFloat) -> [Shelf<ID>] {
+    let rows = chipRows(ids, in: area, chipWidth: chipWidth)
+    guard !rows.isEmpty else { return [Shelf()] }
+    let most = min(rows.count, max(1, rowsFitting(area.height - minTile.height - gap)))
+    return stride(from: most, through: 1, by: -1).map { shelf(rows, showing: $0, in: area) }
+  }
+
+  /// The shelf when no window shows: as many rows as `area` holds.
+  static func shelf<ID: Hashable>(_ ids: [ID], in area: CGRect, chipWidth: (ID) -> CGFloat) -> Shelf<ID> {
+    let rows = chipRows(ids, in: area, chipWidth: chipWidth)
+    guard !rows.isEmpty else { return Shelf() }
+    return shelf(rows, showing: min(rows.count, max(1, rowsFitting(area.height))), in: area)
+  }
+
+  /// `ids`' chips left to right, each `chipWidth` wide (at most `area`'s
+  /// width), in rows as wide as `area`.
+  private static func chipRows<ID>(_ ids: [ID], in area: CGRect, chipWidth: (ID) -> CGFloat) -> [[(id: ID, width: CGFloat)]] {
+    var rows: [[(id: ID, width: CGFloat)]] = []
     var used: CGFloat = 0
     for id in ids {
       let width = min(chipWidth(id), area.width)
-      if !rows[rows.count - 1].isEmpty, used + gap + width > area.width {
-        rows.append([])
-        used = 0
+      if !rows.isEmpty, used + gap + width <= area.width {
+        rows[rows.count - 1].append((id, width))
+        used += gap + width
+      } else {
+        rows.append([(id, width)])
+        used = width
       }
-      used += (rows[rows.count - 1].isEmpty ? 0 : gap) + width
-      rows[rows.count - 1].append((id, width))
     }
-    let height = CGFloat(rows.count) * shelfHeight + CGFloat(rows.count - 1) * gap
-    let top = max(area.minY, area.maxY - height)
-    var frames: [ID: CGRect] = [:]
+    return rows
+  }
+
+  private static func rowsFitting(_ height: CGFloat) -> Int {
+    max(0, Int(((height + gap) / (shelfHeight + gap)).rounded(.down)))
+  }
+
+  /// `rows` at `area`'s foot, `shown` of them in view.
+  private static func shelf<ID: Hashable>(_ rows: [[(id: ID, width: CGFloat)]], showing shown: Int, in area: CGRect) -> Shelf<ID> {
+    let height = min(CGFloat(shown) * shelfHeight + CGFloat(shown - 1) * gap, area.height)
+    let rect = CGRect(x: area.minX, y: area.maxY - height, width: area.width, height: height)
+    var chips: [ID: CGRect] = [:]
     for (r, row) in rows.enumerated() {
       var x = area.minX
-      let y = top + CGFloat(r) * (shelfHeight + gap)
       for chip in row {
-        frames[chip.id] = CGRect(x: x, y: y, width: chip.width, height: shelfHeight)
+        chips[chip.id] = CGRect(x: x, y: rect.minY + CGFloat(r) * (shelfHeight + gap), width: chip.width, height: shelfHeight)
         x += chip.width + gap
       }
     }
-    return (frames, top)
+    return Shelf(chips: chips, rect: rect)
   }
 
   // MARK: The even tiling
 
   /// The tiling while the user has not shaped one: as many of `order` as fit
-  /// in an even grid (`evenRows`), the rest parked on the shelf. Parked
-  /// sessions sit at the end of the last row with no share, so the tree
-  /// shows exactly this when the user starts shaping it.
+  /// in an even grid (`evenRows`) above the shelf, the rest parked on it,
+  /// which gives up rows of chips before windows. Parked sessions sit at the
+  /// end of the last row with no share, so the tree shows exactly this when
+  /// the user starts shaping it.
   static func evenTree<ID: Hashable & Codable>(_ order: [ID], others: [ID] = [], in area: CGRect,
                                      chipWidth: (ID) -> CGFloat) -> SplitTree<ID>? {
     guard !order.isEmpty else { return nil }
     for count in stride(from: order.count, through: 1, by: -1) {
       let parked = Array(order[count...])
-      let shelf = parked + others
-      let top = shelf.isEmpty ? area.maxY + gap : chips(shelf, in: area, chipWidth: chipWidth).top
-      let rect = CGRect(x: area.minX, y: area.minY, width: area.width, height: max(0, top - area.minY - gap))
-      if let rows = evenRows(count: count, in: rect) {
-        return grid(Array(order[..<count]), rows: rows, parked: parked)
+      for shelf in shelves(parked + others, in: area, chipWidth: chipWidth) {
+        if let rows = evenRows(count: count, in: shelf.room(in: area)) {
+          return grid(Array(order[..<count]), rows: rows, parked: parked)
+        }
       }
     }
     // Not even one window fits: the layout shelves this one too.
@@ -412,6 +469,32 @@ enum Tiling {
       shares[border.before] = pair * before / (before + after)
       shares[border.after] = pair - shares[border.before]
     }
+  }
+
+  /// `tree` with `id`'s window `delta` points longer along `axis` (shorter
+  /// when negative), as VoiceOver's Wider, Narrower, Taller and Shorter do:
+  /// the border after the window moves when it can, else the one before it,
+  /// each within its range. nil when neither moves.
+  static func resizing<ID: Hashable & Codable>(_ tree: SplitTree<ID>, window id: ID, along axis: Axis, by delta: CGFloat,
+                                               in layout: Layout<ID>) -> SplitTree<ID>? {
+    guard let frame = layout.frames[id] else { return nil }
+    let across = axis == .across
+    func lead(_ r: CGRect) -> CGFloat { across ? r.minX : r.minY }
+    func trail(_ r: CGRect) -> CGFloat { across ? r.maxX : r.maxY }
+    // This axis's borders whose gaps run along the window's whole side.
+    let sides = layout.borders.filter { border in
+      border.axis == axis && (across ? border.rect.minY <= frame.minY + 0.5 && border.rect.maxY >= frame.maxY - 0.5
+                                     : border.rect.minX <= frame.minX + 0.5 && border.rect.maxX >= frame.maxX - 0.5)
+    }
+    let after = sides.first { abs(lead($0.rect) - trail(frame)) < 0.5 }
+    let before = sides.first { abs(trail($0.rect) - lead(frame)) < 0.5 }
+    for border in [after, before].compactMap({ $0 }) where border.lower <= border.upper {
+      // A border sits where the part before it ends.
+      let current = lead(border.rect)
+      let moved = min(max(border == after ? current + delta : current - delta, border.lower), border.upper)
+      if abs(moved - current) >= 0.5 { return resizing(tree, at: border, to: moved) }
+    }
+    return nil
   }
 }
 

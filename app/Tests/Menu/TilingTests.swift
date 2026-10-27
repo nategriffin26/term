@@ -75,17 +75,19 @@ final class TilingTests: XCTestCase {
                                   "e": CGRect(x: 136, y: 128, width: 60, height: 36)])
   }
 
-  // Bug: chips running off the panel's edge, or a second row of chips drawn over the windows.
+  // Bug: chips running off the panel's edge, or a row of chips drawn over the windows.
   func testChipsWrapIntoRowsThatTakeTheirHeightFromTheWindows() {
     let area = CGRect(x: 0, y: 0, width: 232, height: 250)
     // Chips 60 wide share one row: four windows still fit above it.
     XCTAssertEqual(even("abcdefg", area).frames.count, 4)
-    // Two chips 100 wide fill a row: the third wraps, and the rows leave room for two windows.
+    // Two chips 100 wide fill a row: the third wraps. One row in view leaves room for four windows (two rows would
+    // leave two), so the second row scrolls.
     let layout = even("abcdefg", area, chip: 100)
-    XCTAssertEqual(layout.frames, ["a": CGRect(x: 0, y: 0, width: 112, height: 118), "b": CGRect(x: 120, y: 0, width: 112, height: 118)])
-    XCTAssertEqual(layout.chips, ["c": CGRect(x: 0, y: 126, width: 100, height: 36), "d": CGRect(x: 108, y: 126, width: 100, height: 36),
-                                  "e": CGRect(x: 0, y: 170, width: 100, height: 36), "f": CGRect(x: 108, y: 170, width: 100, height: 36),
-                                  "g": CGRect(x: 0, y: 214, width: 100, height: 36)])
+    XCTAssertEqual(layout.frames, ["a": CGRect(x: 0, y: 0, width: 112, height: 99), "b": CGRect(x: 120, y: 0, width: 112, height: 99),
+                                   "c": CGRect(x: 0, y: 107, width: 112, height: 99), "d": CGRect(x: 120, y: 107, width: 112, height: 99)])
+    XCTAssertEqual(layout.shelfRect, CGRect(x: 0, y: 214, width: 232, height: 36))
+    XCTAssertEqual(layout.chips, ["e": CGRect(x: 0, y: 214, width: 100, height: 36), "f": CGRect(x: 108, y: 214, width: 100, height: 36),
+                                  "g": CGRect(x: 0, y: 258, width: 100, height: 36)])
   }
 
   // Bug: sessions vanishing when not even one window fits.
@@ -128,6 +130,45 @@ final class TilingTests: XCTestCase {
                                in: CGRect(x: 0, y: 0, width: 600, height: 400), chipWidth: chips(60))
     XCTAssertEqual(layout.shelf, ["c", "x"])
     XCTAssertEqual(layout.chips["x"], CGRect(x: 68, y: 364, width: 60, height: 36))
+  }
+
+  // Bug: with many sessions (keyboard up, landscape, long names) the shelf's lower rows of chips fell below the panel,
+  // out of reach, or the shelf took the windows' room.
+  func testEveryChipCanBeScrolledIntoTheShelf() throws {
+    let area = CGRect(x: 0, y: 0, width: 360, height: 200)
+    let layout = even("abcdefghijklm", area, chip: 100)
+    // Two rows of chips (80) and a gap leave one row of three windows, 112 tall; ten chips, three to a row.
+    XCTAssertEqual(layout.frames.count, 3)
+    XCTAssertTrue(layout.frames.values.allSatisfy { $0.height == 112 && $0.width >= 112 })
+    let shelf = try XCTUnwrap(layout.shelfRect)
+    XCTAssertEqual(shelf, CGRect(x: 0, y: 120, width: 360, height: 80))
+    XCTAssertEqual(layout.shelfLength, 4 * 36 + 3 * 8)
+    XCTAssertEqual(Set(layout.chips.keys).union(layout.frames.keys).count, 13)
+    for (id, chip) in layout.chips {
+      let reachable = stride(from: 0, through: layout.shelfLength - shelf.height, by: 1).contains { offset in
+        shelf.contains(chip.offsetBy(dx: 0, dy: -offset))
+      }
+      XCTAssertTrue(reachable, "\(id) at \(chip) never scrolls into \(shelf)")
+    }
+  }
+
+  // Bug: with no window on the panel, the shelf kept to two rows and left the rest of the panel empty.
+  func testWithNoWindowsTheShelfTakesThePanel() throws {
+    let area = CGRect(x: 0, y: 0, width: 100, height: 300)
+    let layout = even("abcdefghijklm", area, chip: 100)
+    XCTAssertEqual(layout.frames, [:])
+    XCTAssertEqual(layout.shelfRect, area, "seven rows of chips fill 300 pt")
+    XCTAssertEqual(layout.shelfLength, 13 * 36 + 12 * 8)
+  }
+
+  // Bug: the shelf keeping every row of chips in view while showing fewer of them would make room for more windows.
+  func testTheShelfGivesUpRowsOfChipsBeforeWindows() throws {
+    // Chips 110 wide, two to a row: nine chips make five rows. Two rows in view leave 192 pt, a 2×2 grid of 92;
+    // three or more would leave room for two windows only.
+    let layout = even("abcdefghijklm", CGRect(x: 0, y: 0, width: 345, height: 280), chip: 110)
+    XCTAssertEqual(Set(layout.frames.keys), ["a", "b", "c", "d"])
+    XCTAssertEqual(layout.shelfRect, CGRect(x: 0, y: 200, width: 345, height: 80))
+    XCTAssertEqual(layout.shelfLength, 5 * 36 + 4 * 8)
   }
 
   // MARK: Resizing
@@ -178,6 +219,26 @@ final class TilingTests: XCTestCase {
     XCTAssertEqual(resized.frames["a"]?.width, 400)
     XCTAssertEqual(resized.frames["b"], CGRect(x: 408, y: 0, width: 192, height: 98))
     XCTAssertEqual(resized.frames["c"], CGRect(x: 408, y: 106, width: 192, height: 294))
+  }
+
+  // Bug: a border outside a nested split dragged until a window inside it, kept at its share, went under the floor
+  // (a 25/75 column needs 78 / 0.25 + 8 = 320 pt, not 78 + 8 + 78).
+  func testABorderStopsWhereANestedWindowWouldGoUnderTheFloor() throws {
+    let area = CGRect(x: 0, y: 0, width: 600, height: 800)
+    let tree = down((0.5, w("a")), (0.5, across((0.5, w("b")), (0.5, down((0.5, w("c")), (0.5, w("d")))))))
+    // c and d share 404–800: c ends at 501 for a quarter of the 388 pt.
+    let uneven = Tiling.resizing(tree, at: try border(between: "c", "d", in: layout(tree, area)), to: 501)
+    XCTAssertEqual(layout(uneven, area).frames["c"]?.height, 97)
+    let outer = try border(between: "a", "b", in: layout(uneven, area))
+    func frames(at position: CGFloat) -> [String: CGRect] { layout(Tiling.resizing(uneven, at: outer, to: position), area).frames }
+    // The lower row needs 320 pt: a may end at 800 - 320 - 8 = 472 at most.
+    XCTAssertEqual(frames(at: 471)["a"]?.height, 471)
+    XCTAssertEqual(frames(at: 472)["a"]?.height, 472)
+    let held = frames(at: 800)
+    XCTAssertEqual(held["a"]?.height, 472)
+    XCTAssertEqual(held["c"]?.height, 78)
+    XCTAssertEqual(held.count, 4, "every window stays on the panel")
+    XCTAssertTrue(held.values.allSatisfy { $0.width >= 112 && $0.height >= 78 })
   }
 
   // Bug: a touch just beside a gap missing its border (or one deeper into a window taking it), or the wrong border where two meet.
@@ -233,6 +294,28 @@ final class TilingTests: XCTestCase {
     XCTAssertNil(evenedOut(down((0.5, across((0.7, w("a")), (0.3, w("b")))), (0.5, across((0.5, w("c")), (0.5, w("d")))))))
     XCTAssertEqual(evenedOut(across((0.7, w("a")), (0.3, down((0.2, w("b")), (0.8, w("c")))))),
                    across((0.5, w("a")), (0.5, down((0.5, w("b")), (0.5, w("c"))))))
+  }
+
+  // MARK: VoiceOver
+
+  // Bug: VoiceOver's Wider or Narrower moving the wrong border, none when the window's far side is the panel's edge,
+  // or a window pushed under the floor.
+  func testVoiceOverResizesAWindowByItsBorders() throws {
+    // The row: a 0–195, b 203–398, c 406–600.
+    let shown = layout(row, three)
+    func widths(_ tree: Tree?) -> [CGFloat?] { ["a", "b", "c"].map { layout(tree, three).frames[$0]?.width } }
+    XCTAssertEqual(widths(Tiling.resizing(row, window: "b", along: .across, by: 60, in: shown)), [195, 255, 134],
+                   "b's right border moves")
+    XCTAssertEqual(widths(Tiling.resizing(row, window: "c", along: .across, by: 60, in: shown)), [195, 135, 254],
+                   "c has no border on its right: its left one moves")
+    let narrow = try XCTUnwrap(Tiling.resizing(row, window: "a", along: .across, by: -200, in: shown))
+    XCTAssertEqual(widths(narrow), [112, 278, 194], "a stops at the floor")
+    XCTAssertNil(Tiling.resizing(narrow, window: "a", along: .across, by: -60, in: layout(narrow, three)))
+    XCTAssertNil(Tiling.resizing(row, window: "b", along: .down, by: 60, in: shown), "a row has no border above or below")
+    let column = across((0.5, w("a")), (0.5, down((0.5, w("b")), (0.5, w("c")))))
+    let narrower = layout(Tiling.resizing(column, window: "b", along: .across, by: -50, in: layout(column, three)), three)
+    XCTAssertEqual(narrower.frames["b"]?.width, 246, "the column's border moves, so both windows in it narrow")
+    XCTAssertEqual(narrower.frames["c"]?.width, 246)
   }
 
   // MARK: Dropping
