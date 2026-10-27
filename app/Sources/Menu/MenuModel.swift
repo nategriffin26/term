@@ -34,7 +34,7 @@ enum MenuTab: String, CaseIterable, Identifiable {
 
 /// Pages of the Sessions tab.
 enum SessionsPage: Equatable {
-  case grid
+  case overview
   case new
 }
 
@@ -59,7 +59,7 @@ final class MenuModel {
       onChange?()
     }
   }
-  var sessionsPage = SessionsPage.grid
+  var sessionsPage = SessionsPage.overview
   /// Bumped on every opening; Settings is rebuilt on it, so it starts at its root.
   private(set) var settingsGeneration = 0
   /// A Settings page to open on instead of the root, for this opening only.
@@ -71,7 +71,10 @@ final class MenuModel {
         tmuxTarget = nil
         settingsStart = nil
       }
-      if isOpen, !oldValue { resetPages() }
+      if isOpen, !oldValue {
+        cameFrom = space?.focusedTab?.id
+        resetPages()
+      }
       updateThumbnails()
       updateScreen()
       onChange?()
@@ -79,16 +82,16 @@ final class MenuModel {
   }
   /// Bumped when any window's tabs or their names change.
   var revision = 0
-  /// Width over height of the focused terminal's grid: the overview's tiles
-  /// take its shape, and follow it through rotation, folding and the keyboard.
-  private(set) var aspect: CGFloat = 0.6
+  /// The tab whose terminal is zooming into or out of its tile: the tile
+  /// leaves its screen empty for it.
+  var zooming: UUID?
+  /// The tab focused when the panel opened: the overview draws it largest.
+  private(set) var cameFrom: UUID?
 
   @ObservationIgnored weak var space: SpaceController?
   /// Runs when the open tab or open state changes (the dock follows it).
   @ObservationIgnored var onChange: (() -> Void)?
   @ObservationIgnored let thumbnails = ThumbnailRenderer()
-  /// Thumbnail frames in window coordinates, for the zoom in and out of a tile.
-  @ObservationIgnored var tileFrames: [UUID: CGRect] = [:]
   /// The tmux tab's long-press preview of a session's screen.
   @ObservationIgnored let tmuxPreviews = ThumbnailRenderer()
   /// The host the tmux tab lists first while open (`tmux host` at the prompt).
@@ -106,11 +109,9 @@ final class MenuModel {
 
   init() {
     tab = UserDefaults.standard.string(forKey: Self.lastTabKey).flatMap(MenuTab.init(rawValue:)) ?? .sessions
-    thumbnails.onTick = { [weak self] in self?.updateAspect() }
   }
 
   private func updateThumbnails() {
-    if isOpen { updateAspect() }
     thumbnails.isActive = isOpen && tab == .sessions
     if !isOpen || tab != .tmux { tmuxSelecting = false }
   }
@@ -125,20 +126,9 @@ final class MenuModel {
     var quiet = Transaction()
     quiet.disablesAnimations = true
     withTransaction(quiet) {
-      sessionsPage = .grid
+      sessionsPage = .overview
       settingsGeneration += 1
     }
-  }
-
-  /// The terminal resizes its session a moment after layout, so the
-  /// thumbnails' tick keeps checking while the overview shows.
-  private func updateAspect() {
-    guard let view = space?.focusedTab?.view else { return }
-    let cell = view.cellSizePoints
-    let (cols, rows) = view.gridSize
-    guard cols > 0, rows > 0 else { return }
-    let shape = min(max(CGFloat(cols) * cell.width / (CGFloat(rows) * cell.height), 0.45), 2.2)
-    if abs(shape - aspect) > 0.005 { aspect = shape }
   }
 
   /// This window's sessions first, then other open windows'.

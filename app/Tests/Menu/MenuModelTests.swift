@@ -4,13 +4,13 @@ import XCTest
 @MainActor
 final class MenuModelTests: XCTestCase {
   // Bug: after picking a host on the Sessions "New" page, reopening the menu showed that page, not the grid.
-  func testReopeningShowsTheSessionsGrid() {
+  func testReopeningShowsTheSessionsOverview() {
     let menu = MenuModel()
     menu.isOpen = true
     menu.sessionsPage = .new
     menu.isOpen = false
     menu.isOpen = true
-    XCTAssertEqual(menu.sessionsPage, .grid)
+    XCTAssertEqual(menu.sessionsPage, .overview)
   }
 
   // Bug: a Settings sub-screen left open stayed open on reopen (Settings rebuilds when this changes).

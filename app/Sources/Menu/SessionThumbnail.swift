@@ -2,26 +2,34 @@ import Metal
 import QuartzCore
 import UIKit
 
-/// Draws every overview thumbnail with one Renderer at one small font, so
-/// thumbnails are the terminal's own rendering, glyphs rasterized at the size
-/// they show at instead of a scaled-down screen.
+/// Draws overview thumbnails with the terminal's own Renderer, glyphs
+/// rasterized at the size they show at instead of a scaled-down screen.
+/// Thumbnails of one size share a font and its Renderer.
 @MainActor
 final class ThumbnailRenderer {
-  private var renderer: Renderer?
+  private var renderers: [RendererKey: Renderer] = [:]
   private var views: [ObjectIdentifier: Weak] = [:]
   private var link: CADisplayLink?
-  private var fontCache: (key: FontKey, fonts: FontSet)?
+  private var fontCache: [FontKey: FontSet] = [:]
 
   private struct Weak { weak var view: SessionThumbnailView? }
-  private struct FontKey: Equatable {
+  private struct FontKey: Hashable {
     var family: String
     var cellWidth: Int
     var scale: CGFloat
     var minimum: CGFloat
   }
+  private struct RendererKey: Hashable {
+    var family: String
+    var pointSize: CGFloat
+    var scale: CGFloat
 
-  /// Runs on every refresh tick, before the thumbnails draw.
-  var onTick: (() -> Void)?
+    init(_ fonts: FontSet) {
+      family = fonts.family
+      pointSize = fonts.pointSize
+      scale = fonts.scale
+    }
+  }
 
   /// Thumbnails refresh only while the overview is on screen.
   var isActive = false {
@@ -47,7 +55,7 @@ final class ThumbnailRenderer {
   /// below), in the terminal's family, never under `minimum` points.
   func fonts(cellWidth: Int, scale: CGFloat, family: String, minimum: CGFloat = legiblePointSize) -> FontSet {
     let key = FontKey(family: family, cellWidth: max(cellWidth, 1), scale: scale, minimum: minimum)
-    if let cached = fontCache, cached.key == key { return cached.fonts }
+    if let cached = fontCache[key] { return cached }
     let reference = FontSet(family: family, pointSize: 10, scale: scale)
     var size = max(10 * CGFloat(key.cellWidth) / CGFloat(reference.metrics.width), minimum)
     var fonts = FontSet(family: family, pointSize: size, scale: scale)
@@ -56,19 +64,20 @@ final class ThumbnailRenderer {
       size = max(size - 0.1, minimum)
       fonts = FontSet(family: family, pointSize: size, scale: scale)
     }
-    fontCache = (key, fonts)
+    fontCache[key] = fonts
     return fonts
   }
 
+  /// The thumbnail on screen drawing `session`, if any.
+  func view(showing session: Session) -> SessionThumbnailView? {
+    views.values.lazy.compactMap(\.view).first { $0.window != nil && $0.source() === session }
+  }
+
   fileprivate func renderer(for fonts: FontSet) -> Renderer? {
-    if let renderer {
-      let f = renderer.fonts
-      if f !== fonts, f.family != fonts.family || f.pointSize != fonts.pointSize || f.scale != fonts.scale {
-        renderer.setFonts(fonts)
-      }
-      return renderer
-    }
-    renderer = Renderer(fonts: fonts)
+    let key = RendererKey(fonts)
+    if let renderer = renderers[key] { return renderer }
+    let renderer = Renderer(fonts: fonts)
+    renderers[key] = renderer
     return renderer
   }
 
@@ -86,9 +95,11 @@ final class ThumbnailRenderer {
   }
 
   fileprivate func tick() {
-    onTick?()
     views = views.filter { $0.value.view != nil }
     for entry in views.values { entry.view?.refresh(with: self) }
+    // Sizes no thumbnail shows any more give back their glyph atlases.
+    let shown = Set(views.values.compactMap { $0.view?.fonts.map(RendererKey.init) })
+    if renderers.count > shown.count { renderers = renderers.filter { shown.contains($0.key) } }
   }
 }
 
@@ -109,10 +120,12 @@ final class SessionThumbnailView: UIView {
   /// Default margin around the miniature, so a tile's rounded corners clip no text.
   static let inset: CGFloat = 5
   let inset: CGFloat
-  /// Set by the overview; all thumbnails share one size.
+  /// Set by the thumbnail's tile, from its size.
   var fonts: FontSet? {
     didSet { if fonts !== oldValue { needsDraw = true; refreshSoon() } }
   }
+  /// Where the last drawing put the grid.
+  private(set) var grid: ThumbnailGrid?
 
   private var snapshot = FrameSnapshot()
   private var generation: UInt64 = .max
@@ -173,6 +186,13 @@ final class SessionThumbnailView: UIView {
     refresh(with: owner)
   }
 
+  /// Where the grid is drawn now, after any pending redraw: the terminal
+  /// zooming into this thumbnail lands its cells on these.
+  func currentGrid() -> ThumbnailGrid? {
+    refreshSoon()
+    return grid
+  }
+
   fileprivate func refresh(with owner: ThumbnailRenderer) {
     guard let current = source() else { return }
     if current !== session {
@@ -201,9 +221,20 @@ final class SessionThumbnailView: UIView {
     let placement = Renderer.Placement(
       viewport: SIMD2(Float(size.width), Float(size.height)),
       origin: SIMD2(Float(pad - firstCol * cell.width), Float(pad - firstRow * cell.height)))
+    let scale = metalLayer.contentsScale
+    grid = ThumbnailGrid(origin: CGPoint(x: CGFloat(pad - firstCol * cell.width) / scale, y: CGFloat(pad - firstRow * cell.height) / scale),
+                         cell: CGSize(width: CGFloat(cell.width) / scale, height: CGFloat(cell.height) / scale))
     guard let drawable = metalLayer.nextDrawable(),
           let cb = renderer.encode(into: drawable.texture, placement: placement) else { return }
     cb.present(drawable)
     cb.commit()
   }
+}
+
+/// Where a thumbnail draws its session's grid, in the thumbnail's points:
+/// the top-left corner of cell (0, 0), which may lie outside the thumbnail
+/// when it shows the rows and columns around the cursor, and one cell's size.
+struct ThumbnailGrid {
+  var origin: CGPoint
+  var cell: CGSize
 }

@@ -33,26 +33,6 @@ enum MenuLayout {
     return area.insetBy(dx: margin, dy: margin)
   }
 
-  /// The overview's grid for `count` tiles (sessions and +) in `area`: the
-  /// biggest tiles that all fit without scrolling, like Mission Control;
-  /// when even the most columns of `minTileWidth` don't fit, those columns
-  /// and the grid scrolls. `label` is the name and host under each tile.
-  static func overviewGrid(count: Int, area: CGSize, aspect: CGFloat, spacing: CGFloat = 12, rowSpacing: CGFloat = 16,
-                           label: CGFloat = 44, minTileWidth: CGFloat = 150) -> (columns: Int, tileWidth: CGFloat) {
-    let n = max(count, 1)
-    let most = max(1, min(n, Int((area.width + spacing) / (minTileWidth + spacing))))
-    func width(_ columns: Int) -> CGFloat {
-      ((area.width - spacing * CGFloat(columns - 1)) / CGFloat(columns)).rounded(.down)
-    }
-    for columns in 1...most {
-      let w = width(columns)
-      let rows = (n + columns - 1) / columns
-      let height = CGFloat(rows) * ((w / aspect).rounded() + label) + CGFloat(rows - 1) * rowSpacing
-      if height <= area.height { return (columns, w) }
-    }
-    return (most, width(most))
-  }
-
   /// The first grid row (or column) a thumbnail `visible` cells tall (or
   /// wide) shows: the cursor's row stays in view with as much above it as
   /// fits. A session taller than its tile (sized while hidden, without the

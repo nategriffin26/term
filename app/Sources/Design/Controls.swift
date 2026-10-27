@@ -436,16 +436,18 @@ struct CountBadge: View {
   }
 }
 
-/// Needs you: a word on an accent pill, the loudest thing on a row.
+/// Needs you: a word on an accent pill, the loudest thing on a row. Compact:
+/// caption-sized, for a window's title bar on the Sessions overview.
 struct NeedsYouPill: View {
   let text: String
+  var compact = false
 
   var body: some View {
     Text(text)
-      .font(Chrome.font(.secondary, .semibold))
+      .font(Chrome.font(compact ? .caption : .secondary, .semibold))
       .foregroundStyle(Chrome.onAccent)
-      .padding(.horizontal, 10)
-      .frame(height: 24)
+      .padding(.horizontal, compact ? 7 : 10)
+      .frame(height: compact ? 18 : 24)
       .background(Capsule().fill(Chrome.needsYou))
       .fixedSize()
   }

@@ -334,6 +334,11 @@ final class TmuxStore {
 
   func agent(_ key: String, _ id: String) -> AgentInfo? { agents[key]?[id] }
 
+  /// The agent in tmux session `name` on `host`'s server, as last read.
+  func agent(on host: Host, session name: String) -> AgentInfo? {
+    agents[speaker(for: host).serverKey]?.values.first { $0.session == name }
+  }
+
   /// The snapshot engine of a session, once it has been captured.
   func engine(_ key: String, _ id: String) -> Session? { engines[key + "\t" + id] }
   /// The last capture of a session, as terminal bytes.

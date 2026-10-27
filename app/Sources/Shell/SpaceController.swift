@@ -296,6 +296,36 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     Self.tabsChanged()
   }
 
+  /// Puts `tab` at `index` of the swipe order (a drop on the overview); the
+  /// panes keep the tabs they show.
+  func move(_ tab: Tab, to index: Int) {
+    guard let from = tabs.firstIndex(where: { $0 === tab }) else { return }
+    let to = min(max(index, 0), tabs.count - 1)
+    guard to != from else { return }
+    tabs.insert(tabs.remove(at: from), at: to)
+    SessionRegistry.shared.setTabs(tabs, forScene: sceneID)
+    Self.tabsChanged()
+  }
+
+  /// Whether the window shows two panes (Two Panes on the Duo's inner display, flat).
+  var showsTwoPanes: Bool { panes.count == 2 }
+
+  /// With Two Panes, the pane showing `tab`: 0 left, 1 right.
+  func paneIndex(showing tab: Tab) -> Int? {
+    guard showsTwoPanes else { return nil }
+    return panes.firstIndex { $0.tab === tab }
+  }
+
+  /// With Two Panes, shows `tab` in pane `index`; when the other pane shows
+  /// it, the two swap.
+  func place(_ tab: Tab, inPane index: Int) {
+    guard showsTwoPanes, panes.indices.contains(index), tabs.contains(where: { $0 === tab }) else { return }
+    let pane = panes[index]
+    guard pane.tab !== tab else { return }
+    if let other = panes.first(where: { $0.tab === tab }) { show(pane.tab, in: other) }
+    show(tab, in: pane)
+  }
+
   /// Opens `host` in the focused tab when it sits at the prompt, else in a new tab.
   func open(_ host: Host) {
     closeMenu()
@@ -719,7 +749,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   func openMenu(_ tab: MenuTab? = nil, fromIcon: Bool = false) {
     let tab = tab ?? menu.tab
     guard !panel.isOpen else {
-      if tab == .sessions { menu.sessionsPage = .grid }
+      if tab == .sessions { menu.sessionsPage = .overview }
       menu.tab = tab
       return
     }
@@ -757,20 +787,25 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     terminal.resignFirstResponder()
   }
 
-  /// The card fades in while the terminal shrinks into its tile above it,
-  /// then hands over to the tile's live thumbnail.
+  /// The card fades in while the terminal shrinks into its window above it,
+  /// then hands over to the window's live thumbnail.
   private func openOverview(shrinking pane: Pane) {
     let tab = pane.tab
+    menu.zooming = tab.id
     panel.fadeIn(.sessions, duration: 0.32)
-    // The grid reports its tile frames during the hosting view's layout pass.
+    // The mosaic places its windows during the hosting view's layout pass.
     DispatchQueue.main.async { [weak self] in
-      guard let self, panel.isOpen, menu.tab == .sessions, pane.tab === tab, let tile = tileRect(for: tab) else { return }
-      zoom(pane, tile: tile, towardTile: true) {}
+      guard let self else { return }
+      guard panel.isOpen, menu.tab == .sessions, pane.tab === tab, let thumbnail = thumbnail(of: tab) else {
+        menu.zooming = nil
+        return
+      }
+      zoom(pane, into: thumbnail, towardTile: true) { [weak self] in self?.menu.zooming = nil }
     }
   }
 
-  /// Tapping a tile: that session takes the screen, growing out of its tile
-  /// (`fromTile` false: it just comes forward, as from the tmux tab).
+  /// Tapping a window: that session takes the screen, growing out of its
+  /// thumbnail (`fromTile` false: it just comes forward, as from the tmux tab).
   func zoom(into tab: Tab, fromTile: Bool = true) {
     guard tabs.contains(where: { $0 === tab }) else {
       // Another window's session: bring that window forward.
@@ -782,49 +817,54 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       }
       return
     }
-    let tile = fromTile ? tileRect(for: tab) : nil
+    let thumbnail = fromTile ? thumbnail(of: tab) : nil
     let focus = menuRestoresFocus
     menuRestoresFocus = false
     select(tab, focus: focus)
-    guard let pane = panes.first(where: { $0.tab === tab }), let tile, !UIAccessibility.isReduceMotionEnabled else {
+    guard let pane = panes.first(where: { $0.tab === tab }), let thumbnail, !UIAccessibility.isReduceMotionEnabled else {
       closeMenu()
       return
     }
+    menu.zooming = tab.id
     panel.fadeOut(duration: 0.24) {}
-    zoom(pane, tile: tile, towardTile: false) {}
+    zoom(pane, into: thumbnail, towardTile: false) { [weak self] in self?.menu.zooming = nil }
   }
 
-  /// A tile's frame in this view's space.
-  private func tileRect(for tab: Tab) -> CGRect? {
-    guard let frame = menu.tileFrames[tab.id], frame.width > 0 else { return nil }
-    return view.convert(frame, from: nil)
+  /// `tab`'s live thumbnail on the overview and where it draws the grid, in this view's space.
+  private func thumbnail(of tab: Tab) -> (frame: CGRect, grid: ThumbnailGrid)? {
+    guard let shown = menu.thumbnails.view(showing: tab.current), shown.bounds.width > 0,
+          let grid = shown.currentGrid() else { return nil }
+    let frame = shown.convert(shown.bounds, to: view)
+    let ratio = frame.width / shown.bounds.width
+    return (frame, ThumbnailGrid(origin: shown.convert(grid.origin, to: view),
+                                 cell: CGSize(width: grid.cell.width * ratio, height: grid.cell.height * ratio)))
   }
 
-  /// Scales `pane` between full size and `tile`, its terminal grid landing
-  /// exactly on the tile, above the panel; masks everything outside the grid.
-  private func zoom(_ pane: Pane, tile: CGRect, towardTile: Bool, completion: @escaping () -> Void) {
+  /// Scales `pane` between full size and the thumbnail, above the panel, the
+  /// terminal's cells landing on the thumbnail's; at the small end everything
+  /// outside the thumbnail is masked.
+  private func zoom(_ pane: Pane, into thumbnail: (frame: CGRect, grid: ThumbnailGrid), towardTile: Bool,
+                    completion: @escaping () -> Void) {
     let container = pane.container
     let terminal = pane.tab.view
     terminal.layoutIfNeeded()
     let cell = terminal.cellSizePoints
-    let (cols, rows) = terminal.gridSize
     let scale = max(terminal.scale, 1)
-    let grid = CGRect(x: terminal.gridOrigin.x / scale, y: terminal.gridOrigin.y / scale,
-                      width: CGFloat(cols) * cell.width, height: CGFloat(rows) * cell.height)
-    guard grid.width > 0, grid.height > 0 else { completion(); return }
+    guard cell.width > 0, thumbnail.grid.cell.width > 0 else { completion(); return }
+    let origin = terminal.convert(CGPoint(x: terminal.gridOrigin.x / scale, y: terminal.gridOrigin.y / scale), to: container)
 
-    // Container point p lands at center + s * (p - boundsCenter) + t; the grid
-    // lands where the thumbnail draws it, inside the tile's margin.
-    let inset = SessionThumbnailView.inset
-    let s = (tile.width - 2 * inset) / grid.width
+    // Container point p lands at center + s * (p - boundsCenter) + t.
+    let s = thumbnail.grid.cell.width / cell.width
     let c = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
-    let t = CGPoint(x: tile.minX + inset - container.center.x - s * (grid.minX - c.x),
-                    y: tile.minY + inset - container.center.y - s * (grid.minY - c.y))
+    let t = CGPoint(x: thumbnail.grid.origin.x - container.center.x - s * (origin.x - c.x),
+                    y: thumbnail.grid.origin.y - container.center.y - s * (origin.y - c.y))
     let small = CGAffineTransform(a: s, b: 0, c: 0, d: s, tx: t.x, ty: t.y)
-    // The tile in container space: what stays visible at the small end.
-    let shown = CGRect(x: grid.minX - inset / s, y: grid.minY - inset / s, width: tile.width / s, height: tile.height / s)
-    let fullPath = UIBezierPath(rect: container.bounds).cgPath
-    let tilePath = UIBezierPath(roundedRect: shown, cornerRadius: 10 / s).cgPath
+    // The thumbnail in container space: what stays visible at the small end.
+    let f = thumbnail.frame
+    let shown = CGRect(x: c.x + (f.minX - container.center.x - t.x) / s, y: c.y + (f.minY - container.center.y - t.y) / s,
+                       width: f.width / s, height: f.height / s)
+    let fullPath = Self.maskPath(container.bounds, bottomRadius: 0)
+    let tilePath = Self.maskPath(shown, bottomRadius: Chrome.Radius.tile / s)
 
     let mask = CAShapeLayer()
     mask.path = towardTile ? tilePath : fullPath
@@ -852,6 +892,25 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       completion()
     }
     animator.startAnimation()
+  }
+
+  /// A rectangle with rounded bottom corners (a window's screen under its
+  /// title bar), drawn with the same elements at every radius so the two ends
+  /// of a zoom morph into each other.
+  private static func maskPath(_ r: CGRect, bottomRadius radius: CGFloat) -> CGPath {
+    // Cubic control points of a quarter circle sit 0.5523 of the radius along its tangents.
+    let k = radius * (1 - 0.5523)
+    let path = CGMutablePath()
+    path.move(to: CGPoint(x: r.minX, y: r.minY))
+    path.addLine(to: CGPoint(x: r.maxX, y: r.minY))
+    path.addLine(to: CGPoint(x: r.maxX, y: r.maxY - radius))
+    path.addCurve(to: CGPoint(x: r.maxX - radius, y: r.maxY), control1: CGPoint(x: r.maxX, y: r.maxY - k),
+                  control2: CGPoint(x: r.maxX - k, y: r.maxY))
+    path.addLine(to: CGPoint(x: r.minX + radius, y: r.maxY))
+    path.addCurve(to: CGPoint(x: r.minX, y: r.maxY - radius), control1: CGPoint(x: r.minX + k, y: r.maxY),
+                  control2: CGPoint(x: r.minX, y: r.maxY - k))
+    path.closeSubpath()
+    return path
   }
 
   private func menuWillClose() {

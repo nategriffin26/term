@@ -61,36 +61,6 @@ final class MenuLayoutTests: XCTestCase {
     XCTAssertEqual(MenuLayout.panelFrame(bounds: phone, safe: phoneSafe, keyboardTop: 20), phoneFull)
   }
 
-  // Bug: a few sessions drawn as postage stamps in a big panel (unreadable thumbnails).
-  func testFewSessionsGetBigTiles() {
-    // Duo inner landscape, keyboard down: one session and the + tile in 819x536.
-    let grid = MenuLayout.overviewGrid(count: 2, area: CGSize(width: 819, height: 536), aspect: 1.5)
-    XCTAssertEqual(grid.columns, 2)
-    XCTAssertEqual(grid.tileWidth, 403)
-  }
-
-  // Bug: more columns than needed, or rows running off the panel when three columns fit.
-  func testFiveTilesTakeTheFewestColumnsThatFit() {
-    // Duo inner portrait: four sessions and + in 621x736, terminals 0.875 wide per tall.
-    let grid = MenuLayout.overviewGrid(count: 5, area: CGSize(width: 621, height: 736), aspect: 0.875)
-    XCTAssertEqual(grid.columns, 3)
-    XCTAssertEqual(grid.tileWidth, 199)
-  }
-
-  // Bug: a grid exactly as tall as the panel treated as overflowing.
-  func testGridExactlyAsTallAsThePanelFits() {
-    // One column: 2 rows of (206 + 44) and 16 between them = 516.
-    XCTAssertEqual(MenuLayout.overviewGrid(count: 2, area: CGSize(width: 412, height: 516), aspect: 2).columns, 1)
-    XCTAssertEqual(MenuLayout.overviewGrid(count: 2, area: CGSize(width: 412, height: 515), aspect: 2).columns, 2)
-  }
-
-  // Bug: many sessions shrunk below a readable tile instead of scrolling.
-  func testManySessionsScrollInsteadOfShrinkingBelow150Points() {
-    let grid = MenuLayout.overviewGrid(count: 21, area: CGSize(width: 366, height: 374), aspect: 1)
-    XCTAssertEqual(grid.columns, 2)
-    XCTAssertEqual(grid.tileWidth, 177)
-  }
-
   // Bug (seen on the Duo): a hidden tab keeps 48 rows while its tile fits 31,
   // and the thumbnail showed the empty bottom rows, so every tile but the
   // current one was black.

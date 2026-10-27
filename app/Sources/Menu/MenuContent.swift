@@ -49,6 +49,10 @@ struct MenuContent: View {
           withAnimation(Chrome.spring) { model.tmuxSelecting.toggle() }
         }
       }
+      if model.tab == .sessions, model.sessionsPage == .overview {
+        CircleButton(symbol: "plus", label: "New Session") { model.sessionsPage = .new }
+          .transition(.opacity)
+      }
       CircleButton(symbol: "xmark", label: "Close") { model.space?.closeMenu() }
     }
     // The track and the close circle sit 12 pt in from the panel's edges.
