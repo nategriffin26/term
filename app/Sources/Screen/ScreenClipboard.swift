@@ -1,3 +1,4 @@
+import CryptoKit
 import UIKit
 import UniformTypeIdentifiers
 
@@ -61,6 +62,18 @@ enum ScreenClipboard {
     return clipboard(from: item)
   }
 
+  /// What a clipboard is, for telling one copy from another: its text, else
+  /// its URL, image, HTML or RTF. Other representations may be rebuilt on the
+  /// way (an image re-encoded, rich text regenerated) without being a new copy.
+  static func identity(of clipboard: ScreenWire.Clipboard) -> Data? {
+    for type in [text, url, png, html, rtf] {
+      if let entry = clipboard.items.first(where: { $0.type == type }) {
+        return Data(SHA256.hash(data: Data(type.utf8) + entry.data))
+      }
+    }
+    return nil
+  }
+
   private static func data(_ value: Any) -> Data? {
     if let data = value as? Data { return data }
     if let string = value as? String { return Data(string.utf8) }
@@ -78,21 +91,82 @@ enum ScreenClipboard {
   }
 }
 
-/// The phone's side of no-echo (§6): the pasteboard change count the Mac
-/// already has, whether the phone sent it or wrote it from the Mac. Kept
-/// across launches, so opening Term sends only a copy made since.
-struct PasteboardEcho {
+/// The phone's side of the clipboard sync (§6). A paired phone's system
+/// mirrors the Mac's clipboard onto its own pasteboard, so whatever crosses
+/// comes straight back as a new change; content the two sides already agree
+/// on is never sent or written again. Each pasteboard change is read at most
+/// once, and a read Paste from Other Apps refuses stops automatic reads until
+/// the app returns to the foreground: each read would ask again.
+struct ClipboardSync {
+  /// The pasteboard change count already read or written. Kept across
+  /// launches, so opening Term sends only a copy made since.
   private(set) var synced: Int?
+  /// The content the phone and the Mac last agreed on, sent or received.
+  private var agreed: Data?
+  /// Paste from Other Apps refused a read.
+  private(set) var paused = false
 
-  /// The phone's clipboard is at `count`: whether the Mac still needs it.
-  mutating func needsSending(_ count: Int) -> Bool {
-    guard count != synced else { return false }
+  init(synced: Int? = nil) { self.synced = synced }
+
+  /// The pasteboard is at `count`: whether to read it now.
+  mutating func shouldRead(_ count: Int) -> Bool {
+    guard !paused, count != synced else { return false }
     synced = count
     return true
   }
 
-  /// The app wrote the Mac's clipboard, leaving the pasteboard at `count`.
-  mutating func wrote(_ count: Int) { synced = count }
+  /// What an automatic read found: the clipboard the Mac still needs, or nil.
+  /// Nothing read while the pasteboard `offered` text, an image or a URL is
+  /// a refused read; that change is read again once reads resume.
+  mutating func read(_ clipboard: ScreenWire.Clipboard, offered: Bool) -> ScreenWire.Clipboard? {
+    guard !clipboard.items.isEmpty else {
+      if offered {
+        paused = true
+        synced = nil
+      }
+      return nil
+    }
+    guard isNew(clipboard) else { return nil }
+    agreed = ScreenClipboard.identity(of: clipboard)
+    return clipboard
+  }
+
+  /// Whether `clipboard` differs from what the two sides agree on.
+  func isNew(_ clipboard: ScreenWire.Clipboard) -> Bool {
+    ScreenClipboard.identity(of: clipboard) != agreed
+  }
+
+  /// Both sides now hold `clipboard` (written onto the pasteboard or sent on
+  /// request), the pasteboard at `count`.
+  mutating func agree(on clipboard: ScreenWire.Clipboard, at count: Int) {
+    agreed = ScreenClipboard.identity(of: clipboard)
+    synced = count
+  }
+
+  /// The app is back in the foreground: Paste from Other Apps may have changed.
+  mutating func resume() { paused = false }
+}
+
+/// The phone's general pasteboard as the clipboard sync uses it.
+@MainActor
+protocol ScreenPasteboard: AnyObject {
+  var changeCount: Int { get }
+  /// Whether it holds text, an image or a URL; asking raises no paste prompt.
+  var offersContent: Bool { get }
+  /// Its first item. Reading another app's copy asks Paste from Other Apps;
+  /// a refused read finds nothing.
+  func firstItem() -> [String: Any]?
+  func write(_ item: [String: Any])
+}
+
+final class SystemPasteboard: ScreenPasteboard {
+  var changeCount: Int { UIPasteboard.general.changeCount }
+  var offersContent: Bool {
+    let board = UIPasteboard.general
+    return board.hasStrings || board.hasImages || board.hasURLs
+  }
+  func firstItem() -> [String: Any]? { UIPasteboard.general.items.first }
+  func write(_ item: [String: Any]) { UIPasteboard.general.setItems([item]) }
 }
 
 extension NSItemProvider {

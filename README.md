@@ -153,7 +153,7 @@ For the Screen tab, run this on the Mac. It builds Term Screen Host, signs it wi
 scripts/install-screen-host.sh             # --uninstall removes it
 ```
 
-Then allow Term Screen Host in System Settings › Privacy & Security under Screen & System Audio Recording and Accessibility, and allow its first paste from other apps. For a locked Mac, turn on Screen Sharing (General › Sharing); Term asks once for the Mac account's password and keeps it in the Keychain.
+Then allow Term Screen Host in System Settings › Privacy & Security under Screen & System Audio Recording and Accessibility, and allow its first paste from other apps. On the phone, set Settings › Apps › Term › Paste from Other Apps to Allow; otherwise each copy asks, and after Don't Allow, copies wait for Send Clipboard until Term comes back to the foreground. For a locked Mac, turn on Screen Sharing (General › Sharing); Term asks once for the Mac account's password and keeps it in the Keychain.
 
 ## Tests and formal checks
 

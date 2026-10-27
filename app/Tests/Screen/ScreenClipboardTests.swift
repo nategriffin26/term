@@ -47,16 +47,4 @@ final class ScreenClipboardTests: XCTestCase {
     XCTAssertEqual(image.size.width * image.scale, 3)
     XCTAssertEqual(clipboard.items[0].data.prefix(4), Data([0x89, 0x50, 0x4E, 0x47]))
   }
-
-  // Bug: the phone sending the Mac's copy straight back after writing it (an
-  // echo loop), or never sending a copy made later.
-  func testWhatTheAppWroteIsNotSentBack() {
-    var echo = PasteboardEcho()
-    echo.wrote(41)
-    XCTAssertFalse(echo.needsSending(41))
-    XCTAssertTrue(echo.needsSending(42))
-    XCTAssertFalse(echo.needsSending(42), "sent once")
-    var fresh = PasteboardEcho()
-    XCTAssertTrue(fresh.needsSending(0), "nothing synced yet: the first look sends")
-  }
 }

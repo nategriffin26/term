@@ -193,7 +193,8 @@ final class ScreenSession {
   @ObservationIgnored private let engines: ScreenEngines
   @ObservationIgnored private var engine: ScreenEngine?
   @ObservationIgnored private var vnc: ScreenEngine?
-  @ObservationIgnored private var echo = PasteboardEcho()
+  @ObservationIgnored private var sync = ClipboardSync()
+  @ObservationIgnored private let pasteboard: ScreenPasteboard
   @ObservationIgnored private var pasteboardTimer: Timer?
   @ObservationIgnored private var noticeTimer: Timer?
   @ObservationIgnored private var hostRetryTimer: Timer?
@@ -202,18 +203,22 @@ final class ScreenSession {
   private static let hostKey = "screen.host"
   private static let syncedKey = "screen.pasteboardSynced"
 
-  init(engines: ScreenEngines = .live) {
+  init(engines: ScreenEngines = .live, pasteboard: ScreenPasteboard = SystemPasteboard()) {
     self.engines = engines
+    self.pasteboard = pasteboard
     if let id = UserDefaults.standard.string(forKey: Self.hostKey).flatMap(UUID.init(uuidString:)) {
       host = ConfigStore.shared.hosts.first { $0.id == id }
       if let host { settings = ScreenSettings.load(for: host.id) }
     }
     if UserDefaults.standard.object(forKey: Self.syncedKey) != nil {
-      echo.wrote(UserDefaults.standard.integer(forKey: Self.syncedKey))
+      sync = ClipboardSync(synced: UserDefaults.standard.integer(forKey: Self.syncedKey))
     }
     let center = NotificationCenter.default
     observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.enteredBackground() }
+    })
+    observers.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+      MainActor.assumeIsolated { self?.sync.resume() }
     })
     observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.becameActive() }
@@ -515,7 +520,7 @@ final class ScreenSession {
       surface?.pointerMoved()
     case .clipboard(let clipboard):
       macClipboard = clipboard
-      if settings.sharedClipboard { writePasteboard(clipboard) }
+      if settings.sharedClipboard, sync.isNew(clipboard) { writePasteboard(clipboard) }
     case .lock(let isLocked):
       locked = isLocked
       updateSharing()
@@ -824,8 +829,8 @@ final class ScreenSession {
 
   // MARK: - Clipboard
 
-  /// While the Screen shows, a copy on the phone goes to the Mac (Paste
-  /// from Other Apps is set to Allow, so reading raises no prompt).
+  /// While the Screen shows, a copy on the phone goes to the Mac (with Paste
+  /// from Other Apps set to Allow, reading raises no prompt).
   private func startPasteboardWatch() {
     guard isShown, phase == .live, pasteboardTimer == nil else { return }
     pasteboardTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -838,26 +843,37 @@ final class ScreenSession {
     pasteboardTimer = nil
   }
 
-  private func checkPasteboard() {
+  /// Reads a change on the phone's pasteboard, at most once, and sends it
+  /// unless the Mac already has it.
+  func checkPasteboard() {
     guard isShown, phase == .live, settings.sharedClipboard else { return }
     startPasteboardWatch()
-    guard echo.needsSending(UIPasteboard.general.changeCount) else { return }
+    guard sync.shouldRead(pasteboard.changeCount) else { return }
     rememberSynced()
-    sendPasteboard()
+    let offered = pasteboard.offersContent
+    guard offered else { return }
+    let read = pasteboard.firstItem().map(ScreenClipboard.clipboard(from:)) ?? ScreenWire.Clipboard(items: [])
+    if let clipboard = sync.read(read, offered: offered) {
+      engine?.setClipboard(clipboard)
+    } else if sync.paused {
+      show(notice: Self.pasteRefused)
+    }
   }
 
-  private func sendPasteboard() {
-    guard let item = UIPasteboard.general.items.first else { return }
-    let clipboard = ScreenClipboard.clipboard(from: item)
-    guard !clipboard.items.isEmpty else { return }
-    engine?.setClipboard(clipboard)
-  }
+  static let pasteRefused = "To send copies to the Mac, allow Settings › Apps › Term › Paste from Other Apps"
 
-  /// Actions › Clipboard › Send Clipboard.
+  /// Actions › Clipboard › Send Clipboard: works while automatic reads are paused.
   func sendClipboard() {
-    _ = echo.needsSending(UIPasteboard.general.changeCount)
+    let count = pasteboard.changeCount
+    let offered = pasteboard.offersContent
+    let clipboard = pasteboard.firstItem().map(ScreenClipboard.clipboard(from:)) ?? ScreenWire.Clipboard(items: [])
+    guard !clipboard.items.isEmpty else {
+      if offered { show(notice: Self.pasteRefused) }
+      return
+    }
+    sync.agree(on: clipboard, at: count)
     rememberSynced()
-    sendPasteboard()
+    engine?.setClipboard(clipboard)
   }
 
   /// Actions › Clipboard › Get Clipboard: the Mac's last copy onto the phone.
@@ -870,7 +886,7 @@ final class ScreenSession {
     Task {
       let clipboard = await ScreenClipboard.clipboard(from: providers)
       guard !clipboard.items.isEmpty, phase == .live else { return }
-      _ = echo.needsSending(UIPasteboard.general.changeCount)
+      sync.agree(on: clipboard, at: pasteboard.changeCount)
       rememberSynced()
       engine?.setClipboard(clipboard)
       press(MacKey.v, with: .command)
@@ -880,13 +896,13 @@ final class ScreenSession {
   private func writePasteboard(_ clipboard: ScreenWire.Clipboard) {
     let item = ScreenClipboard.pasteboardItem(from: clipboard)
     guard !item.isEmpty else { return }
-    UIPasteboard.general.setItems([item])
-    echo.wrote(UIPasteboard.general.changeCount)
+    pasteboard.write(item)
+    sync.agree(on: clipboard, at: pasteboard.changeCount)
     rememberSynced()
   }
 
   private func rememberSynced() {
-    if let synced = echo.synced { UserDefaults.standard.set(synced, forKey: Self.syncedKey) }
+    if let synced = sync.synced { UserDefaults.standard.set(synced, forKey: Self.syncedKey) }
   }
 }
 

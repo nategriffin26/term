@@ -37,11 +37,46 @@ final class ScreenSessionTests: XCTestCase {
       }
       sent.append(entry)
     }
-    func setClipboard(_ clipboard: ScreenWire.Clipboard) {}
+    var clipboards: [ScreenWire.Clipboard] = []
+    /// What the system does when the Mac's clipboard changes (mirrors it onto a paired phone).
+    var onClipboard: ((ScreenWire.Clipboard) -> Void)?
+    func setClipboard(_ clipboard: ScreenWire.Clipboard) {
+      clipboards.append(clipboard)
+      onClipboard?(clipboard)
+    }
     var qualities: [ScreenWire.QualityMode] = []
     func setQuality(_ mode: ScreenWire.QualityMode) { qualities.append(mode) }
     func layer(for display: UInt32) -> CALayer? { nil }
     func close() { closed = true }
+  }
+
+  /// The phone's pasteboard with what else writes it: other apps, and the
+  /// system mirroring the Mac's clipboard. `refuses` is Paste from Other Apps
+  /// answered Don't Allow.
+  @MainActor
+  final class FakePasteboard: ScreenPasteboard {
+    private(set) var changeCount = 0
+    private var item: [String: Any]?
+    var refuses = false
+    private(set) var reads = 0
+    private(set) var writes = 0
+    var offersContent: Bool { item != nil }
+    func firstItem() -> [String: Any]? {
+      reads += 1
+      return refuses ? nil : item
+    }
+    func write(_ item: [String: Any]) {
+      writes += 1
+      external(item)
+    }
+    func external(_ item: [String: Any]) {
+      self.item = item
+      changeCount += 1
+    }
+  }
+
+  static func copy(_ text: String) -> ScreenWire.Clipboard {
+    ScreenWire.Clipboard(items: [.init(type: ScreenClipboard.text, data: Data(text.utf8))])
   }
 
   // The user's Mac: the built-in display (main, 2x) and an ultrawide at 1x
@@ -58,6 +93,7 @@ final class ScreenSessionTests: XCTestCase {
                                               pixelWidth: 6896, pixelHeight: 2921, isMain: true)
 
   private var session: ScreenSession!
+  private var pasteboard: FakePasteboard!
   private var hosts: [FakeEngine] = []
   private var sharings: [FakeEngine] = []
   private let mac = Host(alias: "mac", hostname: "127.0.0.1", user: "user")
@@ -68,6 +104,8 @@ final class ScreenSessionTests: XCTestCase {
   override func setUp() async throws {
     continueAfterFailure = false
     Keychain.setMacPassword("saved", for: mac.id)
+    UserDefaults.standard.removeObject(forKey: "screen.pasteboardSynced")
+    pasteboard = FakePasteboard()
     session = ScreenSession(engines: ScreenEngines(
       host: { [unowned self] _, onEvent in
         let engine = FakeEngine(onEvent)
@@ -78,7 +116,7 @@ final class ScreenSessionTests: XCTestCase {
         let engine = FakeEngine(onEvent)
         sharings.append(engine)
         return engine
-      }))
+      }), pasteboard: pasteboard)
     session.choose(mac)
     session.setSharedClipboard(false)
     session.setShown(true)
@@ -342,5 +380,58 @@ final class ScreenSessionTests: XCTestCase {
     XCTAssertEqual(settings.display, 2)
     XCTAssertFalse(settings.sharedClipboard)
     XCTAssertEqual(settings.quality, .adaptive)
+  }
+
+  // MARK: Clipboard
+
+  // Bug (the user's report): the Mac's clipboard, which the system mirrors
+  // onto a paired phone, read as a new copy and sent back to the Mac, whose
+  // change was mirrored back again: a paste prompt over and over.
+  func testTheMacsClipboardMirroredBackIsNeverSentAgain() {
+    session.setSharedClipboard(true)
+    welcome()
+    host.onClipboard = { [unowned self] in pasteboard.external(ScreenClipboard.pasteboardItem(from: $0)) }
+    host.onEvent(.clipboard(Self.copy("from the Mac")))
+    pasteboard.external([ScreenClipboard.text: "from the Mac"])
+    for _ in 0..<5 { session.checkPasteboard() }
+    XCTAssertEqual(host.clipboards, [], "the Mac already has it")
+    XCTAssertEqual(pasteboard.reads, 1, "one read for the one change")
+
+    pasteboard.external([ScreenClipboard.text: "from the phone"])
+    for _ in 0..<5 { session.checkPasteboard() }
+    XCTAssertEqual(host.clipboards, [Self.copy("from the phone")], "sent once, though it came back")
+    XCTAssertEqual(pasteboard.reads, 3, "the copy and its one mirror")
+  }
+
+  // Bug (the user's report): after Don't Allow Paste, every later change
+  // asked again; the copy refused is sent once paste is allowed.
+  func testARefusedReadStopsAutomaticReadsUntilTermReturns() {
+    session.setSharedClipboard(true)
+    welcome()
+    pasteboard.refuses = true
+    pasteboard.external([ScreenClipboard.text: "one"])
+    session.checkPasteboard()
+    XCTAssertEqual(session.notice, ScreenSession.pasteRefused)
+    pasteboard.external([ScreenClipboard.text: "two"])
+    session.checkPasteboard()
+    session.checkPasteboard()
+    XCTAssertEqual(pasteboard.reads, 1, "no more prompts")
+
+    pasteboard.refuses = false  // allowed in Settings, then back to Term
+    NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+    session.checkPasteboard()
+    XCTAssertEqual(host.clipboards, [Self.copy("two")])
+  }
+
+  // Bug: the same Mac clipboard announced again (the system mirrored the
+  // phone's pasteboard back to the Mac) written again, a new change each time.
+  func testTheSameMacClipboardIsWrittenOnce() {
+    session.setSharedClipboard(true)
+    welcome()
+    host.onEvent(.clipboard(Self.copy("é, 日本")))
+    host.onEvent(.clipboard(Self.copy("é, 日本")))
+    XCTAssertEqual(pasteboard.writes, 1)
+    host.onEvent(.clipboard(Self.copy("new")))
+    XCTAssertEqual(pasteboard.writes, 2)
   }
 }
