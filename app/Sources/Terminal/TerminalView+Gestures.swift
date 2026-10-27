@@ -13,7 +13,7 @@ struct GridPoint: Comparable {
 
 extension TerminalView {
     func installGestures() {
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleTap(_:))))
+        addGestureRecognizer(TimedTapGestureRecognizer(target: self, action: #selector(handleTap(_:))))
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
@@ -49,7 +49,6 @@ extension TerminalView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if let touch = touches.first { touchDownTime = touch.timestamp }
         if isCoasting {
             stopCoasting()
             touchStoppedCoasting = true
@@ -78,7 +77,8 @@ extension TerminalView {
         }
         // The first tap has already acted; the second of a quick pair opens
         // Sessions instead of acting, so a program never sees a double-click.
-        if doubleTap.tap(at: p, touch: touchDownTime, lift: ProcessInfo.processInfo.systemUptime),
+        if let timed = g as? TimedTapGestureRecognizer,
+           doubleTap.tap(at: p, touch: timed.touchTime, lift: timed.liftTime),
            delegate?.terminalViewDoubleTapped(self) == true {
             return
         }

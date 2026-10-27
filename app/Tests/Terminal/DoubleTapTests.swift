@@ -70,9 +70,22 @@ final class DoubleTapTests: XCTestCase {
     space = nil
   }
 
-  private final class FakeTap: UITapGestureRecognizer {
+  private final class FakeTap: TimedTapGestureRecognizer {
     var point = CGPoint.zero
     override func location(in view: UIView?) -> CGPoint { point }
+  }
+
+  /// The pager's pan, still: it begins and ends where it started.
+  private final class FakePan: UIPanGestureRecognizer {
+    var phase: UIGestureRecognizer.State = .began
+    var point = CGPoint.zero
+    override var state: UIGestureRecognizer.State {
+      get { phase }
+      set { phase = newValue }
+    }
+    override func location(in view: UIView?) -> CGPoint { point }
+    override func translation(in view: UIView?) -> CGPoint { .zero }
+    override func velocity(in view: UIView?) -> CGPoint { .zero }
   }
 
   private final class Stub: TerminalViewDelegate {
@@ -117,16 +130,22 @@ final class DoubleTapTests: XCTestCase {
     return (view, stub, { String(decoding: sent, as: UTF8.self) })
   }
 
-  /// A tap as UIKit delivers it: touched now, recognised on lift.
-  private func tap(_ view: TerminalView, at point: CGPoint) {
-    view.touchDownTime = ProcessInfo.processInfo.systemUptime
+  /// A tap as UIKit delivers it: the finger's event times (default: now), handled now.
+  private func tap(_ view: TerminalView, at point: CGPoint, touch: TimeInterval? = nil, lift: TimeInterval? = nil) {
+    let now = ProcessInfo.processInfo.systemUptime
     let tap = FakeTap()
     tap.point = point
+    tap.touchTime = touch ?? now
+    tap.liftTime = lift ?? touch ?? now
     view.perform(NSSelectorFromString("handleTap:"), with: tap)
   }
 
-  /// SGR mouse presses in the bytes sent (ESC [ < b ; x ; y M; a release ends in m).
-  private static func presses(_ output: String) -> Int { output.components(separatedBy: "M").count - 1 }
+  /// SGR mouse presses and releases in the bytes sent (ESC [ < b ; x ; y M, a
+  /// release ending in m; nothing else in them is a letter).
+  private static func clicks(_ output: String) -> (presses: Int, releases: Int) {
+    (output.filter { $0 == "M" }.count, output.filter { $0 == "m" }.count)
+  }
+  private static func presses(_ output: String) -> Int { clicks(output).presses }
 
   // Bug: the double tap reaching tmux or vim as a double-click (tmux selects a word and enters copy mode).
   func testDoubleTapSendsOneClickAndOpensSessions() async throws {
@@ -135,7 +154,34 @@ final class DoubleTapTests: XCTestCase {
     tap(view, at: CGPoint(x: 64, y: 58))
     try await Task.sleep(for: .milliseconds(200))
     XCTAssertEqual(stub.doubleTaps, 1)
-    XCTAssertEqual(Self.presses(sent()), 1, "one press for the first tap only: \(sent().debugDescription)")
+    let clicks = Self.clicks(sent())
+    XCTAssertEqual(clicks.presses, 1, "one press for the first tap only: \(sent().debugDescription)")
+    XCTAssertEqual(clicks.releases, 1, "the first tap's press is released: \(sent().debugDescription)")
+  }
+
+  // Bug: the first tap's handler running late (a busy main thread) shortening
+  // the gap, so a slow second click opened Sessions: lift 0.10 s before the
+  // handler ran, second touch 0.30 s after it, 0.40 s apart in all.
+  func testASlowSecondClickStaysAClickWhenTheFirstTapIsHandledLate() async throws {
+    let (view, stub, sent) = try await mouseTrackingTerminal()
+    let now = ProcessInfo.processInfo.systemUptime
+    tap(view, at: CGPoint(x: 60, y: 60), touch: now - 0.15, lift: now - 0.10)
+    tap(view, at: CGPoint(x: 60, y: 60), touch: now + 0.30, lift: now + 0.35)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(stub.doubleTaps, 0)
+    XCTAssertEqual(Self.presses(sent()), 2)
+  }
+
+  // Bug: two quick taps queued behind a busy main thread and handled after
+  // both fingers lifted read as two taps (the second touched before the first was handled).
+  func testQuickTapsHandledLateAreADoubleTap() async throws {
+    let (view, stub, sent) = try await mouseTrackingTerminal()
+    let now = ProcessInfo.processInfo.systemUptime
+    tap(view, at: CGPoint(x: 60, y: 60), touch: now - 0.50, lift: now - 0.45)
+    tap(view, at: CGPoint(x: 62, y: 61), touch: now - 0.30, lift: now - 0.25)
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(stub.doubleTaps, 1)
+    XCTAssertEqual(Self.presses(sent()), 1)
   }
 
   // Bug: the double tap holding single taps back, or eating a slow second click.
@@ -215,5 +261,33 @@ final class DoubleTapTests: XCTestCase {
       space.closeMenu()
       try await Task.sleep(for: .milliseconds(900))
     }
+  }
+
+  // Bug: a session swipe that springs back to the same session between two
+  // taps leaving the pair open, so the second tap opened Sessions instead of clicking.
+  func testACancelledSwipeBetweenTapsLeavesTwoClicks() async throws {
+    let space = try await openSpace(split: false)
+    let terminal = try XCTUnwrap(space.focusedTab?.view)
+    var sent = Data()
+    terminal.session.onOutput = { sent.append($0) }
+    terminal.session.feed("\u{1B}[?1000h\u{1B}[?1006h")
+    let deadline = Date.now.addingTimeInterval(3)
+    while !terminal.snapshot.has(TERM_MODE_MOUSE_TRACKING), Date.now < deadline {
+      try await Task.sleep(for: .milliseconds(30))
+    }
+    XCTAssertTrue(terminal.becomeFirstResponder())
+    let point = CGPoint(x: terminal.bounds.midX, y: terminal.bounds.height * 0.3)
+    let now = ProcessInfo.processInfo.systemUptime
+    tap(terminal, at: point, touch: now, lift: now + 0.05)
+    let pan = FakePan()
+    pan.point = space.view.convert(point, from: terminal)
+    space.perform(NSSelectorFromString("page:"), with: pan)
+    pan.phase = .ended
+    space.perform(NSSelectorFromString("page:"), with: pan)
+    tap(terminal, at: point, touch: now + 0.25, lift: now + 0.3)
+    try await Task.sleep(for: .milliseconds(300))
+    XCTAssertFalse(try panel(of: space).isOpen, "the swipe ended the pair")
+    XCTAssertEqual(space.focusedTab?.view, terminal, "the swipe sprang back to the same session")
+    XCTAssertEqual(Self.presses(String(decoding: sent, as: UTF8.self)), 2)
   }
 }

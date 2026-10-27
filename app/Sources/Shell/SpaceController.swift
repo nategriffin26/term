@@ -600,6 +600,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     switch g.state {
     case .began:
       guard let pane = pane(at: g.location(in: view)) else { return }
+      // A swipe between two taps, even one that springs back, ends the double tap.
+      pane.tab.view.doubleTap.reset()
       let d = Drag(pane: pane, previous: neighbor(of: pane, step: -1), next: neighbor(of: pane, step: 1))
       for tab in [d.previous, d.next].compactMap({ $0 }) {
         tab.view.frame = pane.container.bounds

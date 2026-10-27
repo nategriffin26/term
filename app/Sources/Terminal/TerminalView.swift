@@ -141,9 +141,7 @@ final class TerminalView: UIView {
     var momentumTime: CFTimeInterval = 0
     var isCoasting = false
     var touchStoppedCoasting = false
-    /// When the latest touch came down (UITouch time), and the tap that may
-    /// start a double tap.
-    var touchDownTime: TimeInterval = 0
+    /// The tap that may start a double tap.
     var doubleTap = DoubleTap()
     var pinchBaseSize: CGFloat = 0
     var selectionAnchor: (start: GridPoint, end: GridPoint)?
