@@ -19,8 +19,8 @@ final class CommandsTests: XCTestCase {
   // MARK: - mosh / ssh
 
   func testMoshWithUserHostAndRemoteCommandAfterDoubleDash() throws {
-    let r = try connect("mosh nate@mac.example.com -- tmux new -A -s x")
-    XCTAssertEqual(r, ConnectRequest(transport: .mosh, target: "mac.example.com", user: "nate",
+    let r = try connect("mosh user@mac.example.com -- tmux new -A -s x")
+    XCTAssertEqual(r, ConnectRequest(transport: .mosh, target: "mac.example.com", user: "user",
                                      command: "tmux new -A -s x"))
   }
 
@@ -83,7 +83,7 @@ final class CommandsTests: XCTestCase {
   }
 
   func testEmptyUserOrHostAroundAtSignIsAUsageError() {
-    XCTAssertEqual(failure("mosh nate@"), .usage(Command.moshUsage))
+    XCTAssertEqual(failure("mosh user@"), .usage(Command.moshUsage))
     XCTAssertEqual(failure("mosh @mac"), .usage(Command.moshUsage))
     XCTAssertEqual(failure("mosh @"), .usage(Command.moshUsage))
   }
