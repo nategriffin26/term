@@ -8,12 +8,12 @@ enum TestAudio {
   static let rate = Recording.sampleRate
 
   /// `text` spoken by the system's English voice at `dB` RMS, over a quiet
-  /// room, with 0.3 s of room before and 0.2 s after.
-  static func speech(_ text: String, dB: Float = -24) async throws -> [Float] {
+  /// room at `roomDB`, with 0.3 s of room before and 0.2 s after.
+  static func speech(_ text: String, dB: Float = -24, roomDB: Float = -55) async throws -> [Float] {
     let spoken = try await voice(text, dB: dB)
     var rng = Seeded(1)
-    let before = room(0.3, &rng), after = room(0.2, &rng)
-    let floor = room(Double(spoken.count) / Double(rate), &rng)
+    let before = room(0.3, &rng, dB: roomDB), after = room(0.2, &rng, dB: roomDB)
+    let floor = room(Double(spoken.count) / Double(rate), &rng, dB: roomDB)
     return before + zip(spoken, floor).map(+) + after
   }
 
@@ -26,10 +26,10 @@ enum TestAudio {
     return scaled(Array(voice[first...end]), to: dB)
   }
 
-  /// A room's steady hiss at -55 dBFS: no frame of it is loud enough to count as speech.
-  static func room(seconds: Double) -> [Float] {
+  /// A room's steady hiss at `dB`: no stretch of it is louder than the rest.
+  static func room(seconds: Double, dB: Float = -55) -> [Float] {
     var rng = Seeded(4)
-    return scaled((0..<Int(seconds * Double(rate))).map { _ in Float.random(in: -1...1, using: &rng) }, to: -55)
+    return scaled((0..<Int(seconds * Double(rate))).map { _ in Float.random(in: -1...1, using: &rng) }, to: dB)
   }
 
   /// A quiet room whose noise swells and falls, with knocks on the desk.
@@ -86,14 +86,14 @@ enum TestAudio {
     }
   }
 
-  /// Brown noise around -55 dBFS.
-  private static func room(_ seconds: Double, _ rng: inout Seeded) -> [Float] {
+  /// Brown noise around `dB`.
+  private static func room(_ seconds: Double, _ rng: inout Seeded, dB: Float = -55) -> [Float] {
     var level: Float = 0
     let x = (0..<Int(seconds * Double(rate))).map { _ in
       level = level * 0.995 + Float.random(in: -1...1, using: &rng)
       return level
     }
-    return scaled(x, to: -55)
+    return scaled(x, to: dB)
   }
 
   private static func scaled(_ x: [Float], to dB: Float) -> [Float] {
@@ -165,14 +165,27 @@ struct Seeded: RandomNumberGenerator {
 }
 
 final class SpeechGateTests: XCTestCase {
-  /// Catches the gate passing noise the classifier was unsure of, or dropping
-  /// whispered speech: the line is 0.5 on speech or whispering, nothing else.
-  func testWindowIsSpeechAtHalfOnSpeechOrWhispering() {
-    XCTAssertFalse(SpeechGate.isSpeech { ["speech": 0.49, "whispering": 0.49][$0] })
-    XCTAssertTrue(SpeechGate.isSpeech { ["speech": 0.5][$0] })
-    XCTAssertTrue(SpeechGate.isSpeech { ["speech": 0.2, "whispering": 0.8][$0] })
-    XCTAssertFalse(SpeechGate.isSpeech { ["music": 0.99, "singing": 0.9, "typing": 0.9][$0] })
-    XCTAssertFalse(SpeechGate.isSpeech { _ in nil })
+  /// Catches whispered speech scored as nothing, or another label taken for
+  /// speech: a window's confidence is the higher of speech and whispering.
+  func testWindowConfidenceIsSpeechOrWhispering() {
+    XCTAssertEqual(SpeechGate.confidence { ["speech": 0.49, "whispering": 0.3][$0] }, 0.49)
+    XCTAssertEqual(SpeechGate.confidence { ["speech": 0.2, "whispering": 0.8][$0] }, 0.8)
+    XCTAssertEqual(SpeechGate.confidence { ["music": 0.99, "singing": 0.9, "typing": 0.9][$0] }, 0)
+    XCTAssertEqual(SpeechGate.confidence { _ in nil }, 0)
+  }
+
+  /// Catches noise sent when the classifier was unsure of it, quiet speech
+  /// dropped from a recording that holds speech, or a part sure to hold no
+  /// speech sent with one that does: a recording goes once one of its parts
+  /// reaches 0.5, and then each part at or over the floor.
+  func testPartsGoWithSpeechAndOverTheFloor() {
+    let floor = SpeechGate.floor
+    XCTAssertEqual(SpeechGate.sends([0.49]), [false])
+    XCTAssertEqual(SpeechGate.sends([0.5]), [true])
+    XCTAssertEqual(SpeechGate.sends([0.49, 0.49]), [false, false], "no part sure of speech")
+    XCTAssertEqual(SpeechGate.sends([0.9, floor]), [true, true])
+    XCTAssertEqual(SpeechGate.sends([floor.nextDown, 0.5]), [false, true])
+    XCTAssertEqual(SpeechGate.sends([]), [])
   }
 
   /// Catches a short word or a segment's end going unheard: the classifier
@@ -189,13 +202,25 @@ final class SpeechGateTests: XCTestCase {
   }
 
   /// Catches the transcriber being sent room noise, knocks, typing or music
-  /// (it makes up text for them: "Zdravo, kako si?").
+  /// (it makes up text for them: "Zdravo, kako si?"), alone or as a part of
+  /// a recording with speech: each scores under the floor.
   func testNoiseIsNotSpeech() {
     let gate = SpeechGate()
-    XCTAssertFalse(gate.hearsSpeech(TestAudio.roomWithKnocks(seconds: 8)), "room and knocks")
-    XCTAssertFalse(gate.hearsSpeech(TestAudio.typing(seconds: 6)), "typing")
-    XCTAssertFalse(gate.hearsSpeech(TestAudio.music(seconds: 6)), "music")
-    XCTAssertFalse(gate.hearsSpeech(TestAudio.typing(seconds: 0.5)), "a short burst")
+    XCTAssertLessThan(gate.confidence(in: TestAudio.roomWithKnocks(seconds: 8)), SpeechGate.floor, "room and knocks")
+    XCTAssertLessThan(gate.confidence(in: TestAudio.typing(seconds: 6)), SpeechGate.floor, "typing")
+    XCTAssertLessThan(gate.confidence(in: TestAudio.music(seconds: 6)), SpeechGate.floor, "music")
+    XCTAssertLessThan(gate.confidence(in: TestAudio.typing(seconds: 0.5)), SpeechGate.floor, "a short burst")
+  }
+
+  /// Catches a part scored by its last window rather than its best (an
+  /// unsure stretch of speech followed by room would be dropped): typing
+  /// then 3 s of silence scores at least what the typing alone does.
+  func testPartScoresItsBestWindow() {
+    let gate = SpeechGate()
+    let typing = TestAudio.typing(seconds: 6)
+    let alone = gate.confidence(in: typing)
+    XCTAssertGreaterThan(alone, 0.01, "typing scores over silence")
+    XCTAssertGreaterThanOrEqual(gate.confidence(in: typing + [Float](repeating: 0, count: 3 * TestAudio.rate)), alone)
   }
 
   /// Catches real speech dropped: a sentence, the same said softly, and a
@@ -203,11 +228,50 @@ final class SpeechGateTests: XCTestCase {
   func testSpeechIsSpeech() async throws {
     let gate = SpeechGate()
     let sentence = try await TestAudio.speech("Run git status, then list the files in the sources folder.")
-    XCTAssertTrue(gate.hearsSpeech(sentence), "a sentence")
+    XCTAssertGreaterThanOrEqual(gate.confidence(in: sentence), SpeechGate.threshold, "a sentence")
     let soft = try await TestAudio.speech("Please check the config before deploying.", dB: -42)
-    XCTAssertTrue(gate.hearsSpeech(soft), "soft speech")
+    XCTAssertGreaterThanOrEqual(gate.confidence(in: soft), SpeechGate.threshold, "soft speech")
     let yes = try await TestAudio.speech("Yes.")
     XCTAssertLessThan(yes.count, SpeechGate.window, "the word is shorter than a window")
-    XCTAssertTrue(gate.hearsSpeech(yes), "a one-word answer")
+    XCTAssertGreaterThanOrEqual(gate.confidence(in: yes), SpeechGate.threshold, "a one-word answer")
+  }
+
+  /// What a speech gate sends of `recording`.
+  private func judged(_ recording: Recording) async -> [[Float]] {
+    let judged = expectation(description: "judged")
+    nonisolated(unsafe) var sent: [[Float]] = []
+    SpeechGate().judge(recording) { parts in
+      sent = parts
+      judged.fulfill()
+    }
+    await fulfillment(of: [judged], timeout: 10)
+    return sent
+  }
+
+  /// Catches typing sent as text when it fills a part of its own (the
+  /// transcriber makes up words for it): a sentence then 65 s of typing
+  /// makes two parts, and only the sentence's part is sent.
+  func testPartWithoutSpeechIsNotSent() async throws {
+    var recording = Recording()
+    _ = recording.append(try await TestAudio.speech("Run git status, then list the files in the sources folder."))
+    _ = recording.append(TestAudio.typing(seconds: 65))
+    let parts = recording.parts()
+    XCTAssertEqual(parts.count, 2)
+    let sent = await judged(recording)
+    XCTAssertEqual(sent.map(\.count), parts.prefix(1).map(\.count))
+    XCTAssertTrue(sent == Array(parts.prefix(1)), "the same audio")
+  }
+
+  /// Catches a room or digital silence sent once it is leveled: with no
+  /// contrast in it the whole recording, raised up to 40 dB, reaches the
+  /// classifier, which must still hear no speech.
+  func testQuietRoomIsNotSent() async {
+    for (name, samples) in [("room", TestAudio.room(seconds: 5)), ("digital silence", [Float](repeating: 0, count: 5 * TestAudio.rate))] {
+      var recording = Recording()
+      _ = recording.append(samples)
+      XCTAssertEqual(recording.parts().count, 1, name)
+      let sent = await judged(recording)
+      XCTAssertEqual(sent.count, 0, name)
+    }
   }
 }

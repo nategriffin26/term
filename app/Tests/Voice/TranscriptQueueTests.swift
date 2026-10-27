@@ -527,6 +527,84 @@ final class DictationTests: XCTestCase {
     await until("the answer typed") { terminal.typed == ["Yes."] }
   }
 
+  /// Catches a one-word answer with no room around it called "No speech":
+  /// "yes" said from the tap that starts listening to the tap that stops it
+  /// (0.4 s, its fading end cut by the stop) has nothing quieter in it to
+  /// tell the word from, and is sent and typed.
+  func testAnswerFromTapToTapIsTyped() async throws {
+    let service = Service()
+    service.reply = { _ in "Yes." }
+    let microphone = TestMicrophone()
+    let dictation = make(service, microphone: microphone)
+    let terminal = Terminal()
+    let yes = try await TestAudio.voice("Yes.", voicedFrames: 8)
+    XCTAssertEqual(yes.count, 8 * Recording.frameLength, "0.4 s")
+    dictation.listen(into: terminal)
+    await speak(yes, into: microphone, of: dictation)
+    dictation.stop()
+    await until("the answer typed") { terminal.typed == ["Yes."] }
+  }
+
+  /// Catches the bug the user reported: talking again after a quiet stretch
+  /// not picked up. Two quiet sentences (-62 and -64 dBFS, as a phone on the
+  /// desk hears them) 10 s apart go as one request holding all of both, the
+  /// pause cut to its pads and the speech raised by up to 40 dB toward the
+  /// target level; a -55 dBFS line used to send nothing of them ("No speech").
+  func testQuietSpeechAfterALongPauseIsSentLeveled() async throws {
+    final class Heard: @unchecked Sendable {
+      let lock = NSLock()
+      var audio: [[Float]] = []
+    }
+    let heard = Heard()
+    let service = Service()
+    service.reply = { data in
+      let url = FileManager.default.temporaryDirectory.appending(path: "sent-\(UUID().uuidString).m4a")
+      try? data.write(to: url)
+      defer { try? FileManager.default.removeItem(at: url) }
+      guard let file = try? AVAudioFile(forReading: url),
+            let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+            (try? file.read(into: buffer)) != nil else { return "unreadable" }
+      let samples = Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+      heard.lock.withLock { heard.audio.append(samples) }
+      return "Open the config. Then run the tests."
+    }
+    let microphone = TestMicrophone()
+    let dictation = make(service, microphone: microphone)
+    let terminal = Terminal()
+    let first = try await TestAudio.speech("Open the config.", dB: -62, roomDB: -76)
+    let second = try await TestAudio.speech("Then run the tests.", dB: -64, roomDB: -76)
+    let audio = TestAudio.room(seconds: 1, dB: -76) + first + TestAudio.room(seconds: 10, dB: -76) + second
+      + TestAudio.room(seconds: 1, dB: -76)
+    dictation.listen(into: terminal)
+    await speak(audio, into: microphone, of: dictation)
+    dictation.stop()
+    await until("typed", timeout: 10) { !terminal.typed.isEmpty }
+    XCTAssertEqual(terminal.typed, ["Open the config. Then run the tests."])
+    let sent = heard.lock.withLock { heard.audio }
+    XCTAssertEqual(sent.count, 1, "one request")
+    let samples = sent.first ?? []
+    let said = first + second
+    // Each sentence goes with at least 0.5 s of pad either side, more than its 0.5 s of room here.
+    XCTAssertGreaterThanOrEqual(samples.count, said.count, "both sentences whole")
+    XCTAssertLessThan(samples.count, said.count + 4 * TestAudio.rate, "the 10 s pause is cut")
+    /// dBFS of each whole frame.
+    func frames(_ x: [Float]) -> [Float] {
+      stride(from: 0, to: x.count - Recording.frameLength + 1, by: Recording.frameLength)
+        .map { Recording.loudness(x[$0..<$0 + Recording.frameLength]) }
+    }
+    /// dBFS of the 90th-percentile frame.
+    func level(_ dB: [Float]) -> Float { dB.isEmpty ? -120 : dB.sorted()[dB.count * 9 / 10] }
+    /// Frames within 20 dB of the 90th percentile: the speech, not the room.
+    func loud(_ dB: [Float]) -> Int {
+      let top = level(dB)
+      return dB.filter { $0 >= top - 20 }.count
+    }
+    let input = frames(said), output = frames(samples)
+    XCTAssertGreaterThanOrEqual(loud(output), loud(input), "every loud frame of both sentences")
+    XCTAssertEqual(level(output), min(Recording.target, level(input) + Recording.maxGain), accuracy: 3,
+                   "raised from \(level(input)) dBFS")
+  }
+
   /// Catches replies typed in arrival order: "one" answers last but types first.
   func testSlowFirstRecordingStillTypesFirst() async {
     let service = Service()

@@ -41,10 +41,12 @@ struct DictationDestination {
 
 /// Voice to text for the Smart Keys mic key. Records from the tap that
 /// starts listening to the tap that stops it, sending nothing meanwhile; then
-/// trims the room off both ends, cuts the recording at pauses into parts of a
-/// minute at most, drops parts the speech classifier hears no speech in,
-/// transcribes the rest two at a time and types the recording's text once,
-/// joined in order. A recording with no speech types nothing and says so.
+/// cuts the clearly silent stretches, sets what is left to one level, cuts it
+/// at pauses into parts of a minute at most, sends it when the speech
+/// classifier hears speech anywhere in it (less any part it is sure holds
+/// none), transcribes the parts two at a time and types the recording's
+/// text once, joined in order. A recording with no speech types nothing and
+/// says so.
 /// Speech is never dropped for a slow or missing network: parts wait on
 /// disk, failed ones keep their place and go again on their own schedule,
 /// when the network returns, on coming back to the app, or on a tap. Text
@@ -253,23 +255,23 @@ final class Dictation {
 
   // MARK: - Transcribing
 
-  /// A stopped recording: the parts the speech classifier hears speech in are
-  /// queued for transcription; with none, the strip says there was no speech.
+  /// A stopped recording: leveled, its silences cut, and judged by the speech
+  /// classifier; with speech, its parts are queued for transcription, and
+  /// without, the strip says there was no speech, at once when the
+  /// recording is empty.
   private func transcribe(_ recording: Recording, into destination: Destination, prompt: String) {
-    let parts = recording.parts()
-    guard !parts.isEmpty else { return show(.noSpeech) }
+    guard !recording.loudness.isEmpty else { return show(.noSpeech) }
     judging += 1
-    gate.judge(parts) { [weak self] speech in
+    gate.judge(recording) { [weak self] parts in
       guard let self else { return }
       judging -= 1
-      let spoken = zip(parts, speech).filter { $0.1 }.map { $0.0 }
-      if spoken.isEmpty {
+      if parts.isEmpty {
         show(.noSpeech)
       } else {
-        let ids = reserve(parts: spoken.count, destination, prompt: prompt)
-        for (id, part) in zip(ids, spoken) {
+        let ids = reserve(parts: parts.count, destination, prompt: prompt)
+        for (id, part) in zip(ids, parts) {
           Task.detached(priority: .userInitiated) { [weak self] in
-            let audio = try? SpeechAudio.m4a(part)
+            let audio = try? SpeechAudio.m4a(part[...])
             await self?.encoded(id, audio)
           }
         }
