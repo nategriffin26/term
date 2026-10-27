@@ -16,6 +16,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private let divider = UIView()
   private let failureLabel = UILabel()
   private var drag: Drag?
+  private var settle: Settle?
   private var bannerTimer: Timer?
   private var settingsObserver: NSObjectProtocol?
   private let pager = UIPanGestureRecognizer()
@@ -163,6 +164,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       bounds: view.bounds, safe: safe, division: fold, splitWhenFlat: AppSettings.shared.splitWhenFlat,
       regularWidth: traitCollection.horizontalSizeClass == .regular)
     if next != layout {
+      endSettle()
       if drag != nil { finishDrag(to: nil, animated: false) }
       layout = next
       foldActive = fold != nil
@@ -609,6 +611,29 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let pane: Pane
     let previous: Tab?
     let next: Tab?
+    /// Where the finger took the strip: off rest when it caught a settling swipe.
+    let start: CGFloat
+  }
+
+  /// A released swipe sliding to rest, and the switch it commits there.
+  private struct Settle {
+    let pane: Pane
+    let page: Tab
+    let animator: UIViewPropertyAnimator
+    let commit: () -> Void
+  }
+
+  /// Stops a settling swipe where its pages are and commits its switch, so
+  /// what comes next starts from the session it was bringing in. Returns how
+  /// far that page still was from rest.
+  @discardableResult
+  private func endSettle() -> (pane: Pane, offset: CGFloat)? {
+    guard let s = settle else { return nil }
+    settle = nil
+    s.animator.stopAnimation(true)
+    let offset = s.page.view.transform.tx
+    s.commit()
+    return (s.pane, offset)
   }
 
   /// The tab `step` places from the pane's tab, skipping tabs on screen elsewhere.
@@ -624,10 +649,16 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   @objc private func page(_ g: UIPanGestureRecognizer) {
     switch g.state {
     case .began:
+      // A swipe that catches the last one settling takes the pages from where they are.
+      let caught = endSettle()
       guard let pane = pane(at: g.location(in: view)) else { return }
       // A swipe between two taps, even one that springs back, ends the double tap.
       pane.tab.view.doubleTap.reset()
-      let d = Drag(pane: pane, previous: neighbor(of: pane, step: -1), next: neighbor(of: pane, step: 1))
+      let previous = neighbor(of: pane, step: -1), next = neighbor(of: pane, step: 1)
+      var start = caught.flatMap { $0.pane === pane ? $0.offset : nil } ?? 0
+      // Past the first or last session the strip follows at a quarter of the finger.
+      if (start < 0 && next == nil) || (start > 0 && previous == nil) { start *= 4 }
+      let d = Drag(pane: pane, previous: previous, next: next, start: start)
       for tab in [d.previous, d.next].compactMap({ $0 }) {
         tab.view.frame = pane.container.bounds
         pane.container.insertSubview(tab.view, belowSubview: pane.banner)
@@ -640,18 +671,20 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     case .changed:
       guard let d = drag else { return }
       let w = d.pane.container.bounds.width
-      var x = g.translation(in: view).x
+      var x = d.start + g.translation(in: view).x
       if (x < 0 && d.next == nil) || (x > 0 && d.previous == nil) { x *= 0.25 }
       apply(PagerStrip.dragged(by: x, width: w), to: d, current: d.pane.tab)
       trackHUD(d, offset: x / max(w, 1))
     case .ended:
       guard let d = drag else { return }
       let w = d.pane.container.bounds.width
-      let x = g.translation(in: view).x
+      let t = g.translation(in: view).x
+      let x = d.start + t
       let v = g.velocity(in: view).x
       var target: Tab?
-      if x < 0, x < -w * 0.35 || v < -500 { target = d.next }
-      if x > 0, x > w * 0.35 || v > 500 { target = d.previous }
+      // The finger's own direction picks the side; the distance counts from rest.
+      if t < 0, x < -w * 0.35 || v < -500 { target = d.next }
+      if t > 0, x > w * 0.35 || v > 500 { target = d.previous }
       finishDrag(to: target, animated: true)
     default:
       if drag != nil { finishDrag(to: nil, animated: true) }
@@ -688,8 +721,13 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       (target ?? current).view.setNeedsLayout()
     }
     if animated {
-      UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
-                     options: [.allowUserInteraction, .beginFromCurrentState], animations: moves) { _ in done() }
+      let animator = UIViewPropertyAnimator(duration: 0.3, dampingRatio: 1, animations: moves)
+      animator.addCompletion { [weak self] _ in
+        self?.settle = nil
+        done()
+      }
+      settle = Settle(pane: d.pane, page: target ?? current, animator: animator, commit: done)
+      animator.startAnimation()
     } else {
       moves()
       done()
@@ -726,9 +764,13 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   // MARK: - Actions (also reachable up the responder chain, e.g. from Smart Keys)
 
-  @objc func newSession(_ sender: Any?) { newTab() }
+  @objc func newSession(_ sender: Any?) {
+    endSettle()
+    newTab()
+  }
 
   @objc func closeSession(_ sender: Any?) {
+    endSettle()
     if let tab = focusedTab { close(tab) }
   }
 
@@ -737,6 +779,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   @objc func previousSession(_ sender: Any?) { step(-1) }
 
   private func step(_ delta: Int) {
+    endSettle()
     guard let pane = focusedPane, let tab = neighbor(of: pane, step: delta) else { return }
     show(tab, in: pane, focus: true)
     settleHUD(on: tab, in: pane)
@@ -794,6 +837,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     quiet.disablesAnimations = true
     withTransaction(quiet) { menu.tab = tab }
     hud.hide()
+    endSettle()
     if drag != nil { finishDrag(to: nil, animated: false) }
     let terminal = focusedTab?.view
     menuRestoresFocus = terminal?.isFirstResponder == true

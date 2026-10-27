@@ -58,6 +58,108 @@ final class KeyboardSwipeTests: XCTestCase {
     try await SwipeGesture.waitForCompletion(in: parent)
   }
 
+  /// One quick flick, released without waiting for it to settle. `moved`
+  /// runs after the gesture's first move.
+  private func flick(_ direction: CGFloat, in container: UIView, moved: () -> Void = {}) async throws {
+    let gesture = SwipeGesture()
+    gesture.point = container.convert(CGPoint(x: container.bounds.midX, y: container.bounds.height * 0.25), to: space.view)
+    gesture.phase = .began
+    space.perform(NSSelectorFromString("page:"), with: gesture)
+    for step in 1...6 {
+      gesture.phase = .changed
+      gesture.distance = direction * container.bounds.width * 0.2 * CGFloat(step) / 6
+      space.perform(NSSelectorFromString("page:"), with: gesture)
+      if step == 1 { moved() }
+      try await Task.sleep(for: .milliseconds(8))
+    }
+    gesture.speed = direction * 900
+    gesture.phase = .ended
+    space.perform(NSSelectorFromString("page:"), with: gesture)
+  }
+
+  /// Flicks one after another, each beginning 60 ms after the previous
+  /// release, while that release is still settling (0.3 s).
+  private func flicks(_ directions: [CGFloat], expectsSoftwareKeyboard: Bool = true,
+                      file: StaticString = #filePath, line: UInt = #line) async throws {
+    let probe = KeyboardContinuityProbe(space, expectsSoftwareKeyboard: expectsSoftwareKeyboard, file: file, line: line)
+    defer { probe.stop(file: file, line: line) }
+    let container = try XCTUnwrap(space.focusedTab?.view.superview)
+    var expected = try XCTUnwrap(space.tabs.firstIndex { $0 === space.focusedTab })
+    for (n, direction) in directions.enumerated() {
+      // Where each page is on screen as the finger lands, mid-settle.
+      var before: [ObjectIdentifier: CGFloat] = [:]
+      for case let page as TerminalView in container.subviews {
+        before[ObjectIdentifier(page)] = (page.layer.presentation() ?? page.layer).affineTransform().tx
+      }
+      try await flick(direction, in: container) {
+        guard n > 0 else { return }
+        for case let page as TerminalView in container.subviews {
+          guard let was = before[ObjectIdentifier(page)] else { continue }
+          XCTAssertEqual(page.transform.tx, was, accuracy: container.bounds.width * 0.1,
+                         "flick \(n + 1) moved a page from where the one before had left it", file: file, line: line)
+        }
+      }
+      expected = min(max(expected - Int(direction), 0), space.tabs.count - 1)
+      try await Task.sleep(for: .milliseconds(60))
+    }
+    try await SwipeGesture.waitForCompletion(in: container, file: file, line: line)
+    let landed = try XCTUnwrap(space.focusedTab, file: file, line: line)
+    XCTAssertTrue(landed === space.tabs[expected],
+                  "landed on tab \(space.tabs.firstIndex { $0 === landed } ?? -1), not \(expected)", file: file, line: line)
+    XCTAssertTrue(landed.view.superview === container, file: file, line: line)
+    XCTAssertEqual(landed.view.transform, .identity, file: file, line: line)
+  }
+
+  /// Bug (seen in the user's recording): a swipe that began while the one
+  /// before was still settling rebuilt the pages around the session that one
+  /// had left, pulled it back under the finger and landed where the first
+  /// swipe already had, so quick swipes moved one session for every two.
+  func testQuickSwipesMoveOneSessionEachWithTheKeyboardUp() async throws {
+    try await open(tabs: 4)
+    let grids = space.tabs.map { "\($0.current.cols)x\($0.current.rows)" }
+    try await flicks([-1, -1, -1])
+    try await flicks([1, 1, 1])
+    try await flicks([-1, 1, -1, -1])
+    try await flicks([-1, -1, -1])
+    XCTAssertTrue(try XCTUnwrap(space.focusedTab).view.isFirstResponder)
+    XCTAssertEqual(space.tabs.map { "\($0.current.cols)x\($0.current.rows)" }, grids)
+  }
+
+  func testQuickSwipesMoveOneSessionEachWithTheKeyboardDown() async throws {
+    try await open(tabs: 4)
+    space.focusedTab?.view.resignFirstResponder()
+    try await settle()
+    let grids = space.tabs.map { "\($0.current.cols)x\($0.current.rows)" }
+    try await flicks([-1, -1, -1], expectsSoftwareKeyboard: false)
+    try await flicks([1, 1, 1], expectsSoftwareKeyboard: false)
+    try await flicks([-1, 1, -1, -1], expectsSoftwareKeyboard: false)
+    try await flicks([-1, -1, -1], expectsSoftwareKeyboard: false)
+    XCTAssertFalse(space.tabs.contains { $0.view.isFirstResponder })
+    XCTAssertEqual(space.tabs.map { "\($0.current.cols)x\($0.current.rows)" }, grids)
+  }
+
+  /// Bug: ⌘⇧] or ⌘W pressed while a swipe settled acted on the session the
+  /// swipe had left: ⌘⇧] landed where the swipe already had, and ⌘W closed
+  /// the session swiped away from instead of the one on screen.
+  func testShortcutsDuringASettleActOnTheSessionItBringsIn() async throws {
+    try await open(tabs: 3)
+    let container = try XCTUnwrap(space.focusedTab?.view.superview)
+    try await flick(-1, in: container)
+    try await Task.sleep(for: .milliseconds(60))
+    space.nextSession(nil)
+    try await SwipeGesture.waitForCompletion(in: container)
+    XCTAssertTrue(space.focusedTab === space.tabs[2], "⌘⇧] after a swipe must move one session further")
+    let left = space.tabs[2]
+    let shown = space.tabs[1]
+    try await flick(1, in: container)
+    try await Task.sleep(for: .milliseconds(60))
+    space.closeSession(nil)
+    try await SwipeGesture.waitForCompletion(in: container)
+    XCTAssertFalse(space.tabs.contains { $0 === shown }, "⌘W must close the session the swipe brought in")
+    XCTAssertTrue(space.tabs.contains { $0 === left }, "⌘W closed the session swiped away from")
+    XCTAssertTrue(try XCTUnwrap(space.focusedTab).view.isFirstResponder)
+  }
+
   func testSwipesKeepKeyboardAndEveryTabGridForTwoAndThreeTabs() async throws {
     try await open(tabs: 2)
     for count in 2...3 {
