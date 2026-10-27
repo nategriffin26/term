@@ -52,14 +52,10 @@ struct ScreenCursor {
   let image: CGImage
   let size: CGSize
   let hotSpot: CGPoint
-  /// Phone points per unit of that space it is drawn at, at least: never
-  /// smaller than on the Mac's own screen, however far the picture is shrunk.
-  let legibleScale: CGFloat
-
-  /// Its size on the phone where the picture is drawn at `scale` phone points per unit.
+  /// Its size on the phone where the picture is drawn at `scale` phone points
+  /// per unit: the picture's own size at every zoom, as on the Mac's screen.
   func drawnSize(at scale: CGFloat) -> CGSize {
-    let s = max(scale, legibleScale)
-    return CGSize(width: size.width * s, height: size.height * s)
+    CGSize(width: size.width * scale, height: size.height * scale)
   }
 
   /// Drawn while the Mac has sent no shape, or a hidden one: the pointer is never invisible.
@@ -83,7 +79,7 @@ struct ScreenCursor {
       path.stroke()
       path.fill()
     }
-    return ScreenCursor(image: image.cgImage!, size: size, hotSpot: CGPoint(x: 2, y: 2), legibleScale: 1)
+    return ScreenCursor(image: image.cgImage!, size: size, hotSpot: CGPoint(x: 2, y: 2))
   }()
 }
 
@@ -564,7 +560,7 @@ final class ScreenSession {
     guard let ui = UIImage(data: image.png), let cg = ui.cgImage, image.scale > 0 else { return nil }
     return ScreenCursor(image: cg,
                         size: CGSize(width: CGFloat(cg.width) / image.scale, height: CGFloat(cg.height) / image.scale),
-                        hotSpot: CGPoint(x: image.hotX, y: image.hotY), legibleScale: 1)
+                        hotSpot: CGPoint(x: image.hotX, y: image.hotY))
   }
 
   // MARK: - Pointer

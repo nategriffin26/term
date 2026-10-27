@@ -264,10 +264,11 @@ final class ScreenSessionTests: XCTestCase {
     XCTAssertNil(session.pointerFrame, "no link once there is nothing to send")
   }
 
-  // Bug (the user's report): the pointer invisible, drawn to the picture's
-  // scale (a 32 pt pointer is 3 pt on a phone showing both displays), or
-  // not drawn at all until the Mac sends a shape or when it sends none.
-  func testThePointerIsDrawnAtLeastItsMacSizeAndNeverMissing() {
+  // Bugs (the user's reports): the pointer not drawn at all until the Mac
+  // sends a shape or when it sends none; then, floored at its size on the
+  // Mac, drawn many times too big for a zoomed-out picture. It is the
+  // picture's own size at every zoom.
+  func testThePointerIsDrawnToThePicturesScaleAndNeverMissing() {
     welcome()
     XCTAssertEqual(session.cursor.size, CGSize(width: 16, height: 23), "the arrow before any shape")
     // As Term Screen Host sends this Mac's arrow: 64 px at 2 px per pt, hot spot 12,8 pt.
@@ -275,7 +276,7 @@ final class ScreenSessionTests: XCTestCase {
       let f = UIGraphicsImageRendererFormat(); f.scale = 1; return f
     }()).pngData { _ in UIColor.black.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 4, height: 4)) }
     host.onEvent(.cursor(ScreenWire.CursorImage(png: image, scale: 2, hotX: 12, hotY: 8)))
-    XCTAssertEqual(session.cursor.drawnSize(at: 0.1), CGSize(width: 32, height: 32), "both displays fitted to a phone")
+    XCTAssertEqual(session.cursor.drawnSize(at: 0.1), CGSize(width: 3.2, height: 3.2), "both displays fitted to a phone")
     XCTAssertEqual(session.cursor.drawnSize(at: 3), CGSize(width: 96, height: 96), "zoomed in, it grows with the picture")
     XCTAssertEqual(session.cursor.hotSpot, CGPoint(x: 12, y: 8))
     host.onEvent(.cursor(ScreenWire.CursorImage(png: Data(), scale: 1, hotX: 0, hotY: 0)))

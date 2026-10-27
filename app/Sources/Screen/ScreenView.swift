@@ -75,6 +75,8 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     layer.addSublayer(stage)
     cursorLayer.isHidden = true
     cursorLayer.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "hidden": NSNull()]
+    // Zoomed out, the Mac's sharp pointer image shrinks many times over.
+    cursorLayer.minificationFilter = .trilinear
     layer.addSublayer(cursorLayer)
     indicator.opacity = 0
     layer.addSublayer(indicator)
@@ -652,8 +654,7 @@ final class ScreenView: UIView, UIGestureRecognizerDelegate, ScreenSurface {
     placeCursor()
   }
 
-  /// The Mac's pointer at the pointer's place, never smaller than it looks
-  /// on the Mac (the picture shrinks a Mac many times over to fit a phone).
+  /// The Mac's pointer at the pointer's place, at the picture's own scale.
   private func placeCursor() {
     guard let viewport = session.viewport, session.drivable else {
       cursorLayer.isHidden = true

@@ -96,7 +96,7 @@ The other path handles a server that's gone. Once a session has been silent for 
 
 ### Screen
 
-The Screen tab talks to Term Screen Host ([`mac/ScreenHost`](mac/ScreenHost)), a small app that runs on the Mac as a LaunchAgent. It captures each display with ScreenCaptureKit, encodes HEVC on the media engine, posts the phone's pointer, scroll and key events, and reads and writes the clipboard. The phone draws the pointer itself, at least as large as on the Mac, so moving it never waits for the network; it sends the Mac one move per display frame. A still screen gets one sharper frame about 0.4 s after it stops changing, so text is crisp.
+The Screen tab talks to Term Screen Host ([`mac/ScreenHost`](mac/ScreenHost)), a small app that runs on the Mac as a LaunchAgent. It captures each display with ScreenCaptureKit, encodes HEVC on the media engine, posts the phone's pointer, scroll and key events, and reads and writes the clipboard. The phone draws the pointer itself, at the picture's scale, so moving it never waits for the network; it sends the Mac one move per display frame. A still screen gets one sharper frame about 0.4 s after it stops changing, so text is crisp.
 
 Actions › Quality sets how the host trades picture for speed. High streams native pixels at the full bitrate, Medium three quarters of the pixels on each axis at half the bitrate, Low half on each axis at a quarter (sizes rounded down to even pixels). Adaptive, the default, starts at High, drops a level after two one-second samples in which the phone fell behind, changes at most every 5 s, and climbs back a level after 15 seconds of frames sent without falling behind; a still screen pauses that count rather than adding to it.
 
