@@ -299,17 +299,16 @@ final class TerminalView: UIView {
         setNeedsRender(build: false)
     }
 
-    /// Safe-area corners and keyboard guides follow transforms, including a
-    /// pane zooming into Sessions. Only resting geometry may size the grid.
+    /// Safe-area corners and keyboard guides follow transforms: a page sliding
+    /// between sessions moves the terminal itself, and Sessions zooms its pane
+    /// container. Only resting geometry may size the grid. Higher views are
+    /// left out: their transforms belong to iOS (a sheet shrinking the screen
+    /// behind it), and nothing of Term's would restart sizing after them.
     private var isTransforming: Bool {
-        var ancestor: UIView? = self
-        while let view = ancestor, !(view is UIWindow) {
-            if !view.transform.isIdentity || !(view.layer.presentation()?.affineTransform().isIdentity ?? true) {
-                return true
-            }
-            ancestor = view.superview
+        [self, superview].contains { view in
+            guard let view else { return false }
+            return !view.transform.isIdentity || !(view.layer.presentation()?.affineTransform().isIdentity ?? true)
         }
-        return false
     }
 
     /// Fits the grid inside the safe area, clear of rounded display corners
