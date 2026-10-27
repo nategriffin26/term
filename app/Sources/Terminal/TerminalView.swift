@@ -20,6 +20,9 @@ protocol TerminalViewDelegate: AnyObject {
     func terminalViewOpensVoiceSettings(_ view: TerminalView)
     /// Where this terminal's input goes now, for dictation; nil at the local prompt.
     func terminalViewDictationDestination(_ view: TerminalView) -> DictationDestination?
+    /// A quick double tap here: true when the delegate took it (it opens
+    /// Sessions); false leaves the second tap a plain tap.
+    func terminalViewDoubleTapped(_ view: TerminalView) -> Bool
 }
 
 /// A terminal grid in cells, with the cell it was measured in (pixels).
@@ -138,6 +141,10 @@ final class TerminalView: UIView {
     var momentumTime: CFTimeInterval = 0
     var isCoasting = false
     var touchStoppedCoasting = false
+    /// When the latest touch came down (UITouch time), and the tap that may
+    /// start a double tap.
+    var touchDownTime: TimeInterval = 0
+    var doubleTap = DoubleTap()
     var pinchBaseSize: CGFloat = 0
     var selectionAnchor: (start: GridPoint, end: GridPoint)?
     let selectionLoupe = SelectionLoupe()

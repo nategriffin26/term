@@ -49,6 +49,7 @@ extension TerminalView {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if let touch = touches.first { touchDownTime = touch.timestamp }
         if isCoasting {
             stopCoasting()
             touchStoppedCoasting = true
@@ -61,14 +62,24 @@ extension TerminalView {
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
         if touchStoppedCoasting {
             touchStoppedCoasting = false
+            doubleTap.reset()
             return
         }
         if selection != nil {
             clearSelection()
+            doubleTap.reset()
             return
         }
-        if let diagram = diagramOverlay.diagram(at: g.location(in: self)) {
+        let p = g.location(in: self)
+        if let diagram = diagramOverlay.diagram(at: p) {
+            doubleTap.reset()
             openDiagram(diagram)
+            return
+        }
+        // The first tap has already acted; the second of a quick pair opens
+        // Sessions instead of acting, so a program never sees a double-click.
+        if doubleTap.tap(at: p, touch: touchDownTime, lift: ProcessInfo.processInfo.systemUptime),
+           delegate?.terminalViewDoubleTapped(self) == true {
             return
         }
         guard isFirstResponder else {
@@ -76,7 +87,7 @@ extension TerminalView {
             return
         }
         if snapshot.has(TERM_MODE_MOUSE_TRACKING) {
-            let c = cell(at: g.location(in: self))
+            let c = cell(at: p)
             session.mouse(TERM_MOUSE_PRESS, TERM_MOUSE_LEFT, col: c.col, row: c.row)
             session.mouse(TERM_MOUSE_RELEASE, TERM_MOUSE_LEFT, col: c.col, row: c.row)
         }
@@ -87,6 +98,7 @@ extension TerminalView {
     @objc private func handlePan(_ g: UIPanGestureRecognizer) {
         switch g.state {
         case .began:
+            doubleTap.reset()
             touchStoppedCoasting = false
             stopCoasting()
             scrollRemainder = 0
@@ -171,6 +183,7 @@ extension TerminalView {
         let range = FontSet.pointSizeRange
         switch g.state {
         case .began:
+            doubleTap.reset()
             stopCoasting()
             pinchBaseSize = fontSize
             isPinching = true
@@ -215,6 +228,7 @@ extension TerminalView {
         let p = g.location(in: self)
         switch g.state {
         case .began:
+            doubleTap.reset()
             stopCoasting()
             if let diagram = diagramOverlay.diagram(at: p) {
                 diagramOverlay.menuTarget = diagram

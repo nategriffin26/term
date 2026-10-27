@@ -39,8 +39,10 @@ import UIKit
 ///   setting. Nothing on glass is glass again:
 ///   controls on it use fills. Lists are inset groups of `fill` whose rows
 ///   are split by `line` from the text's leading edge.
-/// - Motion: `spring` for panels, pages, selection and layout; `quick` for
-///   presses and checks; `fade` for content that swaps in place.
+/// - Motion: `spring` for pages, selection and layout; `quick` for presses
+///   and checks; `fade` for content that swaps in place. The menu panel
+///   (opening, closing, switching tabs) and a terminal zooming in and out of
+///   its window on Sessions take `Panel`'s quicker timings.
 enum Chrome {
   // MARK: Colour. Read inside a SwiftUI body, they redraw it when the app theme changes.
 
@@ -208,6 +210,39 @@ enum Chrome {
   }
 
   // MARK: Motion
+
+  /// The menu panel and the terminal zooming between the screen and its
+  /// window on Sessions: critically damped springs (no bounce) and short
+  /// fades. Content shows from the first frame; closing is quicker than opening.
+  enum Panel {
+    /// The card growing in (or out of its dock icon), with the scrim and the glass.
+    static let open: TimeInterval = 0.22
+    /// The card leaving (or shrinking into its dock icon).
+    static let close: TimeInterval = 0.18
+    /// The content fading in, starting with the card.
+    static let contentIn: TimeInterval = 0.12
+    /// The content fading out as the card leaves.
+    static let contentOut: TimeInterval = 0.07
+    /// Closing into a dock icon: the card dissolves under the icon, starting
+    /// `landingDelay` into the close.
+    static let landingDelay: TimeInterval = 0.06
+    static let landing: TimeInterval = 0.1
+    /// A terminal shrinking into its window on Sessions, or growing back out.
+    static let zoom: TimeInterval = 0.22
+    /// The card fading in behind a terminal shrinking into its window.
+    static let zoomFadeIn: TimeInterval = 0.16
+    /// The card fading out as a window grows into the terminal.
+    static let zoomFadeOut: TimeInterval = 0.12
+    /// The open tab's lens sliding along the track.
+    static let tabSwitch = Animation.spring(duration: 0.2, bounce: 0)
+    /// The tabs' content cross-fading as the lens slides.
+    static let tabContent = Animation.easeOut(duration: 0.12)
+
+    /// UIKit's spring for these durations, for UIViewPropertyAnimator(duration:timingParameters:).
+    @MainActor static func spring(_ duration: TimeInterval) -> UISpringTimingParameters {
+      UISpringTimingParameters(duration: duration, bounce: 0)
+    }
+  }
 
   static let spring = Animation.spring(duration: 0.4, bounce: 0.12)
   static let quick = Animation.snappy(duration: 0.22)

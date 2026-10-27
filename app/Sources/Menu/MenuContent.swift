@@ -5,12 +5,11 @@ import SwiftUI
 /// only Files and Screen also keep it across close/reopen (MenuModel.isOpen resets the rest).
 struct MenuContent: View {
   let model: MenuModel
-  @Namespace private var indicator
 
   var body: some View {
     VStack(spacing: 0) {
       // Fullscreen on the Screen gives the picture the whole panel.
-      if !(model.tab == .screen && model.screen.fullscreen) { header.transition(.opacity) }
+      if !(model.tab == .screen && model.screen.fullscreen) { MenuHeader(model: model).transition(.opacity) }
       ZStack {
         ForEach(MenuTab.allCases) { tab in
           let shown = model.tab == tab
@@ -21,19 +20,45 @@ struct MenuContent: View {
             .accessibilityHidden(!shown)
         }
       }
-      .animation(Chrome.fade, value: model.tab)
+      .animation(Chrome.Panel.tabContent, value: model.tab)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     .tint(Chrome.accent)
   }
 
-  private var header: some View {
+  @ViewBuilder
+  private func content(for tab: MenuTab) -> some View {
+    switch tab {
+    case .sessions: SessionsTab(model: model)
+    case .tmux: TmuxTab(model: model)
+    case .files: FilesTab(model: model)
+    case .screen: ScreenTab(session: model.screen)
+    case .settings: SettingsView(start: model.settingsStart).id(model.settingsGeneration).scrollContentBackground(.hidden)
+    }
+  }
+}
+
+/// The panel's header: the tab track, the open page's buttons and close.
+struct MenuHeader: View {
+  let model: MenuModel
+  @Namespace private var indicator
+
+  var body: some View {
     HStack(spacing: 0) {
       // Every tab's name when the panel is wide enough; on a phone only the
-      // open one's, the others by icon.
+      // open one's; on the narrowest panels icons only, scrolling before the
+      // buttons on the right would be pushed off the panel.
       ViewThatFits(in: .horizontal) {
-        tabs(titled: { _ in true })
-        tabs(titled: { $0 == model.tab })
+        tabs(titled: { _ in true }).background(Capsule().fill(Chrome.fill))
+        tabs(titled: { $0 == model.tab }).background(Capsule().fill(Chrome.fill))
+        ScrollViewReader { proxy in
+          ScrollView(.horizontal, showsIndicators: false) { tabs(titled: { _ in false }) }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .background(Capsule().fill(Chrome.fill))
+            .clipShape(Capsule())
+            .onAppear { proxy.scrollTo(model.tab) }
+            .onChange(of: model.tab) { _, tab in withAnimation(Chrome.Panel.tabSwitch) { proxy.scrollTo(tab) } }
+        }
       }
       Spacer(minLength: Chrome.Space.s)
       if model.tab == .tmux, model.tmuxSelecting {
@@ -70,16 +95,17 @@ struct MenuContent: View {
       .frame(height: Chrome.Size.target)
       .contentShape(Rectangle())
       .buttonStyle(PressScale(0.94))
+      .fixedSize()
   }
 
-  /// A capsule track of tabs; the open one sits in a lens that slides to the next.
+  /// The tabs on their track (the caller fills it); the open one sits in a lens that slides to the next.
   private func tabs(titled: @escaping (MenuTab) -> Bool) -> some View {
     HStack(spacing: 2) {
       ForEach(MenuTab.allCases) { tab in
         let selected = model.tab == tab
         let count = tab == .tmux ? TmuxStore.shared.unreadCount : 0
         Button {
-          withAnimation(Chrome.spring) { model.tab = tab }
+          withAnimation(Chrome.Panel.tabSwitch) { model.tab = tab }
         } label: {
           HStack(spacing: Chrome.Space.s) {
             Image(systemName: selected ? tab.selectedSymbol : tab.symbol)
@@ -111,21 +137,10 @@ struct MenuContent: View {
         .accessibilityLabel(tab.title)
         .accessibilityValue(count > 0 ? "\(count) new" : "")
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .id(tab)
       }
     }
     .padding(Chrome.Space.xs)
-    .background(Capsule().fill(Chrome.fill))
-  }
-
-  @ViewBuilder
-  private func content(for tab: MenuTab) -> some View {
-    switch tab {
-    case .sessions: SessionsTab(model: model)
-    case .tmux: TmuxTab(model: model)
-    case .files: FilesTab(model: model)
-    case .screen: ScreenTab(session: model.screen)
-    case .settings: SettingsView(start: model.settingsStart).id(model.settingsGeneration).scrollContentBackground(.hidden)
-    }
   }
 }
 

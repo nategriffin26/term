@@ -155,7 +155,7 @@ final class MenuPanel: UIViewController {
       ghost.alpha = 0
     }
 
-    let animator = UIViewPropertyAnimator(duration: 0.45, timingParameters: Chrome.springTiming)
+    let animator = UIViewPropertyAnimator(duration: Chrome.Panel.open, timingParameters: Chrome.Panel.spring(Chrome.Panel.open))
     animator.addAnimations { [self] in
       card.transform = .identity
       glass.isGlassShown = true
@@ -173,15 +173,15 @@ final class MenuPanel: UIViewController {
     animator.startAnimation()
 
     if source != nil {
-      UIView.animate(withDuration: 0.16, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) { self.ghost.alpha = 0 }
+      UIView.animate(withDuration: Chrome.Panel.contentIn, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) { self.ghost.alpha = 0 }
     }
-    let content = UIViewPropertyAnimator(duration: 0.3, timingParameters: Chrome.fadeTiming)
+    let content = UIViewPropertyAnimator(duration: Chrome.Panel.contentIn, timingParameters: Chrome.fadeTiming)
     content.addAnimations { [self] in
       host.view.alpha = 1
       host.view.transform = .identity
     }
     contentAnimator = content
-    content.startAnimation(afterDelay: source == nil ? 0.04 : 0.14)
+    content.startAnimation()
   }
 
   /// Closes into the dock icon it came from when that icon is still on screen.
@@ -193,13 +193,13 @@ final class MenuPanel: UIViewController {
     let tab = model.tab
     let end = openedFrom.flatMap { _ in iconFrame?(tab) }
 
-    let content = UIViewPropertyAnimator(duration: 0.14, timingParameters: Chrome.fadeTiming)
+    let content = UIViewPropertyAnimator(duration: Chrome.Panel.contentOut, timingParameters: Chrome.fadeTiming)
     content.addAnimations { [self] in host.view.alpha = 0 }
     contentAnimator = content
     content.startAnimation()
 
     ghost.alpha = 0
-    let animator = UIViewPropertyAnimator(duration: end == nil ? 0.3 : 0.42, timingParameters: Chrome.springTiming)
+    let animator = UIViewPropertyAnimator(duration: Chrome.Panel.close, timingParameters: Chrome.Panel.spring(Chrome.Panel.close))
     animator.addAnimations { [self] in
       scrim.alpha = 0
       if let end {
@@ -212,9 +212,9 @@ final class MenuPanel: UIViewController {
     }
     if end != nil {
       // The dock icon draws above the card: the card dissolves as it lands under it.
-      let landing = UIViewPropertyAnimator(duration: 0.2, curve: .easeIn) { self.glass.isGlassShown = false }
+      let landing = UIViewPropertyAnimator(duration: Chrome.Panel.landing, curve: .easeIn) { self.glass.isGlassShown = false }
       landingAnimator = landing
-      landing.startAnimation(afterDelay: 0.18)
+      landing.startAnimation(afterDelay: Chrome.Panel.landingDelay)
     }
     animator.addCompletion { [weak self] position in
       guard let self else { return }

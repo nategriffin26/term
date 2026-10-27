@@ -76,7 +76,8 @@ final class MenuDock: UIView {
     selected = tab
     drawIcons()
     guard opened else { return }
-    let animator = UIViewPropertyAnimator(duration: Chrome.springDuration, timingParameters: Chrome.springTiming)
+    let duration = tab != nil ? Chrome.Panel.open : Chrome.Panel.close
+    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Chrome.Panel.spring(duration))
     animator.addAnimations { self.glass.isGlassShown = tab != nil }
     animator.startAnimation()
   }

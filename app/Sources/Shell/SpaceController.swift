@@ -507,6 +507,14 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     openMenu(.settings)
   }
 
+  /// A double tap on a terminal opens Sessions. With the menu open, or a
+  /// window still zooming, it is two plain taps.
+  func terminalViewDoubleTapped(_ view: TerminalView) -> Bool {
+    guard !panel.isOpen, menu.zooming == nil, tabs.contains(where: { $0.view === view }) else { return false }
+    openMenu(.sessions)
+    return true
+  }
+
   private func updateBannerTimer() {
     let needed = panes.contains { $0.tab.unreachable || ($0.tab.isConnected && $0.tab.connecting != nil) }
     if needed, bannerTimer == nil {
@@ -792,8 +800,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private func openOverview(shrinking pane: Pane) {
     let tab = pane.tab
     menu.zooming = tab.id
-    panel.fadeIn(.sessions, duration: 0.32)
-    // The mosaic places its windows during the hosting view's layout pass.
+    panel.fadeIn(.sessions, duration: Chrome.Panel.zoomFadeIn)
+    // The overview places its windows during the hosting view's layout pass.
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       guard panel.isOpen, menu.tab == .sessions, pane.tab === tab, let thumbnail = thumbnail(of: tab) else {
@@ -826,7 +834,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       return
     }
     menu.zooming = tab.id
-    panel.fadeOut(duration: 0.24) {}
+    panel.fadeOut(duration: Chrome.Panel.zoomFadeOut) {}
     zoom(pane, into: thumbnail, towardTile: false) { [weak self] in self?.menu.zooming = nil }
   }
 
@@ -866,6 +874,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let fullPath = Self.maskPath(container.bounds, bottomRadius: 0)
     let tilePath = Self.maskPath(shown, bottomRadius: Chrome.Radius.tile / s)
 
+    // The mask's path is already its end value; it morphs there on the transform's spring.
     let mask = CAShapeLayer()
     mask.path = towardTile ? tilePath : fullPath
     container.layer.mask = mask
@@ -873,15 +882,14 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     view.bringSubviewToFront(dock)
     container.transform = towardTile ? .identity : small
 
-    let duration = 0.45
-    let morph = CABasicAnimation(keyPath: "path")
+    let morph = CASpringAnimation(perceptualDuration: Chrome.Panel.zoom, bounce: 0)
+    morph.keyPath = "path"
     morph.fromValue = towardTile ? fullPath : tilePath
     morph.toValue = towardTile ? tilePath : fullPath
-    morph.duration = duration
-    morph.timingFunction = CAMediaTimingFunction(controlPoints: 0.32, 0.72, 0, 1)
+    morph.duration = morph.settlingDuration
     mask.add(morph, forKey: "path")
 
-    let animator = UIViewPropertyAnimator(duration: duration, timingParameters: Chrome.springTiming)
+    let animator = UIViewPropertyAnimator(duration: Chrome.Panel.zoom, timingParameters: Chrome.Panel.spring(Chrome.Panel.zoom))
     animator.addAnimations { container.transform = towardTile ? small : .identity }
     animator.addCompletion { [weak self] _ in
       guard let self else { return }
