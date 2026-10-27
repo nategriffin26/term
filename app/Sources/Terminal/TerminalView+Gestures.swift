@@ -226,14 +226,19 @@ extension TerminalView {
             selection = word
             UISelectionFeedbackGenerator().selectionChanged()
             editMenu.dismissMenu()
+            selectionLoupe.arm(at: p)
             selectionChanged()
         case .changed:
             guard let anchor = selectionAnchor else { return }
             let q = gridPoint(at: p)
             selection = q < anchor.start ? (q, anchor.end) : (anchor.start, max(q, anchor.end))
+            selectionLoupe.move(to: loupePoint(x: p.x, cell: q), caret: caretRect(cell: q, leading: q < anchor.start), in: self)
             selectionChanged()
         case .ended:
+            selectionLoupe.end()
             showEditMenu()
+        case .cancelled, .failed:
+            selectionLoupe.end()
         default:
             break
         }
@@ -248,18 +253,36 @@ extension TerminalView {
         switch g.state {
         case .began:
             editMenu.dismissMenu()
+            selectionLoupe.move(to: loupePoint(x: p.x, cell: q), caret: caretRect(cell: q, leading: handle.isStart ? q <= s.end : q < s.start), widget: handle, in: self)
         case .changed:
             if handle.isStart {
                 selection = q <= s.end ? (q, s.end) : (s.end, q)
             } else {
                 selection = q >= s.start ? (s.start, q) : (q, s.start)
             }
+            selectionLoupe.move(to: loupePoint(x: p.x, cell: q), caret: caretRect(cell: q, leading: handle.isStart ? q <= s.end : q < s.start), widget: handle, in: self)
             selectionChanged()
         case .ended:
+            selectionLoupe.end()
             showEditMenu()
+        case .cancelled, .failed:
+            selectionLoupe.end()
         default:
             break
         }
+    }
+
+    /// The selection edge being placed: the left edge of `q` when the drag
+    /// makes it the start, else its right edge.
+    private func caretRect(cell q: GridPoint, leading: Bool) -> CGRect {
+        let r = rect(col: q.col, row: q.row - viewportTop)
+        return CGRect(x: leading ? r.minX : r.maxX - 2, y: r.minY, width: 2, height: r.height)
+    }
+
+    /// Where the loupe looks: under the finger horizontally, on the middle
+    /// of the line being aimed at vertically, as iOS text views do.
+    private func loupePoint(x: CGFloat, cell q: GridPoint) -> CGPoint {
+        CGPoint(x: x, y: rect(col: q.col, row: q.row - viewportTop).midY)
     }
 
     private func selectionChanged() {
@@ -271,6 +294,7 @@ extension TerminalView {
         guard selection != nil else { return }
         selection = nil
         selectionAnchor = nil
+        selectionLoupe.end()
         editMenu.dismissMenu()
         selectionChanged()
     }

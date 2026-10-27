@@ -139,6 +139,7 @@ final class TerminalView: UIView {
     var touchStoppedCoasting = false
     var pinchBaseSize: CGFloat = 0
     var selectionAnchor: (start: GridPoint, end: GridPoint)?
+    let selectionLoupe = SelectionLoupe()
     var scrollIndicatorHide: Timer?
 
     // Input state (TerminalView+Input).
