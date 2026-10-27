@@ -187,10 +187,9 @@ Both checks were seen to fail on deliberate bugs planted in a scratch copy of th
 
 ## Status
 
-Term is installed and tested end to end on an iPhone 11. A few things are not proven yet:
+Term is installed and used on an iPhone Duo, and its layouts are checked in the simulator on the Duo's two displays and on a current standard iPhone. A few things are not proven yet:
 
 - There is no App Store or TestFlight build. You build it yourself.
-- iPhone Duo layouts are verified in the simulator, not on Duo hardware.
 - Roaming between networks is covered by the formal model and the interop tests, not by long field use on cellular.
 - Composed input (CJK, dead-key accents) is untested.
 - The Screen tab has been used on an iPhone Duo over cellular. Its adaptive quality is measured against a client throttled on the Mac, not on a cellular link.
