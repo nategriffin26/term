@@ -217,8 +217,9 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let old = pane.tabIfSet
     let transfersFocus = focus || old?.view.isFirstResponder == true
     pane.tab = tab
-    tab.view.frame = pane.container.bounds
+    // Identity first: a frame set under a transform offsets the view's centre.
     tab.view.transform = .identity
+    tab.view.frame = pane.container.bounds
     pane.container.insertSubview(tab.view, belowSubview: pane.banner)
     // Removing a first responder dismisses the keyboard before its replacement
     // can take it. Hand it directly to the incoming terminal while both are
@@ -715,6 +716,9 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
         tab.view.transform = .identity
       }
       if target == nil {
+        // A spring-back stopped part way leaves the page off rest.
+        current.view.transform = .identity
+        current.view.frame = d.pane.container.bounds
         d.pane.banner.update(for: current)
       }
       // At rest: measure the grid it held while sliding.

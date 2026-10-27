@@ -18,12 +18,15 @@ final class KeyboardSwipeTests: XCTestCase {
     AppSettings.shared.splitWhenFlat = savedSplit
   }
 
-  private func open(tabs count: Int) async throws {
+  /// `split`: Two Panes, forced on with a regular width and a window wide enough for two.
+  private func open(tabs count: Int, split: Bool = false) async throws {
     savedSplit = AppSettings.shared.splitWhenFlat
-    AppSettings.shared.splitWhenFlat = false
+    AppSettings.shared.splitWhenFlat = split
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = UIWindow(windowScene: scene)
+    if split { window.frame.size.width = max(window.frame.width, 900) }
     space = SpaceController(sceneID: "keyboard-swipe-" + UUID().uuidString)
+    if split { space.traitOverrides.horizontalSizeClass = .regular }
     window.rootViewController = UINavigationController(rootViewController: space)
     window.makeKeyAndVisible()
     self.window = window
@@ -89,13 +92,13 @@ final class KeyboardSwipeTests: XCTestCase {
       // Where each page is on screen as the finger lands, mid-settle.
       var before: [ObjectIdentifier: CGFloat] = [:]
       for case let page as TerminalView in container.subviews {
-        before[ObjectIdentifier(page)] = (page.layer.presentation() ?? page.layer).affineTransform().tx
+        before[ObjectIdentifier(page)] = (page.layer.presentation() ?? page.layer).frame.minX
       }
       try await flick(direction, in: container) {
         guard n > 0 else { return }
         for case let page as TerminalView in container.subviews {
           guard let was = before[ObjectIdentifier(page)] else { continue }
-          XCTAssertEqual(page.transform.tx, was, accuracy: container.bounds.width * 0.1,
+          XCTAssertEqual(page.convert(page.bounds, to: container).minX, was, accuracy: container.bounds.width * 0.1,
                          "flick \(n + 1) moved a page from where the one before had left it", file: file, line: line)
         }
       }
@@ -158,6 +161,65 @@ final class KeyboardSwipeTests: XCTestCase {
     XCTAssertFalse(space.tabs.contains { $0 === shown }, "⌘W must close the session the swipe brought in")
     XCTAssertTrue(space.tabs.contains { $0 === left }, "⌘W closed the session swiped away from")
     XCTAssertTrue(try XCTUnwrap(space.focusedTab).view.isFirstResponder)
+  }
+
+  /// Pulls the page a fifth of the way and cancels, so it springs back.
+  private func cancelledPull(in container: UIView) {
+    let gesture = SwipeGesture()
+    gesture.point = container.convert(CGPoint(x: container.bounds.midX, y: container.bounds.height * 0.25), to: space.view)
+    gesture.phase = .began
+    space.perform(NSSelectorFromString("page:"), with: gesture)
+    gesture.phase = .changed
+    gesture.distance = -container.bounds.width * 0.2
+    space.perform(NSSelectorFromString("page:"), with: gesture)
+    gesture.phase = .cancelled
+    space.perform(NSSelectorFromString("page:"), with: gesture)
+  }
+
+  /// At rest: in place, no transform on the model or on screen (so it lays out its grid again).
+  private func assertAtRest(_ tab: Tab, in container: UIView, file: StaticString = #filePath, line: UInt = #line) {
+    XCTAssertTrue(tab.view.superview === container, "the page left its pane", file: file, line: line)
+    XCTAssertTrue(tab.view.transform.isIdentity, "the page stayed displaced: \(tab.view.transform)", file: file, line: line)
+    XCTAssertTrue((tab.view.layer.presentation()?.affineTransform() ?? .identity).isIdentity,
+                  "the page is still sliding on screen", file: file, line: line)
+    XCTAssertEqual(tab.view.frame, container.bounds, file: file, line: line)
+  }
+
+  /// Bug: opening the menu during a cancelled swipe's spring-back stopped the
+  /// page where it was, displaced, and left it sliding (no grid layout).
+  func testMenuOpenedDuringASpringBackLeavesThePageAtRest() async throws {
+    try await open(tabs: 2)
+    let tab = try XCTUnwrap(space.focusedTab)
+    let container = try XCTUnwrap(tab.view.superview)
+    cancelledPull(in: container)
+    try await Task.sleep(for: .milliseconds(60))
+    space.toggleMenu(nil)
+    try await Task.sleep(for: .milliseconds(100))
+    assertAtRest(tab, in: container)
+    space.closeMenu()
+    try await settle()
+  }
+
+  /// Bug: with Two Panes, a swipe in one pane during the other's spring-back
+  /// left the other pane's page displaced and sliding.
+  func testSwipeInTheOtherPaneDuringASpringBackLeavesThePageAtRest() async throws {
+    try await open(tabs: 4, split: true)
+    XCTAssertTrue(space.showsTwoPanes, "the test needs Two Panes")
+    let shown = space.tabs.filter { space.paneIndex(showing: $0) != nil }
+      .sorted { (space.paneIndex(showing: $0) ?? 0) < (space.paneIndex(showing: $1) ?? 0) }
+    XCTAssertEqual(shown.count, 2)
+    let left = try XCTUnwrap(shown.first)
+    let right = try XCTUnwrap(shown.last)
+    let leftContainer = try XCTUnwrap(left.view.superview)
+    let rightContainer = try XCTUnwrap(right.view.superview)
+    cancelledPull(in: leftContainer)
+    try await Task.sleep(for: .milliseconds(60))
+    // Toward a session neither pane shows.
+    let last = space.tabs.last === right
+    try await flick(last ? 1 : -1, in: rightContainer)
+    try await SwipeGesture.waitForCompletion(in: rightContainer)
+    assertAtRest(left, in: leftContainer)
+    XCTAssertFalse(space.paneIndex(showing: right) == 1, "the swipe in the other pane must still switch it")
   }
 
   func testSwipesKeepKeyboardAndEveryTabGridForTwoAndThreeTabs() async throws {
