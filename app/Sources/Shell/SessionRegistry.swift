@@ -10,8 +10,11 @@ final class SessionRegistry {
 
   /// UISceneSession.persistentIdentifier -> that window's tabs, in order.
   private var tabsByScene: [String: [Tab]] = [:]
+  /// UISceneSession.persistentIdentifier -> the Sessions tiling the user shaped there.
+  private var tilingByScene: [String: SplitTree<UUID>] = [:]
   private let directory: URL
   private var indexURL: URL { directory.appending(path: "index.json") }
+  private var tilingsURL: URL { directory.appending(path: "tilings.json") }
   private var attachmentTimer: Task<Void, Never>?
   private var foreground = true
 
@@ -30,12 +33,33 @@ final class SessionRegistry {
     observeTmuxAttachments()
   }
 
+  func tiling(forScene id: String) -> SplitTree<UUID>? {
+    tilingByScene[id]
+  }
+
+  func setTiling(_ tiling: SplitTree<UUID>?, forScene id: String) {
+    tilingByScene[id] = tiling
+  }
+
   /// Windows the user closed: their sessions end.
   func discardScenes(_ ids: Set<String>) {
     for id in ids {
       for tab in tabsByScene[id] ?? [] { tab.disconnect() }
       tabsByScene[id] = nil
+      tilingByScene[id] = nil
     }
+  }
+
+  /// Every window's tiling, for the next launch (with the tabs' order, at suspension).
+  func saveTilings() {
+    try? JSONEncoder().encode(tilingByScene).write(to: tilingsURL, options: .atomic)
+  }
+
+  /// The tilings saved at the last suspension; a window's tiling already in memory wins.
+  func restoreTilings() {
+    guard let data = try? Data(contentsOf: tilingsURL),
+          let saved = try? JSONDecoder().decode([String: SplitTree<UUID>].self, from: data) else { return }
+    tilingByScene.merge(saved) { current, _ in current }
   }
 
   private func observeTmuxAttachments() {
@@ -80,6 +104,7 @@ final class SessionRegistry {
       }
     }
     try? JSONEncoder.pretty.encode(index).write(to: indexURL, options: .atomic)
+    saveTilings()
     term_core_suspend_network()
   }
 
@@ -101,6 +126,7 @@ final class SessionRegistry {
   /// Checkpoints are read into memory and deleted before any restored
   /// session starts its network (term_session_restore starts it at once).
   func restoreSaved() {
+    restoreTilings()
     guard let data = try? Data(contentsOf: indexURL),
           let index = try? JSONDecoder().decode([String: [SavedTab]].self, from: data) else {
       clearSaved()

@@ -307,6 +307,20 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     Self.tabsChanged()
   }
 
+  /// The Sessions tiling of this window as the user shaped it; nil while it is even.
+  var tiling: SplitTree<UUID>? { SessionRegistry.shared.tiling(forScene: sceneID) }
+
+  /// A drop, border drag or evening out on the overview: the tabs take
+  /// `order` (the tiling's reading order; tabs it lacks keep theirs after
+  /// it) and the window keeps `tiling`. The panes keep the tabs they show.
+  func arrange(_ order: [UUID], tiling: SplitTree<UUID>?) {
+    let placed = order.compactMap { id in tabs.first { $0.id == id } }
+    tabs = placed + tabs.filter { tab in !placed.contains { $0 === tab } }
+    SessionRegistry.shared.setTabs(tabs, forScene: sceneID)
+    SessionRegistry.shared.setTiling(tiling, forScene: sceneID)
+    Self.tabsChanged()
+  }
+
   /// Whether the window shows two panes (Two Panes on the Duo's inner display, flat).
   var showsTwoPanes: Bool { panes.count == 2 }
 

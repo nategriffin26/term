@@ -14,6 +14,7 @@ final class TabReorderTests: XCTestCase {
       window?.isHidden = true
       window = nil
       SessionRegistry.shared.setTabs([], forScene: sceneID)
+      SessionRegistry.shared.setTiling(nil, forScene: sceneID)
     }
   }
 
@@ -69,20 +70,46 @@ final class TabReorderTests: XCTestCase {
     XCTAssertNotNil(shown.view.window)
   }
 
-  // Bug: sessions opening or closing during a drag dropping the lifted one somewhere other than the preview showed.
-  func testAMembershipChangeDuringADragCommitsThePreviewedOrder() throws {
-    let space = try space(tabs: 4)
-    let (a, b, d) = (space.tabs[0], space.tabs[1], space.tabs[3])
-    // d lifted and held after a; then b closes and a new session opens.
-    let held = Mosaic.Placement(id: d.id, after: a.id)
-    space.close(b)
-    space.newTab()
-    let ids = space.tabs.map(\.id)
-    let preview = try XCTUnwrap(held.apply(to: ids, id: { $0 }, run: Set(ids)))
-    XCTAssertEqual(preview.firstIndex(of: d.id), try XCTUnwrap(preview.firstIndex(of: a.id)) + 1)
+  // Bug: a split or swap on the overview that leaves swipes in the old order, or a tiling the next launch forgets.
+  func testArrangingTakesTheTilingsReadingOrder() throws {
+    let space = try space(tabs: 3)
+    let (a, b, c) = (space.tabs[0], space.tabs[1], space.tabs[2])
+    space.select(c)
+    let tiling = SplitTree<UUID>.split(.across, [.init(share: 0.5, node: .window(c.id)),
+                                                 .init(share: 0.5, node: .split(.down, [.init(share: 0.5, node: .window(a.id)),
+                                                                                         .init(share: 0.5, node: .window(b.id))]))])
 
-    space.move(d, to: try XCTUnwrap(held.index(in: ids, run: Set(ids))))
+    space.arrange(tiling.windows, tiling: tiling)
 
-    XCTAssertEqual(space.tabs.map(\.id), preview)
+    XCTAssertTrue(space.tabs.elementsEqual([c, a, b], by: ===))
+    XCTAssertTrue(SessionRegistry.shared.tabs(forScene: sceneID).elementsEqual([c, a, b], by: ===))
+    XCTAssertEqual(space.tiling, tiling)
+    space.nextSession(nil)
+    XCTAssertTrue(space.focusedTab === a, "the next swipe from the first window should reach the one after it in the tiling")
+  }
+
+  // Bug: a tab opened during a drag lost when the drop arranges the others.
+  func testArrangingKeepsTabsTheOrderLacks() throws {
+    let space = try space(tabs: 3)
+    let (a, b, c) = (space.tabs[0], space.tabs[1], space.tabs[2])
+    space.arrange([b.id, a.id], tiling: nil)
+    XCTAssertTrue(space.tabs.elementsEqual([b, a, c], by: ===))
+  }
+
+  // Bug: the user's tiling not written for the next launch, or not read back.
+  func testATilingSurvivesARelaunch() throws {
+    let directory = FileManager.default.temporaryDirectory.appending(path: "tilings-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let tiling = SplitTree<UUID>.split(.down, [.init(share: 0.3, node: .window(UUID())), .init(share: 0.7, node: .window(UUID()))])
+    let before = SessionRegistry(directory: directory)
+    before.setTiling(tiling, forScene: "window")
+    before.saveTilings()
+
+    let after = SessionRegistry(directory: directory)
+    after.restoreTilings()
+
+    XCTAssertEqual(after.tiling(forScene: "window"), tiling)
+    XCTAssertNil(after.tiling(forScene: "other"))
   }
 }
