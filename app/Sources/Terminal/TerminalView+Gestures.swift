@@ -13,7 +13,9 @@ struct GridPoint: Comparable {
 
 extension TerminalView {
     func installGestures() {
-        addGestureRecognizer(TimedTapGestureRecognizer(target: self, action: #selector(handleTap(_:))))
+        let tap = TimedTapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        addGestureRecognizer(tap)
+        doubleTap.touchDown = { [weak tap] in tap?.touchingSince }
 
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
@@ -71,26 +73,40 @@ extension TerminalView {
         }
         let p = g.location(in: self)
         if let diagram = diagramOverlay.diagram(at: p) {
-            doubleTap.reset()
+            doubleTap.release()
             openDiagram(diagram)
             return
         }
-        // The first tap has already acted; the second of a quick pair opens
-        // Sessions instead of acting, so a program never sees a double-click.
-        if let timed = g as? TimedTapGestureRecognizer,
-           doubleTap.tap(at: p, touch: timed.touchTime, lift: timed.liftTime),
-           delegate?.terminalViewDoubleTapped(self) == true {
+        if delegate?.terminalViewHasEdgeBand(self) == true, DoubleTap.band(in: bounds).contains(p),
+           let timed = g as? TimedTapGestureRecognizer {
+            bandTap(at: p, touch: timed.touchTime, lift: timed.liftTime)
             return
         }
+        // A tap elsewhere comes after the one held in the band.
+        doubleTap.release()
         guard isFirstResponder else {
             _ = becomeFirstResponder()
             return
         }
-        if snapshot.has(TERM_MODE_MOUSE_TRACKING) {
-            let c = cell(at: p)
-            session.mouse(TERM_MOUSE_PRESS, TERM_MOUSE_LEFT, col: c.col, row: c.row)
-            session.mouse(TERM_MOUSE_RELEASE, TERM_MOUSE_LEFT, col: c.col, row: c.row)
+        click(cell(at: p))
+    }
+
+    /// A tap in the right edge band never moves the keyboard: a second one
+    /// inside the window opens Sessions, and a lone one is one click once the
+    /// window has passed (nothing when the program does not track the mouse).
+    private func bandTap(at p: CGPoint, touch: TimeInterval, lift: TimeInterval) {
+        if doubleTap.pairs(at: p, touch: touch), delegate?.terminalViewDoubleTapped(self) == true {
+            doubleTap.reset()
+            return
         }
+        let c = cell(at: p)
+        doubleTap.hold(at: p, lift: lift) { [weak self] in self?.click(c) }
+    }
+
+    private func click(_ c: (col: Int, row: Int)) {
+        guard snapshot.has(TERM_MODE_MOUSE_TRACKING) else { return }
+        session.mouse(TERM_MOUSE_PRESS, TERM_MOUSE_LEFT, col: c.col, row: c.row)
+        session.mouse(TERM_MOUSE_RELEASE, TERM_MOUSE_LEFT, col: c.col, row: c.row)
     }
 
     // ------------------------------------------------------------ scroll

@@ -187,6 +187,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     failureLabel.sizeToFit()
     failureLabel.center = CGPoint(x: safe.midX, y: safe.midY)
     panel.view.frame = view.bounds
+    // Only the inner display upright has the edge band; a tap held there is dropped when that ends.
+    if !innerDisplayUpright { for tab in tabs { tab.view.doubleTap.reset() } }
     layoutDock()
   }
 
@@ -535,10 +537,17 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     openMenu(.settings)
   }
 
-  /// A double tap on a terminal opens Sessions. With the menu open, or a
-  /// window still zooming, it is two plain taps.
+  /// The inner display upright: a double tap at a terminal's right edge opens
+  /// Sessions, since the menu's icons are far up in the status band.
+  func terminalViewHasEdgeBand(_ view: TerminalView) -> Bool { innerDisplayUpright }
+
+  /// A double tap at a terminal's right edge opens Sessions, shrinking that
+  /// pane's session; the keyboard stays as it is (if up, it moves to that
+  /// pane). With the menu open, or a window still zooming, it is two plain taps.
   func terminalViewDoubleTapped(_ view: TerminalView) -> Bool {
-    guard !panel.isOpen, menu.zooming == nil, tabs.contains(where: { $0.view === view }) else { return false }
+    guard !panel.isOpen, menu.zooming == nil, let i = panes.firstIndex(where: { $0.tab.view === view }) else { return false }
+    if focusedTab?.view.isFirstResponder == true, !view.isFirstResponder { view.becomeFirstResponder() }
+    lastFocusedPane = i
     openMenu(.sessions)
     return true
   }
@@ -653,7 +662,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       // A swipe that catches the last one settling takes the pages from where they are.
       let caught = endSettle()
       guard let pane = pane(at: g.location(in: view)) else { return }
-      // A swipe between two taps, even one that springs back, ends the double tap.
+      // A swipe, even one that springs back, drops the tap held in the band.
       pane.tab.view.doubleTap.reset()
       let previous = neighbor(of: pane, step: -1), next = neighbor(of: pane, step: 1)
       var start = caught.flatMap { $0.pane === pane ? $0.offset : nil } ?? 0
@@ -1035,13 +1044,24 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   // MARK: - Dock placement (iPhone Duo)
 
-  /// The band above the safe area is free left of the clock on the inner
-  /// display in portrait; the vertical bar (outer display, inner landscape)
-  /// holds the toolbar instead. The status bar reports itself 2 pt tall there,
-  /// so the band is the top safe-area inset, cut at the clock's occlusion region.
+  /// The Duo's inner display upright: no vertical bar, so the menu's icons
+  /// sit in the status band, far from the thumb. The band above the safe area
+  /// is free left of the clock there; the vertical bar (outer display, inner
+  /// landscape) holds the toolbar instead.
+  static func innerDisplayUpright(regularWidth: Bool, bounds: CGRect, verticalBar: Bool) -> Bool {
+    regularWidth && bounds.height > bounds.width && !verticalBar
+  }
+
+  private var innerDisplayUpright: Bool {
+    Self.innerDisplayUpright(
+      regularWidth: traitCollection.horizontalSizeClass == .regular, bounds: view.bounds,
+      verticalBar: navigationController?.isToolbarHidden == false)
+  }
+
+  /// The status bar reports itself 2 pt tall on the inner display, so the
+  /// band is the top safe-area inset, cut at the clock's occlusion region.
   private var bandDockFrame: CGRect? {
-    guard traitCollection.horizontalSizeClass == .regular, view.bounds.height > view.bounds.width,
-          navigationController?.isToolbarHidden != false else { return nil }
+    guard innerDisplayUpright else { return nil }
     let top = view.safeAreaInsets.top
     let size = dock.intrinsicContentSize
     guard top >= size.height else { return nil }
