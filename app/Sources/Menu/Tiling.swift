@@ -359,6 +359,28 @@ enum Tiling {
     }
   }
 
+  /// `dropping` on this panel. A drop never sends another shown window to the
+  /// shelf (a swap's target excepted: it trades places with the lifted one):
+  /// when an equal share along the target's split would, the lifted window
+  /// halves the target's room instead, as a new session does; nil when that
+  /// does not fit either.
+  static func dropping<ID: Hashable & Codable>(_ id: ID, _ drop: Drop<ID>, in tree: SplitTree<ID>, others: [ID] = [],
+                                               area: CGRect, chipWidth: (ID) -> CGFloat) -> SplitTree<ID>? {
+    var allowed = Set(layout(tree, others: others, in: area, chipWidth: chipWidth).shelf)
+    var candidates = [dropping(id, drop, in: tree)]
+    switch drop {
+    case .swap(let target):
+      allowed.insert(target)
+    case let .split(target, edge):
+      if let rest = tree.removing(id), rest.axis(around: target) == edge.axis {
+        candidates.append(rest.placing(id, beside: target, on: edge))
+      }
+    }
+    return candidates.first { candidate in
+      Set(layout(candidate, others: others, in: area, chipWidth: chipWidth).shelf).isSubset(of: allowed)
+    }
+  }
+
   /// `tree` with `id` parked on the shelf after its last session (the end of
   /// the swipe order); its split's others share its room in proportion. nil
   /// when it is the only session.

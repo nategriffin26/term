@@ -70,6 +70,11 @@ private struct Arrangement {
     Tiling.layout(tree, others: others, in: area, chipWidth: chipWidth)
   }
 
+  /// `id` dropped as `drop` on this panel; nil when that would shelve a window.
+  func dropping(_ id: UUID, _ drop: Tiling.Drop<UUID>, in tree: SplitTree<UUID>) -> SplitTree<UUID>? {
+    Tiling.dropping(id, drop, in: tree, others: others, area: area, chipWidth: chipWidth)
+  }
+
   /// The window or chip at `point`.
   func item(at point: CGPoint) -> UUID? {
     layout.frames.first { $0.value.contains(point) }?.key ?? layout.chips.first { $0.value.contains(point) }?.key
@@ -87,6 +92,8 @@ struct SessionsOverview: View {
   let model: MenuModel
   @State private var lift: Lift?
   @State private var resize: Resize?
+  /// The window just dropped: it shows where the preview showed it, not flying from its old place.
+  @State private var landing: UUID?
 
   private static let inset = EdgeInsets(top: Chrome.Space.xs, leading: Chrome.Space.m, bottom: Chrome.Space.m,
                                         trailing: Chrome.Space.m)
@@ -147,10 +154,12 @@ struct SessionsOverview: View {
             .zIndex(1)
         }
         if let lift, let entry = board.entry(lift.id) {
+          let width = widths[lift.id] ?? 0
           TileChip(entry: entry)
-            .frame(width: widths[lift.id] ?? 0, height: Tiling.shelfHeight)
+            .frame(width: width, height: Tiling.shelfHeight)
+            .background(Capsule().fill(Chrome.raised))
             .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
-            .position(x: lift.finger.x, y: lift.finger.y - Self.handRise)
+            .position(Self.chipCentre(finger: lift.finger, width: width, in: board.area))
             .transition(.scale(scale: 0.8).combined(with: .opacity))
             .zIndex(2)
         }
@@ -225,11 +234,13 @@ struct SessionsOverview: View {
   @ViewBuilder
   private func item(_ entry: OverviewEntry, on board: Arrangement) -> some View {
     let dim = lift?.id == entry.id ? Self.liftedOpacity : 1
+    let lands = landing == entry.id
     if let frame = board.layout.frames[entry.id] {
       TileWindow(model: model, entry: entry, size: resize?.sizes[entry.id] ?? frame.size)
         .frame(width: frame.width, height: frame.height)
-        .opacity(dim)
         .position(x: frame.midX, y: frame.midY)
+        .transaction { if lands { $0.animation = nil } }
+        .opacity(dim)
         .transition(.scale(scale: 0.9).combined(with: .opacity))
         .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab) },
                                        actions: actions(for: entry) + moves(for: entry)))
@@ -323,11 +334,11 @@ struct SessionsOverview: View {
         let order = board.mine.map { $0 == id ? other : $0 == other ? id : $0 }
         return DropTarget(order: order, tiling: nil, rect: rect, label: "Swap")
       }
-      let swapped = Tiling.dropping(id, drop, in: tree)
+      guard let swapped = board.dropping(id, drop, in: tree) else { return nil }
       return DropTarget(order: swapped.windows, tiling: swapped, rect: rect, label: "Swap")
     case .split(_, let edge):
-      let result = Tiling.dropping(id, drop, in: tree)
-      guard result != tree, let landing = board.layout(of: result).frames[id] else { return nil }
+      guard let result = board.dropping(id, drop, in: tree), result != tree,
+            let landing = board.layout(of: result).frames[id] else { return nil }
       return DropTarget(order: result.windows, tiling: result,
                         rect: landing.insetBy(dx: Self.previewInset, dy: Self.previewInset), label: edge.word)
     }
@@ -355,9 +366,12 @@ struct SessionsOverview: View {
 
     case .drop:
       guard let dropped = lift else { return }
+      if dropped.target != nil { landing = dropped.id }
       withAnimation(Chrome.spring) {
         if let target = dropped.target { model.space?.arrange(target.order, tiling: target.tiling) }
         lift = nil
+      } completion: {
+        landing = nil
       }
 
     case .settle:
@@ -396,6 +410,13 @@ struct SessionsOverview: View {
 
   private func position(of point: CGPoint, along axis: Tiling.Axis) -> CGFloat {
     axis == .across ? point.x : point.y
+  }
+
+  /// The lifted chip's centre: `handRise` above the finger, kept whole on the board.
+  static func chipCentre(finger: CGPoint, width: CGFloat, in area: CGRect) -> CGPoint {
+    let half = width / 2
+    return CGPoint(x: min(max(finger.x, area.minX + half), max(area.minX + half, area.maxX - half)),
+                   y: max(finger.y - handRise, area.minY + Tiling.shelfHeight / 2))
   }
 }
 
@@ -684,6 +705,8 @@ final class TilingTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
   private lazy var editMenu = UIEditMenuInteraction(delegate: self)
   private var pressed: (id: UUID, start: CGPoint, moved: Bool)?
   private var resizing = false
+  /// Where the finger touched down in a border's zone.
+  private var panStart: CGPoint?
   private var menuItem: UUID?
 
   /// A lift becomes a move once the finger travels this far.
@@ -717,7 +740,11 @@ final class TilingTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
   /// A border's touch zone is the border's: a drag there resizes and a double
   /// tap evens out. Elsewhere a tap opens and a long press lifts.
   func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-    let onBorder = border(touch.location(in: self)) != nil
+    let point = touch.location(in: self)
+    let onBorder = border(point) != nil
+    // A pan's translation at .began leaves out the distance it took to
+    // recognize, so its touch-down point is kept here.
+    if g === pan, onBorder { panStart = point }
     return g === pan || g === doubleTap ? onBorder : !onBorder
   }
 
@@ -765,9 +792,7 @@ final class TilingTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
     let point = g.location(in: self)
     switch g.state {
     case .began:
-      let moved = g.translation(in: self)
-      let start = CGPoint(x: point.x - moved.x, y: point.y - moved.y)
-      guard let border = border(start) else { return }
+      guard let start = panStart, let border = border(start) else { return }
       resizing = true
       onEvent(.resize(border, start))
       onEvent(.resizeMove(point))

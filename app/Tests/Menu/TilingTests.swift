@@ -401,4 +401,40 @@ final class TilingTests: XCTestCase {
     XCTAssertNil(reconciled(across((0.5, w("a")), (0.5, w("a"))), "a", three))
     XCTAssertNil(reconciled(across((0.5, w("a")), (0.5, w("a"))), "ab", three))
   }
+
+  // Bug: dropping a window beside another sent a third, narrow window to the shelf.
+  func testADropAlongARowHalvesTheTargetWhenAnEqualShareWouldShelveAWindow() throws {
+    let tree = down((0.5, across((0.8, w("a")), (0.2, w("b")))), (0.5, w("d")))
+    let dropped = try XCTUnwrap(Tiling.dropping("d", .split("a", .left), in: tree, area: three, chipWidth: chips(60)))
+    XCTAssertEqual(dropped.windows, ["d", "a", "b"])
+    let shown = layout(dropped, three)
+    XCTAssertEqual(shown.shelf, [])
+    XCTAssertEqual(["d", "a", "b"].map { shown.frames[$0]?.width }, [234, 234, 116])
+  }
+
+  // Bug: a drop offered where neither an equal share nor half the target keeps every window.
+  func testADropThatWouldShelveAWindowIsNotOffered() {
+    let narrow = CGRect(x: 0, y: 0, width: 250, height: 400)
+    let tree = down((0.5, across((0.5, w("a")), (0.5, w("b")))), (0.5, w("d")))
+    XCTAssertNil(Tiling.dropping("d", .split("a", .left), in: tree, area: narrow, chipWidth: chips(60)))
+    XCTAssertNotNil(Tiling.dropping("d", .split("a", .top), in: tree, area: narrow, chipWidth: chips(60)),
+                    "across the row the target halves its height, which fits")
+  }
+
+  // Bug: a chip let go on a window's middle refused because the window it swaps with goes to the shelf.
+  func testAChipSwappedIntoAWindowSendsThatWindowToTheShelf() throws {
+    let tree = across((0.5, w("a")), (0.5, w("b")), (0, w("e")))
+    let swapped = try XCTUnwrap(Tiling.dropping("e", .swap("a"), in: tree, area: three, chipWidth: chips(60)))
+    XCTAssertEqual(swapped.windows, ["e", "b", "a"])
+    XCTAssertEqual(layout(swapped, three).shelf, ["a"])
+  }
+
+  // Bug: the chip riding above a lifted window went past the board's edge.
+  @MainActor func testTheLiftedChipStaysOnTheBoard() {
+    let board = CGRect(x: 12, y: 4, width: 400, height: 600)
+    XCTAssertEqual(SessionsOverview.chipCentre(finger: CGPoint(x: 200, y: 300), width: 80, in: board), CGPoint(x: 200, y: 256))
+    XCTAssertEqual(SessionsOverview.chipCentre(finger: CGPoint(x: 20, y: 300), width: 80, in: board), CGPoint(x: 52, y: 256))
+    XCTAssertEqual(SessionsOverview.chipCentre(finger: CGPoint(x: 405, y: 300), width: 80, in: board), CGPoint(x: 372, y: 256))
+    XCTAssertEqual(SessionsOverview.chipCentre(finger: CGPoint(x: 200, y: 30), width: 80, in: board), CGPoint(x: 200, y: 22))
+  }
 }
