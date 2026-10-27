@@ -253,6 +253,10 @@ enum Chrome {
   @MainActor static var springTiming: UISpringTimingParameters { UISpringTimingParameters(duration: springDuration, bounce: 0.12) }
   /// UIKit's twin of `fade`'s curve; the duration is the caller's.
   @MainActor static var fadeTiming: UICubicTimingParameters { UICubicTimingParameters(animationCurve: .easeOut) }
+  /// A highlight sliding from one place to the next under a dragging finger (Tern's drop preview, 0.14 s).
+  static let glide = Animation.snappy(duration: 0.14)
+  /// Something following the finger directly, as a border being dragged.
+  static let track = Animation.interactiveSpring(response: 0.18, dampingFraction: 0.86)
 }
 
 /// Liquid Glass tinted with the theme's ground of its window scene, for

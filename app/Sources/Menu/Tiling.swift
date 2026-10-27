@@ -6,10 +6,10 @@ import CoreGraphics
 /// even: the app picks the rows that fit the panel best and every window in
 /// a row gets the same share. Dragging a border resizes the two windows (or
 /// groups) beside it, double-tapping one evens every split out again, and
-/// dropping a window on another's edge splits that window there (on its
-/// middle, the two swap). Windows that cannot keep `minTile`, and sessions
-/// parked with no share, are name chips on a shelf under the tiling. Pure, so
-/// tests can feed real panel sizes.
+/// dropping a window on another's edge puts it on that side (on its
+/// middle, the two swap; on the shelf, it parks). Windows that cannot keep
+/// `minTile`, and sessions parked with no share, are name chips on a shelf
+/// under the tiling. Pure, so tests can feed real panel sizes.
 enum Tiling {
   static let gap: CGFloat = 8
   static let minTile = CGSize(width: 112, height: 78)
@@ -22,6 +22,8 @@ enum Tiling {
   static let evenness: CGFloat = 10
   /// A drop within this fraction of a window's middle (each way) swaps the two.
   static let swapZone: CGFloat = 0.25
+  /// How far a border's touch zone reaches into the windows on either side of its gap.
+  static let borderReach: CGFloat = 10
 
   enum Axis: String, Codable, Equatable {
     /// Side by side: the borders between the parts are vertical.
@@ -313,6 +315,20 @@ enum Tiling {
 
   // MARK: Gestures
 
+  /// The border whose touch zone holds `point`: its gap and `borderReach`
+  /// either side across it. Where zones cross, the nearest gap's middle wins.
+  static func border(at point: CGPoint, in borders: [Border]) -> Border? {
+    func distance(_ border: Border) -> CGFloat {
+      border.axis == .across ? abs(point.x - border.rect.midX) : abs(point.y - border.rect.midY)
+    }
+    return borders
+      .filter { border in
+        border.rect.insetBy(dx: border.axis == .across ? -borderReach : 0, dy: border.axis == .down ? -borderReach : 0)
+          .contains(point)
+      }
+      .min { distance($0) < distance($1) }
+  }
+
   /// The drop a lifted window held at `point` makes: over another window's
   /// middle a swap, else a split on its nearest edge; nil over no window.
   static func drop<ID: Hashable>(at point: CGPoint, lifted: ID, frames: [ID: CGRect]) -> Drop<ID>? {
@@ -325,7 +341,10 @@ enum Tiling {
     return .split(target, edges.min { $0.1 < $1.1 }!.0)
   }
 
-  /// `tree` with `id` dropped as `drop` says.
+  /// `tree` with `id` dropped as `drop` says. On an edge along the target's
+  /// split, `id` joins that split with an equal share (the others keep their
+  /// proportions), as a new session does; on an edge across it, `id` and the
+  /// target halve the target's room.
   static func dropping<ID: Hashable & Codable>(_ id: ID, _ drop: Drop<ID>, in tree: SplitTree<ID>) -> SplitTree<ID> {
     guard id != drop.target else { return tree }
     switch drop {
@@ -333,8 +352,28 @@ enum Tiling {
       return tree.swapping(id, target)
     case let .split(target, edge):
       guard let rest = tree.removing(id), rest.windows.contains(target) else { return tree }
+      if rest.axis(around: target) == edge.axis {
+        return rest.joining(id, beside: target, after: !edge.leads, axis: edge.axis)
+      }
       return rest.placing(id, beside: target, on: edge)
     }
+  }
+
+  /// `tree` with `id` parked on the shelf after its last session (the end of
+  /// the swipe order); its split's others share its room in proportion. nil
+  /// when it is the only session.
+  static func parking<ID: Hashable & Codable>(_ id: ID, in tree: SplitTree<ID>) -> SplitTree<ID>? {
+    guard let rest = tree.removing(id), let last = rest.windows.last else { return nil }
+    return rest.joining(id, beside: last, after: true, axis: .across, parked: true)
+  }
+
+  /// `tree` evened out (every split's parts equal, Tern's even out); nil,
+  /// meaning even, when that is just the even tiling of its sessions, which
+  /// then adapts to the panel again.
+  static func evenedOut<ID: Hashable & Codable>(_ tree: SplitTree<ID>, others: [ID] = [], in area: CGRect,
+                                      chipWidth: (ID) -> CGFloat) -> SplitTree<ID>? {
+    let even = tree.equalized()
+    return even == evenTree(tree.windows, others: others, in: area, chipWidth: chipWidth) ? nil : even
   }
 
   /// `tree` with `border`'s part before ending at `position` (kept within the

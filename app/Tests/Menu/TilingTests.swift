@@ -180,6 +180,27 @@ final class TilingTests: XCTestCase {
     XCTAssertEqual(resized.frames["c"], CGRect(x: 408, y: 106, width: 192, height: 294))
   }
 
+  // Bug: a touch just beside a gap missing its border (or one deeper into a window taking it), or the wrong border where two meet.
+  func testABordersTouchZoneReachesTenPointsIntoEachSide() throws {
+    // The even 2×2 grid: a horizontal gap at y 196–204, vertical gaps at x 296–304 in each row.
+    let borders = layout(grid, three).borders
+    func axis(_ x: CGFloat, _ y: CGFloat) -> Tiling.Axis? { Tiling.border(at: CGPoint(x: x, y: y), in: borders)?.axis }
+    XCTAssertEqual(axis(300, 100), .across)
+    XCTAssertEqual(axis(286, 100), .across)
+    XCTAssertNil(axis(285.5, 100))
+    XCTAssertEqual(axis(313.5, 100), .across)
+    XCTAssertNil(axis(314, 100))
+    XCTAssertEqual(axis(100, 186), .down)
+    XCTAssertNil(axis(100, 185.5))
+    XCTAssertEqual(axis(100, 213.5), .down)
+    XCTAssertNil(axis(100, 214))
+    // Where the zones cross, the nearer gap's middle wins.
+    XCTAssertEqual(axis(292, 189), .across, "8 pt from the vertical gap's middle, 11 from the horizontal one's")
+    XCTAssertEqual(axis(310, 199), .down, "10 pt from the vertical gap's middle, 1 from the horizontal one's")
+    let lower = try XCTUnwrap(Tiling.border(at: CGPoint(x: 300, y: 300), in: borders))
+    XCTAssertEqual(lower.rect, CGRect(x: 296, y: 204, width: 8, height: 196), "the bottom row's own border")
+  }
+
   // MARK: Evening out
 
   // Bug: evening out leaving the sizes the user dragged, or reshaping the tiling.
@@ -204,6 +225,16 @@ final class TilingTests: XCTestCase {
     XCTAssertEqual(layout(tree, three).shelf, [])
   }
 
+  // Bug: evening out a tiling into exactly the even one but keeping it fixed (so the keyboard or a rotation no longer
+  // re-picks the rows), or evening out one the user arranged into the even rows, losing the arrangement.
+  func testEveningOutIntoTheEvenTilingMakesItEvenAgain() {
+    func evenedOut(_ tree: Tree) -> Tree? { Tiling.evenedOut(tree, in: three, chipWidth: chips(60)) }
+    XCTAssertNil(evenedOut(across((0.5, w("a")), (0.2, w("b")), (0.3, w("c")))))
+    XCTAssertNil(evenedOut(down((0.5, across((0.7, w("a")), (0.3, w("b")))), (0.5, across((0.5, w("c")), (0.5, w("d")))))))
+    XCTAssertEqual(evenedOut(across((0.7, w("a")), (0.3, down((0.2, w("b")), (0.8, w("c")))))),
+                   across((0.5, w("a")), (0.5, down((0.5, w("b")), (0.5, w("c"))))))
+  }
+
   // MARK: Dropping
 
   // Bug: a drop on a window's middle splitting it, or a drop near an edge swapping.
@@ -222,14 +253,27 @@ final class TilingTests: XCTestCase {
 
   private var grid: Tree { down((0.5, across((0.5, w("a")), (0.5, w("b")))), (0.5, across((0.5, w("c")), (0.5, w("d"))))) }
 
-  // Bug: a drop on an edge that does not split the target there, or leaves the swipe order behind.
-  func testADropOnAnEdgeSplitsTheTargetThere() {
+  // Bug: a drop on a window's side within its row halving that window (sizes the user did not choose) instead of the
+  // row sharing evenly, or the window landing on the wrong side or out of swipe order.
+  func testADropOnAnEdgeAlongARowTakesAnEqualShareOfIt() {
+    let third = 1.0 / 3
     let left = Tiling.dropping("d", .split("a", .left), in: grid)
-    XCTAssertEqual(left, down((0.5, across((0.25, w("d")), (0.25, w("a")), (0.5, w("b")))), (0.5, w("c"))))
+    XCTAssertEqual(left, down((0.5, across((third, w("d")), (third, w("a")), (third, w("b")))), (0.5, w("c"))))
     XCTAssertEqual(left.windows, ["d", "a", "b", "c"])
+    let right = Tiling.dropping("d", .split("b", .right), in: grid)
+    XCTAssertEqual(right.windows, ["a", "b", "d", "c"])
+    XCTAssertEqual(["a", "b", "d"].map { layout(right, three).frames[$0]?.width }, [195, 195, 194])
+    let column = across((0.5, w("a")), (0.5, down((0.5, w("b")), (0.5, w("c")))))
+    XCTAssertEqual(Tiling.dropping("a", .split("c", .bottom), in: column), down((third, w("b")), (third, w("c")), (third, w("a"))))
+  }
+
+  // Bug: a drop on a window's side across its row not splitting that window there, or leaving the swipe order behind.
+  func testADropOnAnEdgeAcrossARowHalvesTheTarget() {
     let below = Tiling.dropping("d", .split("a", .bottom), in: grid)
     XCTAssertEqual(below, down((0.5, across((0.5, down((0.5, w("a")), (0.5, w("d")))), (0.5, w("b")))), (0.5, w("c"))))
     XCTAssertEqual(below.windows, ["a", "d", "b", "c"])
+    XCTAssertEqual(Tiling.dropping("b", .split("a", .top), in: across((0.5, w("a")), (0.5, w("b")))),
+                   down((0.5, w("b")), (0.5, w("a"))), "a lone window left is split in half")
   }
 
   // Bug: a swap that moves other windows, or does not change the swipe order.
@@ -238,6 +282,18 @@ final class TilingTests: XCTestCase {
     XCTAssertEqual(swapped, down((0.5, across((0.5, w("d")), (0.5, w("b")))), (0.5, across((0.5, w("c")), (0.5, w("a"))))))
     XCTAssertEqual(swapped.windows, ["d", "b", "c", "a"])
     XCTAssertEqual(Tiling.dropping("a", .swap("a"), in: grid), grid)
+  }
+
+  // Bug: a window let go on the shelf keeping its room, taking its split's room with it, or not ending the swipe order.
+  func testAWindowParkedOnTheShelfLeavesItsRoomToItsSplit() {
+    let parked = Tiling.parking("a", in: across((0.5, w("a")), (0.3, w("b")), (0.2, w("c"))))
+    XCTAssertEqual(parked, across((0.6, w("b")), (0.4, w("c")), (0, w("a"))))
+    let fromGrid = Tiling.parking("b", in: grid)
+    XCTAssertEqual(fromGrid?.windows, ["a", "c", "d", "b"])
+    let shown = layout(fromGrid, three)
+    XCTAssertEqual(shown.shelf, ["b"])
+    XCTAssertEqual(shown.frames["a"], CGRect(x: 0, y: 0, width: 600, height: 174))
+    XCTAssertNil(Tiling.parking("a", in: w("a")), "the only session has nowhere to leave room")
   }
 
   // MARK: Sessions arriving and leaving

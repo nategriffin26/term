@@ -85,7 +85,7 @@ final class MenuModel {
   /// The tab whose terminal is zooming into or out of its tile: the tile
   /// leaves its screen empty for it.
   var zooming: UUID?
-  /// The tab focused when the panel opened: the overview draws it largest.
+  /// The tab focused when the panel opened: the overview outlines its window.
   private(set) var cameFrom: UUID?
 
   @ObservationIgnored weak var space: SpaceController?

@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// The Sessions tab: the mosaic of every open session, and the page for
+/// The Sessions tab: the tiling of every open session, and the page for
 /// starting a new one.
 struct SessionsTab: View {
   let model: MenuModel
@@ -29,7 +29,6 @@ private struct OverviewEntry: Identifiable {
   /// The window the tab is in.
   let owner: SpaceController
   let agent: AgentInfo?
-  let importance: Mosaic.Importance
   let isCurrent: Bool
   /// With Two Panes, the pane showing it: 0 left, 1 right.
   let pane: Int?
@@ -50,187 +49,213 @@ private struct WindowAction: Identifiable {
   var id: String { title }
 }
 
-/// Every open session as a window in a mosaic that fills the panel, in swipe
-/// order: this window's tabs, then other windows'. Sessions without room show
-/// as chips on a shelf below. Tap a window or chip to enter it; long-press
-/// lifts it, and dragging moves it in the order while the rest make room (a
-/// chip into the mosaic, a window onto the shelf); released where it was, it
-/// offers its actions; flicked up, it closes.
+/// Where everything on the overview goes at one panel size.
+private struct Arrangement {
+  let entries: [OverviewEntry]
+  /// This window's sessions, in swipe order.
+  let mine: [UUID]
+  /// Other windows' sessions: chips after the shelf.
+  let others: [UUID]
+  let area: CGRect
+  let chipWidth: (UUID) -> CGFloat
+  /// The user's tiling, up to date with the sessions; nil while it is even.
+  let shaped: SplitTree<UUID>?
+  /// The tiling shown: the one under a border drag, else the user's, else the even one.
+  let tree: SplitTree<UUID>?
+  let layout: Tiling.Layout<UUID>
+
+  func entry(_ id: UUID) -> OverviewEntry? { entries.first { $0.id == id } }
+
+  func layout(of tree: SplitTree<UUID>) -> Tiling.Layout<UUID> {
+    Tiling.layout(tree, others: others, in: area, chipWidth: chipWidth)
+  }
+
+  /// The window or chip at `point`.
+  func item(at point: CGPoint) -> UUID? {
+    layout.frames.first { $0.value.contains(point) }?.key ?? layout.chips.first { $0.value.contains(point) }?.key
+  }
+}
+
+/// Every open session as a window tiling the panel, in swipe order: this
+/// window's sessions, then other windows' as chips. Until the user shapes
+/// it the tiling is even. Dragging a border resizes the windows beside it;
+/// double-tapping one evens everything out. A long press lifts a window or
+/// chip: let go on another window's edge it takes that side, on its middle
+/// the two swap, and a window let go on the shelf parks there; released
+/// where it lifted, it offers its actions. A tap enters the session.
 struct SessionsOverview: View {
   let model: MenuModel
   @State private var lift: Lift?
-  @State private var flick: Flick?
-  /// A flicked window on its way out: the others already close the gap.
-  @State private var closing: UUID?
+  @State private var resize: Resize?
 
   private static let inset = EdgeInsets(top: Chrome.Space.xs, leading: Chrome.Space.m, bottom: Chrome.Space.m,
                                         trailing: Chrome.Space.m)
-  /// A flick closes past this rise, or this upward speed (points per second).
-  private static let closeDistance: CGFloat = 80
-  private static let closeSpeed: CGFloat = 900
+  /// A lifted session dims in its place, as Tern's does.
+  private static let liftedOpacity = 0.5
+  /// The lifted session's chip rides this far above the finger, which would cover it.
+  private static let handRise: CGFloat = 44
+  /// A swap's preview: the target inset by this fraction of its size each side (Tern).
+  private static let swapInset: CGFloat = 0.18
+  /// Any other drop's preview sits this far inside where the session lands.
+  private static let previewInset: CGFloat = 6
 
   private struct Lift {
-    /// Finger minus the lifted item's centre when it lifted.
-    let grab: CGSize
-    let size: CGSize
-    /// Lifted from the shelf: it travels as its chip.
-    let chip: Bool
-    var center: CGPoint
-    /// Where in the order it lands if dropped now.
-    var place: Mosaic.Placement<UUID>
-    var id: UUID { place.id }
+    let id: UUID
+    var finger: CGPoint
+    /// What letting go now does; nil: it goes back.
+    var target: DropTarget?
   }
 
-  private struct Flick {
-    let id: UUID
-    let frame: CGRect
-    let chip: Bool
-    var offset: CGFloat
+  /// Where letting a lifted session go puts it.
+  private struct DropTarget: Equatable {
+    /// The swipe order after the drop, and the tiling (nil: still even).
+    let order: [UUID]
+    let tiling: SplitTree<UUID>?
+    /// The preview: where the session lands, and the word on it.
+    let rect: CGRect
+    let label: String
+  }
+
+  private struct Resize {
+    /// The tiling and the border as the drag began.
+    let start: SplitTree<UUID>
+    let border: Tiling.Border
+    /// The finger's distance past the border's leading edge, along its axis.
+    let grab: CGFloat
+    /// The windows' sizes as the drag began: their type keeps to them until
+    /// it ends, as a terminal sizes its grid only at rest.
+    let sizes: [UUID: CGSize]
+    var current: SplitTree<UUID>
+    /// Held against the smallest size a window may take.
+    var atStop = false
   }
 
   var body: some View {
     let entries = entries()
-    let order = entries.filter { $0.id != closing }
-    let tiles = order.map { Mosaic.Tile(id: $0.id, importance: $0.importance) }
-    let widths = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, MosaicChip.width(of: $0)) })
-    let chipWidth = { (id: UUID) in widths[id] ?? 0 }
+    let widths = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, TileChip.width(of: $0)) })
     GeometryReader { geo in
-      let area = CGRect(x: Self.inset.leading, y: Self.inset.top,
-                        width: max(0, geo.size.width - Self.inset.leading - Self.inset.trailing),
-                        height: max(0, geo.size.height - Self.inset.top - Self.inset.bottom))
-      let shown = lift.flatMap { $0.place.apply(to: tiles, id: \.id, run: run(of: $0.id, in: order)) } ?? tiles
-      let layout = Mosaic.layout(shown, in: area, chipWidth: chipWidth)
+      let board = arrangement(entries, chipWidth: { widths[$0] ?? 0 }, in: geo.size)
       ZStack(alignment: .topLeading) {
-        if let lift {
-          slot(for: lift, in: layout)
-        }
         ForEach(entries) { entry in
-          item(entry, in: layout)
+          item(entry, on: board)
+        }
+        if let target = lift?.target {
+          DropPreview(label: target.label)
+            .frame(width: target.rect.width, height: target.rect.height)
+            .position(x: target.rect.midX, y: target.rect.midY)
+            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            .zIndex(1)
+        }
+        if let lift, let entry = board.entry(lift.id) {
+          TileChip(entry: entry)
+            .frame(width: widths[lift.id] ?? 0, height: Tiling.shelfHeight)
+            .shadow(color: .black.opacity(0.4), radius: 14, y: 6)
+            .position(x: lift.finger.x, y: lift.finger.y - Self.handRise)
+            .transition(.scale(scale: 0.8).combined(with: .opacity))
+            .zIndex(2)
+        }
+        if let resize {
+          handle(resize, on: board)
         }
       }
       .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
       .overlay {
-        MosaicTouches(
-          item: { point in
-            layout.frames.first { $0.value.contains(point) }?.key ?? layout.chips.first { $0.value.contains(point) }?.key
-          },
-          frame: { layout.place(of: $0) },
+        TilingTouches(
+          item: board.item(at:),
+          border: { Tiling.border(at: $0, in: board.layout.borders) },
+          frame: { board.layout.place(of: $0) },
           menu: { id in
-            guard let entry = entries.first(where: { $0.id == id }) else { return [] }
+            guard let entry = board.entry(id) else { return [] }
             return actions(for: entry).map { action in
               UIAction(title: action.title, image: UIImage(systemName: action.symbol),
                        attributes: action.destructive ? .destructive : []) { _ in action.run() }
             }
           },
-          onEvent: { handle($0, entries: entries, order: order, tiles: tiles, area: area, layout: layout, chipWidth: chipWidth) })
+          onEvent: { handle($0, on: board) })
       }
       .animation(Chrome.spring, value: geo.size)
-      .animation(Chrome.spring, value: tiles)
-      .onChange(of: order.map(\.id)) { _, ids in
-        // Sessions opened or closed during a drag: the lifted one keeps its
-        // place by identity and lands afresh among the sessions now open.
-        guard var moving = lift else { return }
-        guard ids.contains(moving.id) else {
-          withAnimation(Chrome.spring) { lift = nil }
-          return
+      .animation(Chrome.spring, value: board.tree?.windows ?? [])
+      .animation(Chrome.spring, value: board.layout.shelf)
+      .onChange(of: board.mine + board.others) { _, ids in
+        // Sessions opened or closed mid-gesture: a lifted one that closed is
+        // let go, one still open works out its drop afresh on the next move,
+        // and a border drag stops.
+        if let moving = lift {
+          withAnimation(Chrome.spring) {
+            if ids.contains(moving.id) { lift?.target = nil } else { lift = nil }
+          }
         }
-        moving.place = Mosaic.landing(moving.place, in: tiles, run: run(of: moving.id, in: order), near: moving.center,
-                                      area: area, chipWidth: chipWidth)
-        withAnimation(Chrome.spring) { lift = moving }
+        resize = nil
       }
     }
     .onChange(of: model.isOpen) { _, open in
       guard !open else { return }
       lift = nil
-      flick = nil
+      resize = nil
     }
   }
 
-  /// Every window's tabs, this window's first; the tab the panel opened from
-  /// and one whose agent needs the user are larger.
+  /// Every window's tabs, this window's first.
   private func entries() -> [OverviewEntry] {
     model.groups.flatMap { group in
       group.tabs.map { tab in
         let agent = tab.target.flatMap { host in
           tab.tmuxSession.flatMap { TmuxStore.shared.agent(on: host, session: $0) }
         }
-        let isCurrent = tab.id == model.cameFrom
-        return OverviewEntry(tab: tab, owner: group.space, agent: agent,
-                             importance: Mosaic.Importance(agent: agent, isCurrent: isCurrent), isCurrent: isCurrent,
+        return OverviewEntry(tab: tab, owner: group.space, agent: agent, isCurrent: tab.id == model.cameFrom,
                              pane: group.space.paneIndex(showing: tab), inOtherWindow: group.space !== model.space)
       }
     }
   }
 
-  /// The sessions of `id`'s window: a lifted session moves only among them.
-  private func run(of id: UUID, in order: [OverviewEntry]) -> Set<UUID> {
-    guard let owner = order.first(where: { $0.id == id })?.owner else { return [] }
-    return Set(order.filter { $0.owner === owner }.map(\.id))
+  private func arrangement(_ entries: [OverviewEntry], chipWidth: @escaping (UUID) -> CGFloat,
+                           in size: CGSize) -> Arrangement {
+    let area = CGRect(x: Self.inset.leading, y: Self.inset.top,
+                      width: max(0, size.width - Self.inset.leading - Self.inset.trailing),
+                      height: max(0, size.height - Self.inset.top - Self.inset.bottom))
+    let mine = entries.filter { !$0.inOtherWindow }.map(\.id)
+    let others = entries.filter(\.inOtherWindow).map(\.id)
+    let shaped = Tiling.reconciled(model.space?.tiling, order: mine, others: others, in: area, chipWidth: chipWidth)
+    let tree = resize?.current ?? shaped ?? Tiling.evenTree(mine, others: others, in: area, chipWidth: chipWidth)
+    return Arrangement(entries: entries, mine: mine, others: others, area: area, chipWidth: chipWidth, shaped: shaped,
+                       tree: tree, layout: Tiling.layout(tree, others: others, in: area, chipWidth: chipWidth))
   }
 
-  /// Where a lifted session would land: its tile's or its chip's outline.
+  /// `entry` as its window, else its chip.
   @ViewBuilder
-  private func slot(for lift: Lift, in layout: Mosaic.Layout<UUID>) -> some View {
-    if let slot = layout.frames[lift.id] {
-      RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous)
-        .fill(Chrome.fill)
-        .frame(width: slot.width, height: slot.height)
-        .position(x: slot.midX, y: slot.midY)
-    } else if let slot = layout.chips[lift.id] {
+  private func item(_ entry: OverviewEntry, on board: Arrangement) -> some View {
+    let dim = lift?.id == entry.id ? Self.liftedOpacity : 1
+    if let frame = board.layout.frames[entry.id] {
+      TileWindow(model: model, entry: entry, size: resize?.sizes[entry.id] ?? frame.size)
+        .frame(width: frame.width, height: frame.height)
+        .opacity(dim)
+        .position(x: frame.midX, y: frame.midY)
+        .transition(.scale(scale: 0.9).combined(with: .opacity))
+        .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab) },
+                                       actions: actions(for: entry) + moves(for: entry)))
+    } else if let frame = board.layout.chips[entry.id] {
+      TileChip(entry: entry)
+        .frame(width: frame.width, height: frame.height)
+        .opacity(dim)
+        .position(x: frame.midX, y: frame.midY)
+        .transition(.opacity)
+        .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab, fromTile: false) },
+                                       actions: actions(for: entry) + moves(for: entry)))
+    }
+  }
+
+  /// The border being dragged: a capsule on its gap.
+  @ViewBuilder
+  private func handle(_ resize: Resize, on board: Arrangement) -> some View {
+    let dragged = resize.border
+    if let border = board.layout.borders.first(where: { $0.path == dragged.path && $0.before == dragged.before }) {
+      let across = border.axis == .across
       Capsule()
-        .fill(Chrome.fill)
-        .frame(width: slot.width, height: slot.height)
-        .position(x: slot.midX, y: slot.midY)
+        .fill(Chrome.fg)
+        .frame(width: across ? 4 : 36, height: across ? 36 : 4)
+        .position(x: border.rect.midX, y: border.rect.midY)
+        .transition(.opacity)
     }
-  }
-
-  /// `entry` as a window or a chip: under the finger while lifted or flicked, else in its place.
-  @ViewBuilder
-  private func item(_ entry: OverviewEntry, in layout: Mosaic.Layout<UUID>) -> some View {
-    if let lift, lift.id == entry.id {
-      let frame = CGRect(x: lift.center.x - lift.size.width / 2, y: lift.center.y - lift.size.height / 2,
-                         width: lift.size.width, height: lift.size.height)
-      if lift.chip { chip(entry, frame: frame) } else { window(entry, frame: frame) }
-    } else if let flick, flick.id == entry.id {
-      let frame = flick.frame.offsetBy(dx: 0, dy: flick.offset)
-      if flick.chip { chip(entry, frame: frame) } else { window(entry, frame: frame) }
-    } else if let frame = layout.frames[entry.id] {
-      window(entry, frame: frame)
-    } else if let frame = layout.chips[entry.id] {
-      chip(entry, frame: frame)
-    }
-  }
-
-  private func window(_ entry: OverviewEntry, frame: CGRect) -> some View {
-    let lifted = lift?.id == entry.id
-    let flicked = flick?.id == entry.id
-    let rise = flicked ? max(0, -(flick?.offset ?? 0)) : 0
-    return MosaicWindow(model: model, entry: entry, size: frame.size)
-      .frame(width: frame.width, height: frame.height)
-      .scaleEffect(lifted ? 1.04 : 1)
-      .shadow(color: .black.opacity(lifted ? 0.4 : 0), radius: 22, y: 10)
-      .opacity(1 - min(1, rise / 400))
-      .position(x: frame.midX, y: frame.midY)
-      .zIndex(lifted || flicked ? 1 : 0)
-      .transition(.scale(scale: 0.9).combined(with: .opacity))
-      .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab) },
-                                     actions: actions(for: entry) + moves(for: entry)))
-  }
-
-  private func chip(_ entry: OverviewEntry, frame: CGRect) -> some View {
-    let lifted = lift?.id == entry.id
-    let flicked = flick?.id == entry.id
-    let rise = flicked ? max(0, -(flick?.offset ?? 0)) : 0
-    return MosaicChip(entry: entry)
-      .frame(width: frame.width, height: frame.height)
-      .scaleEffect(lifted ? 1.08 : 1)
-      .shadow(color: .black.opacity(lifted ? 0.4 : 0), radius: 14, y: 6)
-      .opacity(1 - min(1, rise / 200))
-      .position(x: frame.midX, y: frame.midY)
-      .zIndex(lifted || flicked ? 1 : 0)
-      .transition(.opacity)
-      .modifier(SessionAccessibility(entry: entry, open: { model.space?.zoom(into: entry.tab, fromTile: false) },
-                                     actions: actions(for: entry) + moves(for: entry)))
   }
 
   private func actions(for entry: OverviewEntry) -> [WindowAction] {
@@ -277,76 +302,111 @@ struct SessionsOverview: View {
     return moves
   }
 
-  private func handle(_ event: MosaicTouchView.Event, entries: [OverviewEntry], order: [OverviewEntry],
-                      tiles: [Mosaic.Tile<UUID>], area: CGRect, layout: Mosaic.Layout<UUID>,
-                      chipWidth: @escaping (UUID) -> CGFloat) {
+  /// What letting `id` go at `point` does: a window over the shelf parks;
+  /// over another window's middle the two swap (only the order changes while
+  /// the tiling is even); over its edge, it takes that side. nil where
+  /// nothing would change.
+  private func dropTarget(for id: UUID, at point: CGPoint, on board: Arrangement) -> DropTarget? {
+    guard let tree = board.tree else { return nil }
+    let layout = board.layout
+    if let shelf = layout.chips.values.map(\.minY).min(), point.y >= shelf - Tiling.gap {
+      guard layout.frames[id] != nil, layout.frames.count > 1, let parked = Tiling.parking(id, in: tree) else { return nil }
+      let rect = CGRect(x: board.area.minX, y: shelf, width: board.area.width, height: board.area.maxY - shelf)
+      return DropTarget(order: parked.windows, tiling: parked, rect: rect, label: "Shelf")
+    }
+    guard let drop = Tiling.drop(at: point, lifted: id, frames: layout.frames) else { return nil }
+    switch drop {
+    case .swap(let other):
+      guard let frame = layout.frames[other] else { return nil }
+      let rect = frame.insetBy(dx: frame.width * Self.swapInset, dy: frame.height * Self.swapInset)
+      guard board.shaped != nil else {
+        let order = board.mine.map { $0 == id ? other : $0 == other ? id : $0 }
+        return DropTarget(order: order, tiling: nil, rect: rect, label: "Swap")
+      }
+      let swapped = Tiling.dropping(id, drop, in: tree)
+      return DropTarget(order: swapped.windows, tiling: swapped, rect: rect, label: "Swap")
+    case .split(_, let edge):
+      let result = Tiling.dropping(id, drop, in: tree)
+      guard result != tree, let landing = board.layout(of: result).frames[id] else { return nil }
+      return DropTarget(order: result.windows, tiling: result,
+                        rect: landing.insetBy(dx: Self.previewInset, dy: Self.previewInset), label: edge.word)
+    }
+  }
+
+  private func handle(_ event: TilingTouchView.Event, on board: Arrangement) {
     switch event {
     case .tap(let id):
-      guard lift == nil, flick == nil, let entry = entries.first(where: { $0.id == id }) else { return }
-      model.space?.zoom(into: entry.tab, fromTile: layout.frames[id] != nil)
+      guard lift == nil, resize == nil, let entry = board.entry(id) else { return }
+      model.space?.zoom(into: entry.tab, fromTile: board.layout.frames[id] != nil)
 
     case .lift(let id, let point):
-      guard flick == nil, let frame = layout.place(of: id),
-            let place = Mosaic.Placement(of: id, in: tiles.map(\.id), run: run(of: id, in: order)) else { return }
-      withAnimation(Chrome.quick) {
-        lift = Lift(grab: CGSize(width: point.x - frame.midX, height: point.y - frame.midY), size: frame.size,
-                    chip: layout.frames[id] == nil, center: CGPoint(x: frame.midX, y: frame.midY), place: place)
-      }
+      // Another window's session stays where it is; its actions still show.
+      guard resize == nil, board.mine.contains(id) else { return }
+      withAnimation(Chrome.quick) { lift = Lift(id: id, finger: point) }
 
     case .move(let point):
-      guard var moving = lift else { return }
-      moving.center = CGPoint(x: point.x - moving.grab.width, y: point.y - moving.grab.height)
-      let place = Mosaic.landing(moving.place, in: tiles, run: run(of: moving.id, in: order), near: moving.center,
-                                 area: area, chipWidth: chipWidth)
-      lift = moving
-      if place != moving.place {
-        Haptics.selection()
-        withAnimation(Chrome.spring) { lift?.place = place }
-      }
+      guard let moving = lift else { return }
+      lift?.finger = point
+      let target = dropTarget(for: moving.id, at: point, on: board)
+      guard target != moving.target else { return }
+      if target != nil { Haptics.selection() }
+      // The preview glides from one place to the next, and fades in and out.
+      withAnimation(moving.target != nil && target != nil ? Chrome.glide : Chrome.quick) { lift?.target = target }
 
     case .drop:
-      guard let dropped = lift, let entry = order.first(where: { $0.id == dropped.id }),
-            let index = dropped.place.index(in: tiles.map(\.id), run: run(of: dropped.id, in: order)) else {
-        withAnimation(Chrome.spring) { lift = nil }
-        return
-      }
+      guard let dropped = lift else { return }
       withAnimation(Chrome.spring) {
-        entry.owner.move(entry.tab, to: index)
+        if let target = dropped.target { model.space?.arrange(target.order, tiling: target.tiling) }
         lift = nil
       }
 
     case .settle:
       withAnimation(Chrome.spring) { lift = nil }
 
-    case .flick(let id, let dy):
-      guard lift == nil, closing == nil else { return }
-      // Up follows the finger; down gives a little and springs back.
-      let offset = dy < 0 ? dy : dy * 0.25
-      if flick?.id == id {
-        flick?.offset = offset
-      } else if let frame = layout.place(of: id) {
-        flick = Flick(id: id, frame: frame, chip: layout.frames[id] == nil, offset: offset)
+    case .resize(let border, let point):
+      guard lift == nil, let tree = board.tree else { return }
+      let edge = border.axis == .across ? border.rect.minX : border.rect.minY
+      resize = Resize(start: tree, border: border, grab: position(of: point, along: border.axis) - edge,
+                      sizes: board.layout.frames.mapValues(\.size), current: tree)
+
+    case .resizeMove(let point):
+      guard let resizing = resize else { return }
+      let end = position(of: point, along: resizing.border.axis) - resizing.grab
+      let atStop = end <= resizing.border.lower || end >= resizing.border.upper
+      if atStop, !resizing.atStop { Haptics.selection() }
+      resize?.atStop = atStop
+      withAnimation(Chrome.track) { resize?.current = Tiling.resizing(resizing.start, at: resizing.border, to: end) }
+
+    case .resizeEnd:
+      guard let resized = resize else { return }
+      withAnimation(Chrome.spring) {
+        model.space?.arrange(resized.current.windows, tiling: resized.current)
+        resize = nil
       }
 
-    case .flickEnded(let id, let dy, let velocity):
-      guard let flicked = flick, flicked.id == id else { return }
-      let closes = (dy < -Self.closeDistance && velocity < Self.closeSpeed / 4) || velocity < -Self.closeSpeed
-      guard closes, let entry = entries.first(where: { $0.id == id }) else {
-        withAnimation(Chrome.spring) { flick = nil }
-        return
+    case .evenOut:
+      guard lift == nil, resize == nil, let shaped = board.shaped else { return }
+      Haptics.selection()
+      withAnimation(Chrome.spring) {
+        model.space?.arrange(shaped.windows, tiling: Tiling.evenedOut(shaped, others: board.others, in: board.area,
+                                                                      chipWidth: board.chipWidth))
       }
-      Haptics.firm()
-      withAnimation(.easeIn(duration: 0.22)) { flick?.offset = -(flicked.frame.maxY + 60) }
-      withAnimation(Chrome.spring) { closing = id }
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-        var quiet = Transaction()
-        quiet.disablesAnimations = true
-        withTransaction(quiet) {
-          entry.owner.close(entry.tab)
-          flick = nil
-          closing = nil
-        }
-      }
+    }
+  }
+
+  private func position(of point: CGPoint, along axis: Tiling.Axis) -> CGFloat {
+    axis == .across ? point.x : point.y
+  }
+}
+
+private extension Tiling.Edge {
+  /// The drop preview's word for the side a window takes.
+  var word: String {
+    switch self {
+    case .left: "Left"
+    case .right: "Right"
+    case .top: "Top"
+    case .bottom: "Bottom"
     }
   }
 }
@@ -361,7 +421,7 @@ private struct SessionAccessibility: ViewModifier {
     content
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("\(entry.tab.sessionName), \(entry.tab.hostName ?? "local")")
-      .accessibilityValue(entry.agent.flatMap { MosaicState.word(for: $0) } ?? "")
+      .accessibilityValue(entry.agent.flatMap { TileState.word(for: $0) } ?? "")
       .accessibilityAddTraits(.isButton)
       .accessibilityAction { open() }
       .accessibilityActions {
@@ -373,10 +433,10 @@ private struct SessionAccessibility: ViewModifier {
 }
 
 /// One session's window: a title bar over its live screen.
-private struct MosaicWindow: View {
+private struct TileWindow: View {
   let model: MenuModel
   let entry: OverviewEntry
-  /// Its tile's size, which sets the screen's font.
+  /// The size that sets the screen's type: the window's, or its size when a border drag began.
   let size: CGSize
   @Environment(\.displayScale) private var displayScale
 
@@ -388,7 +448,7 @@ private struct MosaicWindow: View {
     let _ = model.revision
     let tab = entry.tab
     VStack(spacing: 0) {
-      MosaicTitleBar(entry: entry)
+      TileTitleBar(entry: entry)
         .frame(height: Self.bar)
       ThumbnailView(source: { tab.current }, renderer: model.thumbnails, fonts: fonts)
         .opacity(model.zooming == tab.id ? 0 : 1)
@@ -418,7 +478,7 @@ private struct MosaicWindow: View {
 }
 
 /// Name, host and state. When narrow, the host goes first, then the needs-you pill shrinks to a dot.
-private struct MosaicTitleBar: View {
+private struct TileTitleBar: View {
   let entry: OverviewEntry
 
   var body: some View {
@@ -442,9 +502,6 @@ private struct MosaicTitleBar: View {
           .frame(width: 16, height: 16)
           .background(Circle().fill(Chrome.fill3))
       }
-      if entry.inOtherWindow {
-        Image(systemName: "macwindow").font(Chrome.font(.caption)).foregroundStyle(Chrome.muted)
-      }
       if let connection {
         Circle().fill(connection).frame(width: 6, height: 6)
       }
@@ -460,7 +517,7 @@ private struct MosaicTitleBar: View {
           .fixedSize()
       }
       Spacer(minLength: Chrome.Space.xs)
-      if let agent = entry.agent { MosaicState(agent: agent, compact: compact) }
+      if let agent = entry.agent { TileState(agent: agent, compact: compact) }
     }
   }
 
@@ -474,7 +531,7 @@ private struct MosaicTitleBar: View {
 
 /// An agent's state at a title bar's end: needs you as the accent pill (a dot
 /// when narrow), working as a ring, an unseen stop as its glyph.
-private struct MosaicState: View {
+private struct TileState: View {
   let agent: AgentInfo
   let compact: Bool
 
@@ -509,25 +566,32 @@ private struct MosaicState: View {
   }
 }
 
-/// A session without room for a window: its name on the shelf, after the
-/// state its window's title bar would show.
-private struct MosaicChip: View {
+/// A session without a window: its name on the shelf, after the state its
+/// window's title bar would show, and a window mark when another window has it.
+private struct TileChip: View {
   let entry: OverviewEntry
 
-  private static let state: CGFloat = 15
+  private static let glyph: CGFloat = 15
 
-  /// The chip's width: its name in the chip's type, and its state when it shows one.
+  /// The chip's width: its name in the chip's type, with its state and mark when it shows them.
   @MainActor static func width(of entry: OverviewEntry) -> CGFloat {
     let name = (entry.tab.sessionName as NSString).size(withAttributes: [.font: Chrome.uiMono(.secondary, .medium)]).width
-    let state = entry.agent.flatMap(MosaicState.word(for:)) == nil ? 0 : Self.state + 6
-    return (name + state + 2 * Chrome.Space.m).rounded(.up)
+    let state = entry.agent.flatMap(TileState.word(for:)) == nil ? 0 : Self.glyph + 6
+    let mark = entry.inOtherWindow ? Self.glyph + 6 : 0
+    return (name + state + mark + 2 * Chrome.Space.m).rounded(.up)
   }
 
   var body: some View {
     HStack(spacing: 6) {
-      if let agent = entry.agent, MosaicState.word(for: agent) != nil {
-        MosaicState(agent: agent, compact: true)
-          .frame(width: Self.state, height: Self.state)
+      if entry.inOtherWindow {
+        Image(systemName: "macwindow")
+          .font(Chrome.font(.caption))
+          .foregroundStyle(Chrome.muted)
+          .frame(width: Self.glyph, height: Self.glyph)
+      }
+      if let agent = entry.agent, TileState.word(for: agent) != nil {
+        TileState(agent: agent, compact: true)
+          .frame(width: Self.glyph, height: Self.glyph)
       }
       Text(entry.tab.sessionName)
         .font(Chrome.mono(.secondary, .medium))
@@ -543,22 +607,46 @@ private struct MosaicChip: View {
   }
 }
 
-/// The overview's touches: one set of recognizers over every window and chip,
-/// hit-tested against their frames. Points elsewhere pass through.
-private struct MosaicTouches: UIViewRepresentable {
+/// Where a lifted session would land, as Tern previews a drop: a wash with a
+/// ring and the side's word, in the text colour (the accent is for needs you).
+private struct DropPreview: View {
+  let label: String
+
+  var body: some View {
+    let shape = RoundedRectangle(cornerRadius: Chrome.Radius.tile, style: .continuous)
+    shape
+      .fill(Chrome.fill3)
+      .overlay { shape.strokeBorder(Chrome.fg2, lineWidth: 1.5) }
+      .overlay {
+        Text(label)
+          .font(Chrome.font(.caption, .medium))
+          .foregroundStyle(Chrome.bg)
+          .padding(.horizontal, Chrome.Space.s)
+          .frame(height: 22)
+          .background(Capsule().fill(Chrome.fg))
+          .fixedSize()
+      }
+  }
+}
+
+/// The overview's touches: one set of recognizers over every window, chip
+/// and border, hit-tested against their frames. Points elsewhere pass through.
+private struct TilingTouches: UIViewRepresentable {
   let item: (CGPoint) -> UUID?
+  let border: (CGPoint) -> Tiling.Border?
   let frame: (UUID) -> CGRect?
   let menu: (UUID) -> [UIMenuElement]
-  let onEvent: (MosaicTouchView.Event) -> Void
+  let onEvent: (TilingTouchView.Event) -> Void
 
-  func makeUIView(context: Context) -> MosaicTouchView {
-    let view = MosaicTouchView()
+  func makeUIView(context: Context) -> TilingTouchView {
+    let view = TilingTouchView()
     updateUIView(view, context: context)
     return view
   }
 
-  func updateUIView(_ view: MosaicTouchView, context: Context) {
+  func updateUIView(_ view: TilingTouchView, context: Context) {
     view.item = item
+    view.border = border
     view.frameOfItem = frame
     view.menu = menu
     view.onEvent = onEvent
@@ -566,7 +654,7 @@ private struct MosaicTouches: UIViewRepresentable {
 }
 
 @MainActor
-final class MosaicTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrency UIEditMenuInteractionDelegate {
+final class TilingTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrency UIEditMenuInteractionDelegate {
   enum Event {
     case tap(UUID)
     /// A long press lifted a window or chip; the point is the finger's.
@@ -575,23 +663,27 @@ final class MosaicTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
     case drop
     /// Released where it lifted, or cancelled: it goes back to its place.
     case settle
-    /// The finger dragging a window or chip up, by this much (negative is up).
-    case flick(UUID, CGFloat)
-    /// Let go after `flick`: the distance and the vertical speed.
-    case flickEnded(UUID, CGFloat, CGFloat)
+    /// A drag from a border's touch zone, which began with the finger here.
+    case resize(Tiling.Border, CGPoint)
+    case resizeMove(CGPoint)
+    case resizeEnd
+    /// A double tap on a border.
+    case evenOut
   }
 
   var item: (CGPoint) -> UUID? = { _ in nil }
+  var border: (CGPoint) -> Tiling.Border? = { _ in nil }
   var frameOfItem: (UUID) -> CGRect? = { _ in nil }
   var menu: (UUID) -> [UIMenuElement] = { _ in [] }
   var onEvent: (Event) -> Void = { _ in }
 
   private let tap = UITapGestureRecognizer()
+  private let doubleTap = UITapGestureRecognizer()
   private let press = UILongPressGestureRecognizer()
   private let pan = UIPanGestureRecognizer()
   private lazy var editMenu = UIEditMenuInteraction(delegate: self)
   private var pressed: (id: UUID, start: CGPoint, moved: Bool)?
-  private var flicked: UUID?
+  private var resizing = false
   private var menuItem: UUID?
 
   /// A lift becomes a move once the finger travels this far.
@@ -602,12 +694,16 @@ final class MosaicTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
     backgroundColor = .clear
     accessibilityElementsHidden = true
     tap.addTarget(self, action: #selector(tapped(_:)))
+    doubleTap.numberOfTapsRequired = 2
+    doubleTap.addTarget(self, action: #selector(doubleTapped(_:)))
     press.addTarget(self, action: #selector(pressed(_:)))
     press.minimumPressDuration = 0.35
     pan.addTarget(self, action: #selector(panned(_:)))
     pan.maximumNumberOfTouches = 1
-    pan.delegate = self
-    for recognizer in [tap, press, pan] { addGestureRecognizer(recognizer) }
+    for recognizer in [tap, doubleTap, press, pan] {
+      recognizer.delegate = self
+      addGestureRecognizer(recognizer)
+    }
     addInteraction(editMenu)
   }
 
@@ -615,11 +711,22 @@ final class MosaicTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
   required init?(coder: NSCoder) { fatalError("not used") }
 
   override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-    item(point) != nil
+    border(point) != nil || item(point) != nil
+  }
+
+  /// A border's touch zone is the border's: a drag there resizes and a double
+  /// tap evens out. Elsewhere a tap opens and a long press lifts.
+  func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    let onBorder = border(touch.location(in: self)) != nil
+    return g === pan || g === doubleTap ? onBorder : !onBorder
   }
 
   @objc private func tapped(_ g: UITapGestureRecognizer) {
     if let id = item(g.location(in: self)) { onEvent(.tap(id)) }
+  }
+
+  @objc private func doubleTapped(_ g: UITapGestureRecognizer) {
+    onEvent(.evenOut)
   }
 
   @objc private func pressed(_ g: UILongPressGestureRecognizer) {
@@ -653,31 +760,24 @@ final class MosaicTouchView: UIView, UIGestureRecognizerDelegate, @preconcurrenc
     }
   }
 
+  /// The border follows the finger from where it touched down.
   @objc private func panned(_ g: UIPanGestureRecognizer) {
-    guard let id = flicked else { return }
-    let dy = g.translation(in: self).y
+    let point = g.location(in: self)
     switch g.state {
-    case .began, .changed:
-      onEvent(.flick(id, dy))
-    case .ended:
-      flicked = nil
-      onEvent(.flickEnded(id, dy, g.velocity(in: self).y))
+    case .began:
+      let moved = g.translation(in: self)
+      let start = CGPoint(x: point.x - moved.x, y: point.y - moved.y)
+      guard let border = border(start) else { return }
+      resizing = true
+      onEvent(.resize(border, start))
+      onEvent(.resizeMove(point))
+    case .changed:
+      if resizing { onEvent(.resizeMove(point)) }
     default:
-      flicked = nil
-      onEvent(.flickEnded(id, 0, 0))
+      guard resizing else { return }
+      resizing = false
+      onEvent(.resizeEnd)
     }
-  }
-
-  /// A flick starts on a window or chip, moving more up than sideways.
-  override func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-    guard g === pan else { return super.gestureRecognizerShouldBegin(g) }
-    guard pressed == nil else { return false }
-    let v = pan.velocity(in: self)
-    guard v.y < 0, abs(v.y) > abs(v.x) else { return false }
-    let t = pan.translation(in: self)
-    let p = pan.location(in: self)
-    flicked = item(CGPoint(x: p.x - t.x, y: p.y - t.y))
-    return flicked != nil
   }
 
   private func showMenu(for id: UUID) {
