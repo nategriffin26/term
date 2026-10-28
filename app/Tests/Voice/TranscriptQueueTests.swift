@@ -946,6 +946,29 @@ final class DictationTests: XCTestCase {
     XCTAssertEqual(terminal.typed, ["ONE", "TWO"])
   }
 
+  /// Catches the bug where text arriving while the tab's SSH connection was
+  /// lost went into the dead channel and its audio was deleted: it waits,
+  /// shown as offline, audio kept, neither typed nor copied, and types once,
+  /// in spoken order, when the tab can take input again.
+  func testTextWaitsWhileTheConnectionIsLost() async throws {
+    let spool = spool()
+    let dictation = make(Service(), spool: spool)
+    let terminal = Terminal()
+    terminal.dictationDestination?.acceptsInput = false
+    say(["one", "two"], into: dictation, from: terminal)
+    await until("held offline") { dictation.state == .failed(queued: 2, problem: .offline) }
+    try await Task.sleep(for: .milliseconds(1_500))
+    XCTAssertEqual(terminal.typed, [])
+    XCTAssertNil(pasteboard.string)
+    XCTAssertEqual(files(in: spool).count, 2, "the audio waits with the text")
+    terminal.dictationDestination?.acceptsInput = true
+    await until("typed after the reconnect") { terminal.typed.count == 2 }
+    try await Task.sleep(for: .milliseconds(1_500))
+    XCTAssertEqual(terminal.typed, ["one", "two"], "once each, in order")
+    XCTAssertEqual(dictation.state, .idle)
+    await until("files let go") { files(in: spool).isEmpty }
+  }
+
   /// Catches a word list longer than the bound sent whole: words past 400
   /// characters go to neither the transcription prompt nor cleanup.
   func testWordsPastTheBoundAreNotSent() async throws {

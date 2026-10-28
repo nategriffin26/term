@@ -86,7 +86,8 @@ final class Tab {
   /// and tmux session; nil at the local prompt or while a preview shows.
   var dictationDestination: DictationDestination? {
     guard let remote, let target, view.session === remote else { return nil }
-    return DictationDestination(host: target.id, tmuxSession: tmuxSession, connection: remote)
+    return DictationDestination(host: target.id, tmuxSession: tmuxSession, connection: remote,
+                                acceptsInput: !unreachable && !reconnecting)
   }
 
   init?(id: UUID = UUID()) {

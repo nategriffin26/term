@@ -96,6 +96,10 @@ struct TranscriptQueue<Target> {
   private var cleaning: Set<Int> = []
   /// Their cleaned text, once it is back.
   private var cleaned: [Int: String] = [:]
+  /// Whether a recording's text must wait to be typed: its terminal still
+  /// shows where it was said but cannot take input now. It keeps its place
+  /// (and audio) until `release()` finds it can.
+  var isHeld: (Target) -> Bool = { _ in false }
 
   var isEmpty: Bool { entries.isEmpty }
   /// Recordings not typed yet.
@@ -110,8 +114,16 @@ struct TranscriptQueue<Target> {
   /// Recordings whose text is out for cleanup, or cleaned and waiting for an earlier recording.
   var cleaningCount: Int { cleaning.count }
 
-  /// Why the queue is stuck, if it is: the first failed or offline part's problem.
+  /// The first recording's text is ready but its terminal cannot take it yet.
+  var isHolding: Bool {
+    guard let first = entries.first, let text = readyText(), !text.isEmpty else { return false }
+    return isHeld(first.target)
+  }
+
+  /// Why the queue is stuck, if it is: text held for its terminal, or the
+  /// first failed or offline part's problem.
   var problem: VoiceProblem? {
+    if isHolding { return .offline }
     for entry in entries {
       switch entry.status {
       case .waiting: return .offline
@@ -120,6 +132,11 @@ struct TranscriptQueue<Target> {
       }
     }
     return nil
+  }
+
+  /// Held text whose terminal can take it now: returns what is ready to type, in order.
+  mutating func release() -> [Typed] {
+    popReady()
   }
 
   /// The earliest time a failed part goes again by itself.
@@ -261,25 +278,28 @@ struct TranscriptQueue<Target> {
   }
 
   /// The first recordings whose text is ready, as one text each: all parts
-  /// back, and cleaned if the recording cleans up and has any text.
+  /// back, cleaned if the recording cleans up and has any text, and its
+  /// terminal able to take it.
   private mutating func popReady() -> [Typed] {
     var ready: [Typed] = []
-    while let first = entries.first {
-      let parts = entries.prefix { $0.recording == first.recording }
-      guard var text = Self.text(of: parts) else { return ready }
-      if cleaning.contains(first.recording) {
-        guard let done = cleaned[first.recording] else { return ready }
-        text = done
-      } else if first.cleansUp, !text.isEmpty {
-        return ready
-      }
-      released += parts.compactMap(\.audio)
-      entries.removeFirst(parts.count)
+    while let first = entries.first, let text = readyText() {
+      if !text.isEmpty, isHeld(first.target) { break }
+      let count = entries.prefix { $0.recording == first.recording }.count
+      released += entries.prefix(count).compactMap(\.audio)
+      entries.removeFirst(count)
       cleaning.remove(first.recording)
       cleaned[first.recording] = nil
       if !text.isEmpty { ready.append(Typed(target: first.target, text: text)) }
     }
     return ready
+  }
+
+  /// The first recording's text to type, or nil while a part or its cleanup is not back.
+  private func readyText() -> String? {
+    guard let first = entries.first else { return nil }
+    guard let text = Self.text(of: entries.prefix { $0.recording == first.recording }) else { return nil }
+    if cleaning.contains(first.recording) { return cleaned[first.recording] }
+    return first.cleansUp && !text.isEmpty ? nil : text
   }
 
   /// A recording's parts joined in order, or nil while any is not back.

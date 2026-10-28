@@ -28,6 +28,10 @@ struct DictationDestination {
   let host: UUID
   let tmuxSession: String?
   weak var connection: AnyObject?
+  /// Input typed now reaches the host: false while the connection is lost or
+  /// being replaced (an SSH channel drops what is sent then, and a reconnect
+  /// starts a new session that never sees it).
+  var acceptsInput = true
 
   /// Whether text said into `self` may be typed into `now`: the same tmux
   /// session on the same host (a reconnect into it included), or, with no
@@ -94,6 +98,8 @@ final class Dictation {
   private var backgroundTask = UIBackgroundTaskIdentifier.invalid
   private var retryTimer: Task<Void, Never>?
   private var noteTimer: Task<Void, Never>?
+  /// Looks again in a second whether held text's terminal can take it.
+  private var holdTimer: Task<Void, Never>?
   /// What dictation last put on the clipboard, while nothing else replaced
   /// it: text copied next is added to it rather than replacing it.
   private var copied: (text: String, changeCount: Int)?
@@ -124,6 +130,14 @@ final class Dictation {
     self.startDeadline = startDeadline
     self.spool = spool
     self.pasteboard = pasteboard
+    // Text for a terminal whose connection is lost waits, audio and all,
+    // until it can take input again (or shows another session: then it is copied).
+    queue.isHeld = { destination in
+      MainActor.assumeIsolated {
+        guard let view = destination.view, let place = destination.place, let now = view.dictationDestination else { return false }
+        return place.admits(now) && !now.acceptsInput
+      }
+    }
     let center = NotificationCenter.default
     center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
       MainActor.assumeIsolated { self?.stop() }
@@ -515,6 +529,8 @@ final class Dictation {
   }
 
   private func resend() {
+    output(queue.release())
+    cleanUp()
     sendReady()
     scheduleRetry()
     update()
@@ -549,6 +565,16 @@ final class Dictation {
 
   private func update() {
     for file in queue.takeReleasedAudio() { spool.remove(file) }
+    if queue.isHolding, holdTimer == nil {
+      holdTimer = Task { [weak self] in
+        try? await Task.sleep(for: .seconds(1))
+        guard let self else { return }
+        holdTimer = nil
+        output(queue.release())
+        cleanUp()
+        update()
+      }
+    }
     let busy = !queue.isEmpty || judging > 0
     if isListening {
       state = .listening(heard)
