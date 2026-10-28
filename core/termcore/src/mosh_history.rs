@@ -191,17 +191,21 @@ fn remap_cell(source: &Frame, index: usize, target: &mut Frame) -> vt::Cell {
 fn append_row(source: &Frame, row: u16, target: &mut Frame) {
     let start = row as usize * source.cols as usize;
     let cells = &source.cells[start..start + source.cols as usize];
-    let cols = cells.iter().rposition(|cell| {
-        !matches!(cell.ch, 0 | 32) || cell.fg != source.fg || cell.bg != source.bg
-            || cell.ul != 0 || cell.flags != 0 || cell.grapheme != 0
-    }).map_or(0, |last| last + 1);
+    let wrapped = source.wrapped.get(row as usize).copied().unwrap_or(false);
+    // A soft-wrapped row keeps its trailing blanks: they separate its text from the next row's.
+    let cols = if wrapped { cells.len() } else {
+        cells.iter().rposition(|cell| {
+            !matches!(cell.ch, 0 | 32) || cell.fg != source.fg || cell.bg != source.bg
+                || cell.ul != 0 || cell.flags != 0 || cell.grapheme != 0
+        }).map_or(0, |last| last + 1)
+    };
     target.cols = cols as u16;
     target.cells.reserve_exact(cols);
     for col in 0..cols {
         let cell = remap_cell(source, start + col, target);
         target.cells.push(cell);
     }
-    target.wrapped.push(source.wrapped.get(row as usize).copied().unwrap_or(false));
+    target.wrapped.push(wrapped);
     // A recycled long row must not keep its former blank-column allocation.
     target.cells.shrink_to_fit();
 }
@@ -383,5 +387,21 @@ mod tests {
         assert!(row(6).unwrap().wrapped && row(7).unwrap().wrapped && !row(8).unwrap().wrapped);
         assert_eq!(crate::link::text_url(row, 4, 7).as_deref(), Some("https://example.com/abc"));
         assert_eq!(crate::link::text_url(row, 1, 8).as_deref(), Some("https://example.com/abc"));
+    }
+
+    // Bug: a saved row trimmed of its trailing blanks joined to the next one
+    // without them, so "https://a " + "next" reads as https://anext.
+    #[test]
+    fn a_saved_soft_wrap_keeps_the_blank_before_the_next_word() {
+        let mut terminal = vt::Terminal::new(12, 6, 0).unwrap();
+        let mut history = MoshHistory::default();
+        observe(&mut history, &mut terminal, b"1\r\n2\r\n3\r\n4\r\n5\r\n6");
+        observe(&mut history, &mut terminal, b"\r\nx https://a next");
+        observe(&mut history, &mut terminal, b"\r\nq\r\nr\r\ns\r\nt");
+        observe(&mut history, &mut terminal, b"\r\nu\r\nv\r\nw");
+        assert_eq!(history.history_rows(), 9, "the wrapped line's rows left the top");
+        let row = |r: u32| history.row_text(r);
+        assert!(row(6).unwrap().wrapped);
+        assert_eq!(crate::link::text_url(row, 10, 6).as_deref(), Some("https://a"));
     }
 }

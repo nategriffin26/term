@@ -1,6 +1,7 @@
 //! The web link at a tapped cell (term.h `term_session_link`): an http(s) URL
 //! written in the text around it, across soft-wrapped rows.
 
+use std::ops::Range;
 use vt::RowText;
 
 /// Rows joined each way from the tapped one: a 4 KB URL on a 64-column screen.
@@ -13,16 +14,20 @@ pub(crate) fn is_web(uri: &str) -> bool {
 
 /// The http(s) URL written through the cell at `col` on row `row`, the rows
 /// it soft-wraps across joined; a `www.` host is given `https://`. `row_at`
-/// reads a row (None past either end).
+/// reads a row (None past either end). A URL that may run past the join
+/// limit is none: its end is unknown.
 pub(crate) fn text_url(row_at: impl Fn(u32) -> Option<RowText>, col: u16, row: u32) -> Option<String> {
     let tapped = row_at(row)?;
     let mut before = Vec::new();
     let mut r = row;
-    while r > 0 && row - r < MAX_JOINED_ROWS {
-        match row_at(r - 1) {
-            Some(prev) if prev.wrapped => before.push(prev),
-            _ => break,
+    let mut cut_before = false;
+    while r > 0 {
+        let Some(prev) = row_at(r - 1).filter(|prev| prev.wrapped) else { break };
+        if row - r == MAX_JOINED_ROWS {
+            cut_before = true;
+            break;
         }
+        before.push(prev);
         r -= 1;
     }
     let mut chars: Vec<char> = before.iter().rev().flat_map(|row| row.chars.iter().map(|&(_, ch)| ch)).collect();
@@ -30,13 +35,19 @@ pub(crate) fn text_url(row_at: impl Fn(u32) -> Option<RowText>, col: u16, row: u
     chars.extend(tapped.chars.iter().map(|&(_, ch)| ch));
     let mut wrapped = tapped.wrapped;
     let mut r = row;
-    while wrapped && r - row < MAX_JOINED_ROWS {
+    let mut cut_after = false;
+    while wrapped {
+        if r - row == MAX_JOINED_ROWS {
+            cut_after = true;
+            break;
+        }
         r += 1;
         let Some(next) = row_at(r) else { break };
         chars.extend(next.chars.iter().map(|&(_, ch)| ch));
         wrapped = next.wrapped;
     }
-    url_at(&chars, at)
+    let (url, run) = url_at(&chars, at)?;
+    (!(cut_before && run.start == 0 || cut_after && run.end == chars.len())).then_some(url)
 }
 
 /// The index in `row.chars` of the character drawn at `col` (the left half
@@ -49,8 +60,9 @@ fn cell_index(row: &RowText, col: u16) -> Option<usize> {
     (c == col || spacer).then(|| row.chars.iter().position(|&(cc, _)| cc == c).unwrap_or(i))
 }
 
-/// The URL in `chars` covering index `at`, trailing punctuation left out.
-fn url_at(chars: &[char], at: usize) -> Option<String> {
+/// The URL in `chars` covering index `at`, trailing punctuation left out,
+/// and the run of URL characters it was found in.
+fn url_at(chars: &[char], at: usize) -> Option<(String, Range<usize>)> {
     if !is_url_char(*chars.get(at)?) {
         return None;
     }
@@ -60,14 +72,15 @@ fn url_at(chars: &[char], at: usize) -> Option<String> {
     for i in 0..run.len() {
         let Some((prefix, www)) = url_prefix(run, i) else { continue };
         let len = trimmed_len(&run[i..], i > 0 && run[i - 1] == '\'');
-        if len <= prefix || !run[i + prefix].is_alphanumeric() {
+        // A host starts with a letter or digit, or `[` for an IPv6 address.
+        if len <= prefix || !(run[i + prefix].is_alphanumeric() || run[i + prefix] == '[') {
             continue;
         }
         if !(start + i..start + i + len).contains(&at) {
             return None;
         }
         let url: String = run[i..i + len].iter().collect();
-        return Some(if www { format!("https://{url}") } else { url });
+        return Some((if www { format!("https://{url}") } else { url }, start..end));
     }
     None
 }
@@ -253,15 +266,35 @@ mod tests {
         assert_eq!(text_url(read, 20, 0), None, "past the text");
     }
 
-    // Bug: a wrapped run longer than the join limit walking the whole scrollback.
+    /// A URL whose wrapped line runs `rows` rows past the tapped one (or
+    /// before it), the tap on its first (or last) row; and the whole URL.
+    fn wrapped_url(rows: usize) -> (Vec<String>, String) {
+        let mut screen = vec!["https://example.com/\\".to_string()];
+        screen.extend((1..rows).map(|_| "aaaaaaaaaa\\".to_string()));
+        screen.push("end".to_string());
+        let url = format!("https://example.com/{}end", "a".repeat(10 * (rows - 1)));
+        (screen, url)
+    }
+
+    // Bug: a wrapped URL longer than the join limit opening cut at the limit
+    // (a different target) instead of nothing; or a URL within it not opening.
     #[test]
-    fn joining_stops_at_the_limit() {
-        let mut rows = vec!["https://example.com/\\".to_string()];
-        rows.extend((0..200).map(|_| "aaaaaaaaaa\\".to_string()));
-        rows.push("end".to_string());
-        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
-        let url = tap(&refs, 2, 0).unwrap();
-        assert_eq!(url.len(), "https://example.com/".len() + 10 * MAX_JOINED_ROWS as usize);
+    fn a_url_past_the_join_limit_opens_nothing() {
+        let limit = MAX_JOINED_ROWS as usize;
+        for (rows, whole) in [(limit - 1, true), (limit, true), (limit + 1, false)] {
+            let (screen, url) = wrapped_url(rows);
+            let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
+            let want = whole.then_some(url.as_str());
+            assert_eq!(tap(&refs, 2, 0).as_deref(), want, "{rows} rows after the tapped one");
+            assert_eq!(tap(&refs, 1, rows as u32).as_deref(), want, "{rows} rows before the tapped one");
+        }
+    }
+
+    // Bug: a URL to a bracketed IPv6 host not opening.
+    #[test]
+    fn an_ipv6_host_opens() {
+        assert_eq!(tap(&["curl http://[::1]:8080/a?b#c."], 12, 0).as_deref(), Some("http://[::1]:8080/a?b#c"));
+        assert_eq!(tap(&["see https://[2001:db8::1]/x"], 6, 0).as_deref(), Some("https://[2001:db8::1]/x"));
     }
 
     #[test]
