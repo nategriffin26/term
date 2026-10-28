@@ -24,7 +24,6 @@ impl MoshHistory {
             let mut saved = if self.rows.len() == super::session::SCROLLBACK {
                 self.rows.pop_front().unwrap()
             } else { Frame::default() };
-            saved.cols = self.latest.cols;
             saved.rows = 1;
             saved.cells.clear();
             saved.graphemes.clear();
@@ -98,7 +97,7 @@ impl MoshHistory {
             let end = if row == b.1 { b.0 } else { self.latest.cols - 1 };
             let mut line = String::new();
             let mut style = None;
-            for col in start..=end.min(frame.cols.saturating_sub(1)) {
+            for col in start..frame.cols.min(end.saturating_add(1)) {
                 let cell = frame.cell(col, r);
                 if cell.flags & cell_flags::SPACER != 0 { continue; }
                 if styled && style != Some((cell.fg, cell.bg, cell.ul, cell.flags)) {
@@ -139,13 +138,17 @@ fn same_row(a: &Frame, ar: u16, b: &Frame, br: u16) -> bool {
 
 fn scrolled_rows(old: &Frame, new: &Frame) -> u16 {
     if old.cols != new.cols || old.rows != new.rows || old.rows < 2
-        || (old.modes | new.modes) & (modes::ALT_SCREEN | modes::MOUSE_TRACKING) != 0
-        || same_row(old, 0, new, 0) { return 0; }
+        || (old.modes | new.modes) & (modes::ALT_SCREEN | modes::MOUSE_TRACKING) != 0 { return 0; }
+    // A stationary prefix wins ties, including repeated rules or blank rows.
     // The live editor/status rows may repaint independently below the overlap.
     // Two matching rows, at least one nonblank, avoid treating a redraw or a
     // moving cursor as scrolling. Ambiguous replacements retain nothing.
-    let mut best = (0, 0);
+    let stationary = (0..old.rows).take_while(|&row| same_row(old, row, new, row)).count();
+    let mut best = (0, stationary);
     for shift in 1..old.rows {
+        // No later shift can beat this run: an ordinary bottom-row repaint
+        // therefore needs only the stationary comparison, not a quadratic scan.
+        if (old.rows - shift) as usize <= best.1 { break; }
         let run = (0..old.rows - shift).take_while(|&row| same_row(old, row + shift, new, row)).count();
         if run >= 2 && run > best.1 && (0..run as u16).any(|row|
             (0..new.cols).any(|col| new.cell(col, row).ch > 32)) {
@@ -168,10 +171,20 @@ fn remap_cell(source: &Frame, index: usize, target: &mut Frame) -> vt::Cell {
 }
 
 fn append_row(source: &Frame, row: u16, target: &mut Frame) {
-    for col in 0..source.cols {
-        let cell = remap_cell(source, row as usize * source.cols as usize + col as usize, target);
+    let start = row as usize * source.cols as usize;
+    let cells = &source.cells[start..start + source.cols as usize];
+    let cols = cells.iter().rposition(|cell| {
+        !matches!(cell.ch, 0 | 32) || cell.fg != source.fg || cell.bg != source.bg
+            || cell.ul != 0 || cell.flags != 0 || cell.grapheme != 0
+    }).map_or(0, |last| last + 1);
+    target.cols = cols as u16;
+    target.cells.reserve_exact(cols);
+    for col in 0..cols {
+        let cell = remap_cell(source, start + col, target);
         target.cells.push(cell);
     }
+    // A recycled long row must not keep its former blank-column allocation.
+    target.cells.shrink_to_fit();
 }
 
 #[cfg(test)]
@@ -182,6 +195,80 @@ mod tests {
         terminal.write(bytes);
         terminal.update_frame().unwrap();
         history.observe(terminal.frame().unwrap());
+    }
+
+    #[test]
+    fn repeated_blank_first_row_does_not_hide_a_longer_scroll_overlap() {
+        let mut terminal = vt::Terminal::new(20, 5, 0).unwrap();
+        let mut history = MoshHistory::default();
+        observe(&mut history, &mut terminal, b"\r\na\r\n\r\nb\r\nc");
+        observe(&mut history, &mut terminal, b"\r\nd\r\ne");
+        assert_eq!(history.frame().history_rows, 2, "the blank row and a left the top");
+        assert!(history.scroll(2));
+        assert_eq!(history.frame().row_text(0).trim_end(), "");
+        assert_eq!(history.frame().row_text(1).trim_end(), "a");
+    }
+
+    fn screen(rows: &[&str]) -> Frame {
+        let mut terminal = vt::Terminal::new(20, rows.len() as u16, 0).unwrap();
+        terminal.write(rows.join("\r\n").as_bytes());
+        terminal.update_frame().unwrap();
+        terminal.frame().unwrap().clone()
+    }
+
+    #[test]
+    fn one_coincidentally_matching_row_is_not_scrolling() {
+        let old = screen(&["old", "match", "x", "y"]);
+        let new = screen(&["match", "new", "z", "w"]);
+        assert_eq!(scrolled_rows(&old, &new), 0);
+    }
+
+    #[test]
+    fn an_overlap_containing_only_blank_rows_is_not_scrolling() {
+        let old = screen(&["old", "", "", "x", "y"]);
+        let new = screen(&["", "", "z", "u", "v"]);
+        assert_eq!(scrolled_rows(&old, &new), 0);
+    }
+
+    #[test]
+    fn an_equal_stationary_overlap_wins_over_a_possible_scroll() {
+        let old = screen(&["rule", "a", "rule", "a", "old"]);
+        let new = screen(&["rule", "a", "changed", "other", "new"]);
+        assert_eq!(scrolled_rows(&old, &new), 0);
+    }
+
+    #[test]
+    fn retained_rows_store_no_trailing_default_blanks_and_render_padded() {
+        let mut terminal = vt::Terminal::new(50, 5, 0).unwrap();
+        let mut history = MoshHistory::default();
+        observe(&mut history, &mut terminal, b"a   \r\n\r\nthree\r\nfour\r\nfive");
+        observe(&mut history, &mut terminal, b"\r\nsix\r\nseven");
+        assert_eq!(history.rows[0].cells.len(), 1);
+        assert_eq!(history.rows[1].cells.len(), 0);
+        assert_eq!(history.rows[0].cells.capacity(), 1);
+        assert_eq!(history.rows[1].cells.capacity(), 0);
+        let mut recycled = Frame { cells: Vec::with_capacity(50), ..Default::default() };
+        append_row(&history.latest, 0, &mut recycled);
+        assert_eq!(recycled.cells.capacity(), 5, "only the five cells in three remain allocated");
+        assert!(history.scroll(2));
+        let view = history.frame();
+        assert_eq!(view.cells.len(), 250);
+        assert_eq!(view.row_text(0).trim_end(), "a");
+        assert_eq!(view.row_text(1).trim_end(), "");
+        assert_eq!(*view.cell(49, 0), vt::Cell { fg: view.fg, bg: view.bg, ..Default::default() });
+        assert_eq!(history.text(0, 0, 49, 1, false), "a\n");
+    }
+
+    #[test]
+    fn trailing_blank_renditions_and_wide_glyph_tails_are_retained() {
+        let mut terminal = vt::Terminal::new(20, 5, 0).unwrap();
+        let mut history = MoshHistory::default();
+        observe(&mut history, &mut terminal, "a\x1b[41m  \x1b[0m\r\n日\r\nthree\r\nfour\r\nfive".as_bytes());
+        observe(&mut history, &mut terminal, b"\r\nsix\r\nseven");
+        assert_eq!(history.rows[0].cells.len(), 3);
+        assert_eq!(history.rows[1].cells.len(), 2);
+        assert_ne!(history.rows[0].cell(2, 0).bg, history.latest.bg);
+        assert_ne!(history.rows[1].cell(1, 0).flags & cell_flags::SPACER, 0);
     }
 
     #[test]
