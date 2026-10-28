@@ -945,6 +945,32 @@ final class DictationTests: XCTestCase {
     await until("both typed") { terminal.typed.count == 2 }
     XCTAssertEqual(terminal.typed, ["ONE", "TWO"])
   }
+
+  /// Catches the app's own cleanup ignoring the setting: with Clean Up
+  /// Dictation turned off and stored, `openRouterCleanup` sends nothing; on,
+  /// the same path reaches the server.
+  func testStoredOffSendsNothingThroughTheAppsCleanup() async throws {
+    let server = try await server { _ in RecordedCleanup.cleaned }
+    let was = AppSettings.shared.cleansUpDictation
+    setenv("TERM_OPENROUTER_KEY", "k", 1)
+    setenv("TERM_OPENROUTER_BASE_URL", server.baseURL.absoluteString, 1)
+    addTeardownBlock { @MainActor in
+      AppSettings.shared.cleansUpDictation = was
+      unsetenv("TERM_OPENROUTER_KEY")
+      unsetenv("TERM_OPENROUTER_BASE_URL")
+    }
+    AppSettings.shared.cleansUpDictation = false
+    let dictation = Dictation(transcriber: { Service() }, cleanup: Dictation.openRouterCleanup, spool: spool(), pasteboard: pasteboard)
+    let terminal = Terminal()
+    say(["um open the readme"], into: dictation, from: terminal)
+    await until("typed as said") { terminal.typed == ["um open the readme"] }
+    XCTAssertEqual(server.requests.count, 0)
+    AppSettings.shared.cleansUpDictation = true
+    say(["Um so uh open the readme no the changelog and add a line for the n stack flag"], into: dictation, from: terminal)
+    await until("cleaned") { terminal.typed.count == 2 }
+    XCTAssertEqual(terminal.typed.last, "Open the changelog and add a line for the nstack flag.")
+    XCTAssertEqual(server.requests.count, 1)
+  }
 }
 
 final class DictationDestinationTests: XCTestCase {
