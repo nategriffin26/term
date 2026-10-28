@@ -460,7 +460,8 @@ extension EnvironmentValues {
 }
 
 /// Working: a light spiralling over a 3 × 3 cell of dots, clockwise round the
-/// edge from the top-left to the centre with a fading tail, then again. It
+/// edge from the top-left to the centre with a fading tail, quickening as it
+/// winds in; the centre holds and exhales before the light starts again. It
 /// moves only while on screen; under Reduce Motion it holds a still tail.
 struct WorkingMark: View {
   @Environment(\.isOnScreen) private var isOnScreen
@@ -490,10 +491,20 @@ final class WorkingMarkView: UIView {
   static let gap: CGFloat = 1.9
   /// The dots in the order the light visits them, as (column, row).
   static let path = [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (0, 1), (1, 1)]
-  /// How long the light rests on each dot, and how long a dot takes to dim after it.
-  static let step: CFTimeInterval = 0.12
-  static let fade: CFTimeInterval = 0.36
-  static var loop: CFTimeInterval { step * Double(path.count) }
+  /// The light's time on each dot: 1.3× `step` at the top-left down to 0.7×
+  /// at the centre (the wind-in), 9 × `step` in all.
+  static let step: CFTimeInterval = 0.13
+  static let steps: [CFTimeInterval] = path.indices.map { step * (1.3 - 0.6 * Double($0) / Double(path.count - 1)) }
+  /// When the light reaches each dot, from the top-left's start.
+  static let starts: [CFTimeInterval] = steps.indices.map { steps[..<$0].reduce(0, +) }
+  /// How long a dot takes to dim behind the light.
+  static let fade: CFTimeInterval = 0.40
+  /// The pause after the centre: it stays lit through `hold` from when the
+  /// light reaches it, then exhales to rest (ease in-out) just as the top-left lights again.
+  static let breath: CFTimeInterval = 0.70
+  static var hold: CFTimeInterval { steps[path.count - 1] + 0.3 * breath }
+  static var exhale: CFTimeInterval { max(0.7 * breath, fade) }
+  static var loop: CFTimeInterval { steps.reduce(0, +) + breath }
   /// A dot's opacity between visits: the cell always reads as a grid.
   static let rest: Float = 0.18
   /// Still, in path order: the top row lit toward its right end.
@@ -555,13 +566,19 @@ final class WorkingMarkView: UIView {
       let start = now - fmod(now, Self.loop) - Self.loop
       for (index, dot) in dots.enumerated() {
         let lit = CAKeyframeAnimation(keyPath: "opacity")
-        lit.values = [1, Self.rest, Self.rest]
-        lit.keyTimes = [0, NSNumber(value: Self.fade / Self.loop), 1]
+        if index == dots.count - 1 {
+          lit.values = [1, 1, Self.rest, Self.rest]
+          lit.keyTimes = [0, Self.hold / Self.loop, (Self.hold + Self.exhale) / Self.loop, 1].map { NSNumber(value: $0) }
+          lit.timingFunctions = [.init(name: .linear), .init(name: .easeInEaseOut), .init(name: .linear)]
+        } else {
+          lit.values = [1, Self.rest, Self.rest]
+          lit.keyTimes = [0, NSNumber(value: Self.fade / Self.loop), 1]
+        }
         lit.calculationMode = .linear
         lit.duration = Self.loop
         lit.repeatCount = .infinity
         lit.isRemovedOnCompletion = false
-        lit.beginTime = dot.convertTime(start + Double(index) * Self.step, from: nil)
+        lit.beginTime = dot.convertTime(start + Self.starts[index], from: nil)
         dot.add(lit, forKey: "lit")
       }
     } else if !runs, running {

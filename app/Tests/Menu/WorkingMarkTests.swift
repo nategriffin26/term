@@ -7,8 +7,12 @@ import XCTest
 @MainActor
 final class WorkingMarkTests: XCTestCase {
   /// The user's pick: clockwise round the edge from the top-left, then the
-  /// centre, 0.12 s a dot, then the top-left again. As (column, row).
+  /// centre, then the top-left again. As (column, row).
   private let spiral = [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (0, 1), (1, 1)]
+  /// His values (1 · Hold and exhale): steps of 0.13 s winding in from 1.3× to
+  /// 0.7×, a 0.40 s tail, a 0.70 s breath after the centre, 1.87 s a loop.
+  private let gaps = [0.169, 0.15925, 0.1495, 0.13975, 0.13, 0.12025, 0.1105, 0.10075]
+  private let loop = 1.87
 
   private func mark(moving: Bool, in window: UIWindow) -> WorkingMarkView {
     let view = WorkingMarkView(frame: CGRect(x: 0, y: 0, width: 15, height: 15))
@@ -34,32 +38,48 @@ final class WorkingMarkTests: XCTestCase {
     return window
   }
 
-  // Bug: the light skips the centre, runs the wrong way, or does not start
-  // again from the top-left after the centre.
-  func testTheLightSpiralsInFromTheTopLeftToTheCentreThenStartsAgain() throws {
+  // Bug: the light skips the centre, runs the wrong way, keeps an even pace
+  // instead of quickening toward the centre, or starts again without the breath.
+  func testTheLightWindsInFromTheTopLeftToTheCentreThenBreathesBeforeStartingAgain() throws {
     let view = mark(moving: true, in: makeWindow())
     let animations = try spiral.map { try XCTUnwrap(lit(try dot($0, of: view)), "dot \($0) lights") }
-    for (earlier, later) in zip(animations, animations.dropFirst()) {
-      XCTAssertEqual(later.beginTime - earlier.beginTime, 0.12, accuracy: 0.0001)
+    for (gap, (earlier, later)) in zip(gaps, zip(animations, animations.dropFirst())) {
+      XCTAssertEqual(later.beginTime - earlier.beginTime, gap, accuracy: 0.0001)
     }
+    let centre = try XCTUnwrap(animations.last).beginTime - animations[0].beginTime
+    XCTAssertEqual(loop - centre, 0.791, accuracy: 0.0001, "the centre's 0.091 s step, then the 0.70 s breath")
     for animation in animations {
-      XCTAssertEqual(animation.duration, 1.08, accuracy: 0.0001, "after the centre, the top-left again")
+      XCTAssertEqual(animation.duration, loop, accuracy: 0.0001, "after the breath, the top-left again")
       XCTAssertEqual(animation.repeatCount, .infinity)
     }
   }
 
   // Bug: a dot goes dark between visits (the cell stops reading as a grid),
   // or stays lit as a line instead of fading behind the light.
-  func testEachDotFadesBehindTheLightToItsRestingDim() throws {
+  func testEachEdgeDotFadesBehindTheLightToItsRestingDim() throws {
     let view = mark(moving: true, in: makeWindow())
-    for layer in view.dots {
-      let animation = try XCTUnwrap(lit(layer))
+    for cell in spiral.dropLast() {
+      let animation = try XCTUnwrap(lit(try dot(cell, of: view)))
       let values = try XCTUnwrap(animation.values as? [NSNumber]).map(\.floatValue)
-      XCTAssertEqual(values.first, 1, "lit")
-      XCTAssertEqual(values.last, 0.18, "at rest, still visible")
-      XCTAssertEqual(values.min(), 0.18, "never darker than at rest")
-      XCTAssertEqual(try XCTUnwrap(animation.keyTimes?[1]).doubleValue * 1.08, 0.36, accuracy: 0.0001, "dimmed after three steps")
+      XCTAssertEqual(values, [1, 0.18, 0.18], "lit, then at rest and still visible")
+      XCTAssertEqual(try XCTUnwrap(animation.keyTimes?[1]).doubleValue * loop, 0.40, accuracy: 0.0001, "the tail")
     }
+  }
+
+  // Bug: the centre drops at once (the rushed restart the user saw), or is
+  // still lit when the top-left starts again.
+  func testTheCentreHoldsThenExhalesToRestAsTheTopLeftLightsAgain() throws {
+    let view = mark(moving: true, in: makeWindow())
+    let centre = try XCTUnwrap(lit(try dot((1, 1), of: view)))
+    XCTAssertEqual(try XCTUnwrap(centre.values as? [NSNumber]).map(\.floatValue), [1, 1, 0.18, 0.18])
+    let times = try XCTUnwrap(centre.keyTimes).map { $0.doubleValue * loop }
+    XCTAssertEqual(times[1], 0.301, accuracy: 0.0001, "lit through its step and 30 % of the breath")
+    XCTAssertEqual(times[2], 0.791, accuracy: 0.0001, "at rest when the top-left lights")
+    let exhale = try XCTUnwrap(centre.timingFunctions?[1])
+    var p1: [Float] = [0, 0], p2: [Float] = [0, 0]
+    exhale.getControlPoint(at: 1, values: &p1)
+    exhale.getControlPoint(at: 2, values: &p2)
+    XCTAssertEqual(p1 + p2, [0.42, 0, 0.58, 1], "a slow exhale: ease in-out")
   }
 
   // Bug: two working sessions on screen blink out of step.
@@ -69,7 +89,7 @@ final class WorkingMarkTests: XCTestCase {
     Thread.sleep(forTimeInterval: 0.05)
     let second = mark(moving: true, in: window)
     let a = try XCTUnwrap(lit(first.dots[0])).beginTime, b = try XCTUnwrap(lit(second.dots[0])).beginTime
-    XCTAssertEqual(fmod(abs(a - b), 1.08), 0, accuracy: 0.0001)
+    XCTAssertEqual(fmod(abs(a - b), loop), 0, accuracy: 0.0001)
   }
 
   // Bug: marks keep animating with the menu closed or their tab hidden.
