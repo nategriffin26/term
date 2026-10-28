@@ -234,6 +234,58 @@ fn text_extraction_reaches_scrollback() {
     assert_eq!(t.text(0, 4, 5, 4), "line-5");
 }
 
+// Bug: a URL the terminal wrapped across rows read as two lines (no wrap
+// flag), or a hard newline read as a soft wrap.
+#[test]
+fn screen_row_reads_text_and_soft_wraps_into_scrollback() {
+    let mut t = Terminal::new(10, 3, 100).unwrap();
+    t.write(b"0123456789abc\r\nhard\r\nx\r\ny");
+    assert_eq!(t.history_rows(), 2);
+    let row = |r| t.screen_row(r).unwrap();
+    let text = |r: &vt::RowText| r.chars.iter().map(|&(_, c)| c).collect::<String>();
+    assert_eq!(text(&row(0)), "0123456789");
+    assert!(row(0).wrapped, "the terminal wrapped this row");
+    assert_eq!(text(&row(1)), "abc       ");
+    assert!(!row(1).wrapped, "ended by a newline");
+    assert!(!row(2).wrapped);
+    assert!(t.screen_row(5).is_none(), "past the screen");
+}
+
+// Bug: a wide glyph's spacer read as a character, shifting every column after it.
+#[test]
+fn screen_row_skips_wide_spacers() {
+    let mut t = term(10, 2);
+    t.write("a例b".as_bytes());
+    let row = t.screen_row(t.history_rows()).unwrap();
+    assert_eq!(&row.chars[..3], &[(0, 'a'), (1, '例'), (3, 'b')]);
+}
+
+// Bug: a tap on an OSC 8 link finding no URI, the visible text instead, or
+// nothing once the link scrolled into history.
+#[test]
+fn hyperlink_uri_reads_the_cell_link_on_screen_and_in_scrollback() {
+    let mut t = Terminal::new(20, 2, 100).unwrap();
+    t.write(b"\x1b]8;;https://example.com/target\x07click here\x1b]8;;\x07 plain");
+    assert_eq!(t.hyperlink_uri(3, 0).as_deref(), Some("https://example.com/target"));
+    assert_eq!(t.hyperlink_uri(12, 0), None, "text after the link");
+    t.write(b"\r\nb\r\nc");
+    assert_eq!(t.history_rows(), 1);
+    assert_eq!(t.hyperlink_uri(0, 0).as_deref(), Some("https://example.com/target"), "in scrollback");
+    assert_eq!(t.hyperlink_uri(0, 1), None);
+}
+
+// Bug: frames saved as mosh history losing which rows soft-wrapped, so a
+// wrapped URL scrolled back opens cut off. The wrap lands on a row already
+// exported (printed to its last column, then one more character).
+#[test]
+fn frames_carry_each_rows_soft_wrap() {
+    let mut t = term(5, 3);
+    t.write(b"abcde");
+    assert_eq!(frame(&mut t).wrapped, [false, false, false]);
+    t.write(b"f\r\ng");
+    assert_eq!(frame(&mut t).wrapped, [true, false, false]);
+}
+
 // Bug: a scrollback page built from `text` is plain, so ls colors, prompts and
 // bold are lost; replaying `styled_text` must draw the same cells, scrollback included.
 #[test]

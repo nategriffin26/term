@@ -385,6 +385,21 @@ TermStatus term_session_status(TermSession *s);
 // and TermFrame.history_rows + r is live row r.
 char *term_session_text(TermSession *s, uint16_t col0, uint32_t row0, uint16_t col1, uint32_t row1);
 
+// TermLinkKind
+enum {
+  TERM_LINK_HYPERLINK = 1,  // the cell's OSC 8 hyperlink
+  TERM_LINK_TEXT = 2,       // a URL written in the text
+};
+
+// The web link at a cell (row in screen space, as term_session_text), caller
+// frees with term_string_free; NULL when there is none. A cell with an OSC 8
+// hyperlink has that URI when it is http or https, else no link. Otherwise
+// the link is an http:// or https:// URL, or a www. host given https://,
+// written through the cell: soft-wrapped rows joined, trailing .,;:!? and
+// closing brackets or quotes the URL did not open left out. *kind (NULL to
+// skip) is set to the TermLinkKind.
+char *term_session_link(TermSession *s, uint16_t col, uint32_t row, uint8_t *kind);
+
 // The whole buffer, scrollback and screen, as the escape sequences that draw
 // it (colors and styles kept, soft wraps joined, trailing blanks trimmed);
 // caller frees with term_string_free. NULL for a NULL session.

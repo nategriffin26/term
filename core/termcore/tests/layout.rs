@@ -71,6 +71,7 @@ fn expected() -> Vec<(String, u64)> {
         "TERM_MOUSE_LEFT" = mouse_button::LEFT, "TERM_MOUSE_MIDDLE" = mouse_button::MIDDLE,
         "TERM_MOUSE_RIGHT" = mouse_button::RIGHT, "TERM_MOUSE_WHEEL_UP" = mouse_button::WHEEL_UP,
         "TERM_MOUSE_WHEEL_DOWN" = mouse_button::WHEEL_DOWN,
+        "TERM_LINK_HYPERLINK" = link_kind::HYPERLINK, "TERM_LINK_TEXT" = link_kind::TEXT,
         "TERM_TRANSPORT_MOSH" = transport::MOSH, "TERM_TRANSPORT_SSH" = transport::SSH,
         "TERM_PREDICT_ADAPTIVE" = predict::ADAPTIVE, "TERM_PREDICT_ALWAYS" = predict::ALWAYS,
         "TERM_PREDICT_NEVER" = predict::NEVER,

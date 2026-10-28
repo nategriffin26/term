@@ -21,6 +21,12 @@ struct ScrollGesture {
     var lines = 0
 }
 
+/// Opens a tapped link in the default browser; tests replace `open`.
+@MainActor
+enum LinkOpener {
+    static var open: @MainActor (URL) async -> Bool = { await UIApplication.shared.open($0) }
+}
+
 extension TerminalView {
     func installGestures() {
         let tap = TimedTapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -97,6 +103,11 @@ extension TerminalView {
         }
         // A tap elsewhere comes after the one held in the band.
         doubleTap.release()
+        // A link opens instead of focusing or clicking.
+        if let link = link(at: p) {
+            open(link, tapFields(at: p, g))
+            return
+        }
         guard isFirstResponder else {
             recordTap("focus", at: p, g)
             _ = becomeFirstResponder()
@@ -107,8 +118,9 @@ extension TerminalView {
     }
 
     /// A tap in the right edge band never moves the keyboard: a second one
-    /// inside the window opens Sessions, and a lone one is one click once the
-    /// window has passed (nothing when the program does not track the mouse).
+    /// inside the window opens Sessions, and a lone one, once the window has
+    /// passed, opens the link under it or is one click (nothing when the
+    /// program does not track the mouse).
     private func bandTap(at p: CGPoint, touch: TimeInterval, lift: TimeInterval, _ g: UITapGestureRecognizer) {
         if doubleTap.pairs(at: p, touch: touch) {
             if delegate?.terminalViewDoubleTapped(self) == true {
@@ -128,22 +140,47 @@ extension TerminalView {
             recordTap("band-hold", at: p, g)
         }
         let c = cell(at: p)
-        doubleTap.hold(at: p, lift: lift) { [weak self] in self?.click(c) }
+        let link = link(at: p)
+        let fields = tapFields(at: p, g)
+        doubleTap.hold(at: p, lift: lift) { [weak self] in
+            guard let self else { return }
+            if let link { open(link, fields) } else { click(c) }
+        }
+    }
+
+    /// The web link under `p`: an OSC 8 hyperlink or a URL in the text.
+    private func link(at p: CGPoint) -> (url: URL, kind: String)? {
+        let q = gridPoint(at: p)
+        guard let link = session.link(col: q.col, row: q.row), let url = URL(string: link.uri) else { return nil }
+        return (url, link.hyperlink ? "osc8" : "text")
+    }
+
+    /// Opens a tapped link and logs its kind, scheme and whether it opened (never the URL).
+    private func open(_ link: (url: URL, kind: String), _ fields: String) {
+        Task { @MainActor in
+            let opened = await LinkOpener.open(link.url)
+            DiagnosticLog.record(.tap, "link", fields + " kind=\(link.kind)"
+                + " scheme=\(link.url.scheme?.lowercased() ?? "none") result=\(opened ? "opened" : "failed")")
+        }
+    }
+
+    private func recordTap(_ decision: String, at p: CGPoint, _ g: UITapGestureRecognizer, _ extra: String = "") {
+        let fields = tapFields(at: p, g)
+        DiagnosticLog.record(.tap, decision, extra.isEmpty ? fields : fields + " " + extra)
     }
 
     /// One line per tap: what it did, where (as a fraction of the terminal),
     /// whether the edge band is on (posture) and the tap inside it, its touch
     /// and lift times, how long after the lift the handler ran (uptime − lift;
     /// UITouch times count on the uptime clock), and the clocks themselves.
-    private func recordTap(_ decision: String, at p: CGPoint, _ g: UITapGestureRecognizer, _ extra: String = "") {
+    private func tapFields(at p: CGPoint, _ g: UITapGestureRecognizer) -> String {
         var fields = "x=\(DiagnosticLog.fraction(p.x / max(bounds.width, 1))) y=\(DiagnosticLog.fraction(p.y / max(bounds.height, 1)))"
             + " edgeBand=\(delegate?.terminalViewHasEdgeBand(self) == true) inBand=\(DoubleTap.band(in: bounds).contains(p))"
         if let timed = g as? TimedTapGestureRecognizer {
             fields += " touch=\(DiagnosticLog.seconds(timed.touchTime)) lift=\(DiagnosticLog.seconds(timed.liftTime))"
                 + " latency=\(DiagnosticLog.seconds(ProcessInfo.processInfo.systemUptime - timed.liftTime))"
         }
-        fields += " " + DiagnosticLog.clocks + " focused=\(isFirstResponder)"
-        DiagnosticLog.record(.tap, decision, extra.isEmpty ? fields : fields + " " + extra)
+        return fields + " " + DiagnosticLog.clocks + " focused=\(isFirstResponder)"
     }
 
     private func click(_ c: (col: Int, row: Int)) {

@@ -5,6 +5,7 @@
 pub mod abi;
 pub mod files;
 pub mod net;
+mod link;
 mod mosh_history;
 mod remote;
 mod session;
@@ -361,6 +362,20 @@ pub unsafe extern "C" fn term_session_text(s: *const Session, col0: u16, row0: u
     let Some(s) = (unsafe { session(s) }) else { return std::ptr::null_mut() };
     let text = s.lock().text(col0, row0, col1, row1, false);
     into_c(text)
+}
+
+/// term.h `term_session_link`.
+///
+/// # Safety
+/// `s` is NULL or live; `kind` is NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn term_session_link(s: *const Session, col: u16, row: u32, kind: *mut u8) -> *mut c_char {
+    let Some(s) = (unsafe { session(s) }) else { return std::ptr::null_mut() };
+    let Some((k, uri)) = s.lock().link(col, row) else { return std::ptr::null_mut() };
+    if let Some(kind) = unsafe { kind.as_mut() } {
+        *kind = k;
+    }
+    into_c(uri)
 }
 
 /// term.h `term_session_history`.

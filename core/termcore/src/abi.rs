@@ -61,6 +61,12 @@ pub mod mouse_button {
     pub const WHEEL_DOWN: u32 = 4;
 }
 
+/// term.h TermLinkKind
+pub mod link_kind {
+    pub const HYPERLINK: u8 = 1;
+    pub const TEXT: u8 = 2;
+}
+
 /// term.h TermTransport
 pub mod transport {
     pub const MOSH: u32 = 0;

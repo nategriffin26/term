@@ -189,6 +189,16 @@ pub struct GridCell {
     pub hyperlink: bool,
 }
 
+/// One row of the screen as drawn characters, for finding a link around a cell.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RowText {
+    /// Each character with its column: a blank cell is a space, a grapheme
+    /// cluster is all its characters at one column, a wide glyph's spacer has none.
+    pub chars: Vec<(u16, char)>,
+    /// The row soft-wraps into the next one.
+    pub wrapped: bool,
+}
+
 /// Bit layout of a libghostty `Cell` (packed u64) at the pinned commit
 /// (src/terminal/page.zig). `raw_cell_layout_matches_ghostty` guards it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -670,6 +680,56 @@ impl Terminal {
             _ => Wide::Narrow,
         };
         Some(GridCell { text, wide, style, hyperlink: c.hyperlink })
+    }
+
+    /// Row `row` in screen space (as [`Terminal::text`]); None when out of range.
+    pub fn screen_row(&self, row: u32) -> Option<RowText> {
+        let (cols, _) = self.size();
+        let first = self.grid_ref(sys::GHOSTTY_POINT_TAG_SCREEN, 0, row)?;
+        let mut raw_row: sys::GhosttyRow = 0;
+        let mut wrapped = false;
+        if check(unsafe { sys::ghostty_grid_ref_row(&first, &mut raw_row) }).is_ok() {
+            let _ = check(unsafe {
+                sys::ghostty_row_get(raw_row, sys::GHOSTTY_ROW_DATA_WRAP, &mut wrapped as *mut bool as *mut c_void)
+            });
+        }
+        let mut chars = Vec::with_capacity(cols as usize);
+        for col in 0..cols {
+            let Some(r) = self.grid_ref(sys::GHOSTTY_POINT_TAG_SCREEN, col, row) else { break };
+            let mut raw: sys::GhosttyCell = 0;
+            if check(unsafe { sys::ghostty_grid_ref_cell(&r, &mut raw) }).is_err() {
+                break;
+            }
+            let c = RawCell::decode(raw);
+            if c.wide >= 2 {
+                continue;
+            }
+            if c.tag == TAG_GRAPHEME {
+                let mut cps = [0u32; 32];
+                let mut n = 0usize;
+                if check(unsafe { sys::ghostty_grid_ref_graphemes(&r, cps.as_mut_ptr(), cps.len(), &mut n) }).is_ok() {
+                    chars.extend(cps[..n.min(cps.len())].iter().filter_map(|&cp| char::from_u32(cp)).map(|ch| (col, ch)));
+                    continue;
+                }
+            }
+            chars.push((col, char::from_u32(c.codepoint()).filter(|&ch| ch != '\0').unwrap_or(' ')));
+        }
+        Some(RowText { chars, wrapped })
+    }
+
+    /// The OSC 8 hyperlink URI of the cell at `col` on screen row `row` (as
+    /// [`Terminal::text`]); None when it has none.
+    pub fn hyperlink_uri(&self, col: u16, row: u32) -> Option<String> {
+        let r = self.grid_ref(sys::GHOSTTY_POINT_TAG_SCREEN, col, row)?;
+        let mut n = 0usize;
+        match check(unsafe { sys::ghostty_grid_ref_hyperlink_uri(&r, ptr::null_mut(), 0, &mut n) }) {
+            Err(Error::OutOfSpace) if n > 0 => {}
+            _ => return None,
+        }
+        let mut buf = vec![0u8; n];
+        check(unsafe { sys::ghostty_grid_ref_hyperlink_uri(&r, buf.as_mut_ptr(), buf.len(), &mut n) }).ok()?;
+        buf.truncate(n);
+        String::from_utf8(buf).ok()
     }
 
     /// The complete terminal state (screens, scrollback within the limit,

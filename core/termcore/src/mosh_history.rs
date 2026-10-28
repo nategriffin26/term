@@ -28,6 +28,7 @@ impl MoshHistory {
             saved.cells.clear();
             saved.graphemes.clear();
             saved.codepoints.clear();
+            saved.wrapped.clear();
             append_row(&self.latest, row, &mut saved);
             self.rows.push_back(saved);
         }
@@ -63,6 +64,7 @@ impl MoshHistory {
         let rows = self.view.rows as usize;
         let saved_rows = self.offset.min(rows);
         self.view.cells.copy_within(0..(rows - saved_rows) * cols, saved_rows * cols);
+        if self.view.wrapped.len() == rows { self.view.wrapped.copy_within(0..rows - saved_rows, saved_rows); }
         for row in 0..saved_rows {
             let source = &self.rows[self.rows.len() - self.offset + row];
             for col in 0..cols {
@@ -70,6 +72,9 @@ impl MoshHistory {
                     remap_cell(source, col, &mut self.view)
                 } else { vt::Cell { fg: self.latest.fg, bg: self.latest.bg, ..Default::default() } };
                 self.view.cells[row * cols + col] = cell;
+            }
+            if let Some(wrapped) = self.view.wrapped.get_mut(row) {
+                *wrapped = source.wrapped.first().copied().unwrap_or(false);
             }
             // A historical wide glyph cut by a narrower viewport has no tail.
             if cols > 0 && self.view.cells[(row + 1) * cols - 1].flags & cell_flags::WIDE != 0 {
@@ -123,6 +128,19 @@ impl MoshHistory {
             if row != b.1 { text.push('\n'); }
         }
         text
+    }
+
+    /// History row `row` (0 = oldest) for link lookup; None past the history.
+    pub(crate) fn row_text(&self, row: u32) -> Option<vt::RowText> {
+        let frame = self.rows.get(row as usize)?;
+        let mut chars = Vec::with_capacity(frame.cols as usize);
+        for col in 0..frame.cols {
+            if frame.cell(col, 0).flags & cell_flags::SPACER != 0 { continue; }
+            let codepoints = frame.cell_codepoints(col, 0);
+            if codepoints.is_empty() { chars.push((col, ' ')); }
+            else { chars.extend(codepoints.iter().filter_map(|&cp| char::from_u32(cp)).map(|ch| (col, ch))); }
+        }
+        Some(vt::RowText { chars, wrapped: frame.wrapped.first().copied().unwrap_or(false) })
     }
 }
 
@@ -183,6 +201,7 @@ fn append_row(source: &Frame, row: u16, target: &mut Frame) {
         let cell = remap_cell(source, start + col, target);
         target.cells.push(cell);
     }
+    target.wrapped.push(source.wrapped.get(row as usize).copied().unwrap_or(false));
     // A recycled long row must not keep its former blank-column allocation.
     target.cells.shrink_to_fit();
 }
@@ -347,5 +366,22 @@ mod tests {
         assert!(history.scroll(i32::MIN));
         assert_eq!(history.frame().viewport_offset, 0);
         assert!(!history.scroll(-1));
+    }
+
+    // Bug: a URL that soft-wrapped and then scrolled into a plain mosh tab's
+    // history opens cut at the row end (history rows forgot their wrap flag).
+    #[test]
+    fn history_rows_keep_soft_wraps_for_links() {
+        let mut terminal = vt::Terminal::new(10, 6, 0).unwrap();
+        let mut history = MoshHistory::default();
+        observe(&mut history, &mut terminal, b"1\r\n2\r\n3\r\n4\r\n5\r\n6");
+        observe(&mut history, &mut terminal, b"\r\nhttps://example.com/abc");
+        observe(&mut history, &mut terminal, b"\r\nx\r\ny\r\nz");
+        observe(&mut history, &mut terminal, b"\r\nq\r\nr\r\ns");
+        assert_eq!(history.history_rows(), 9, "the URL's three rows left the top");
+        let row = |r: u32| history.row_text(r);
+        assert!(row(6).unwrap().wrapped && row(7).unwrap().wrapped && !row(8).unwrap().wrapped);
+        assert_eq!(crate::link::text_url(row, 4, 7).as_deref(), Some("https://example.com/abc"));
+        assert_eq!(crate::link::text_url(row, 1, 8).as_deref(), Some("https://example.com/abc"));
     }
 }

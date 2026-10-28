@@ -160,6 +160,15 @@ final class Session {
         return String(cString: p)
     }
 
+    /// The web link at a cell (rows as `text`): its URI and whether it is the
+    /// cell's OSC 8 hyperlink rather than a URL in the text; nil when none.
+    func link(col: Int, row: Int) -> (uri: String, hyperlink: Bool)? {
+        var kind: UInt8 = 0
+        guard let p = term_session_link(core, UInt16(clamping: col), UInt32(clamping: row), &kind) else { return nil }
+        defer { term_string_free(p) }
+        return (String(cString: p), Int(kind) == TERM_LINK_HYPERLINK)
+    }
+
     /// The whole buffer, scrollback and screen, as the escape sequences that
     /// draw it (colors kept, soft wraps joined): what a History page replays.
     func history() -> Data {

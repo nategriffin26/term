@@ -260,6 +260,52 @@ fn history_is_the_whole_buffer_with_styles() {
     unsafe { term_session_free(s) };
 }
 
+/// term_session_link at a cell: (kind, URI), or None.
+fn link(s: *const Session, col: u16, row: u32) -> Option<(u8, String)> {
+    let mut kind = 0u8;
+    let p = unsafe { term_session_link(s, col, row, &mut kind) };
+    if p.is_null() {
+        return None;
+    }
+    let uri = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_owned();
+    unsafe { term_string_free(p) };
+    Some((kind, uri))
+}
+
+#[test]
+fn link_is_the_osc8_uri_when_http_and_nothing_for_other_schemes() {
+    // Bug caught: a tap on an OSC 8 link opening its visible text, or omp's
+    // file:// path links (and their path text) opening as web links.
+    let rec = Recorder::new();
+    let s = local(&rec, 40, 4);
+    feed(s, b"\x1b]8;;https://example.com/target\x07read the docs\x1b]8;;\x07\r\n");
+    feed(s, b"\x1b]8;;file:///Users/u/src/main.rs\x07src/main.rs\x1b]8;;\x07 /tmp/http/x");
+    assert_eq!(link(s, 5, 0), Some((link_kind::HYPERLINK, "https://example.com/target".into())));
+    assert_eq!(link(s, 14, 0), None, "past the link text");
+    assert_eq!(link(s, 3, 1), None, "file:// link");
+    assert_eq!(link(s, 20, 1), None, "a path");
+    assert!(unsafe { term_session_link(std::ptr::null(), 0, 0, std::ptr::null_mut()) }.is_null());
+    unsafe { term_session_free(s) };
+}
+
+#[test]
+fn link_joins_a_soft_wrapped_url_and_reaches_scrollback() {
+    // Bug caught: a long URL the terminal wrapped opening cut at the row end,
+    // or a URL scrolled into history finding nothing.
+    let rec = Recorder::new();
+    let s = local(&rec, 20, 3);
+    let url = "https://example.com/0123456789/abcdefghij";
+    // Screen space: row 0 the prompt, rows 1-3 the URL and its full stop.
+    feed(s, format!("$ cat u.txt\r\n{url}.\r\n").as_bytes());
+    assert_eq!(link(s, 0, 3), Some((link_kind::TEXT, url.into())), "the URL's last row");
+    feed(s, b"1\r\n2\r\n3\r\n4");
+    let f = frame(s, 0).expect("frame");
+    assert_eq!(f.history_rows, 5, "the URL's rows are all history");
+    assert_eq!(link(s, 10, 1), Some((link_kind::TEXT, url.into())), "its first row, in scrollback");
+    assert_eq!(link(s, 1, 3), None, "the full stop after it");
+    unsafe { term_session_free(s) };
+}
+
 #[test]
 fn feed_from_inside_an_output_callback_does_not_deadlock() {
     // Bug caught: the session lock held across callbacks deadlocks the

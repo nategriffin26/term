@@ -12,7 +12,7 @@ use std::ptr;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use crate::abi::{TermCallbacks, TermFrame, TermStatus, event, status};
+use crate::abi::{TermCallbacks, TermFrame, TermStatus, event, link_kind, status};
 use crate::remote::{Mosh, Ssh};
 
 /// History rows kept for sessions whose scrollback lives in this terminal.
@@ -359,6 +359,20 @@ impl State {
         }
         if styled { self.term.styled_text(col0, row0, col1, row1) }
         else { self.term.text(col0, row0, col1, row1) }
+    }
+
+    /// term_session_link: the web link at a cell, rows as `text`.
+    pub(crate) fn link(&self, col: u16, row: u32) -> Option<(u8, String)> {
+        let history = self.mosh_history.as_ref().filter(|_| self.term.modes() & vt::modes::ALT_SCREEN == 0);
+        let history_rows = history.map_or(0, |h| h.history_rows());
+        if let Some(uri) = row.checked_sub(history_rows).and_then(|r| self.term.hyperlink_uri(col, r)) {
+            return crate::link::is_web(&uri).then_some((link_kind::HYPERLINK, uri));
+        }
+        let row_at = |r: u32| match r.checked_sub(history_rows) {
+            Some(live) => self.term.screen_row(live),
+            None => history?.row_text(r),
+        };
+        crate::link::text_url(row_at, col, row).map(|url| (link_kind::TEXT, url))
     }
 
     /// Re-reads the remote's prediction overlay; FRAME when it changed.

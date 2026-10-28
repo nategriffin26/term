@@ -89,6 +89,8 @@ pub struct Frame {
     pub cells: Vec<Cell>,
     pub graphemes: Vec<Grapheme>,
     pub codepoints: Vec<u32>,
+    /// Per row: it soft-wraps into the next one. Not part of term.h's TermFrame.
+    pub wrapped: Vec<bool>,
 }
 
 impl Clone for Frame {
@@ -117,6 +119,7 @@ impl Clone for Frame {
         self.cells.clone_from(&source.cells);
         self.graphemes.clone_from(&source.graphemes);
         self.codepoints.clone_from(&source.codepoints);
+        self.wrapped.clone_from(&source.wrapped);
     }
 }
 
@@ -353,6 +356,8 @@ impl Terminal {
             if ex.frame.cols != cols || ex.frame.rows != rows || ex.frame.cells.len() != n {
                 ex.frame.cells.clear();
                 ex.frame.cells.resize(n, Cell::default());
+                ex.frame.wrapped.clear();
+                ex.frame.wrapped.resize(rows as usize, false);
                 ex.row_clusters.resize_with(rows as usize, Vec::new);
                 ex.row_codepoints.resize_with(rows as usize, Vec::new);
                 full = true;
@@ -406,6 +411,7 @@ impl Terminal {
                     r,
                     palette,
                     &mut ex.frame.cells[start..start + cols as usize],
+                    &mut ex.frame.wrapped[y],
                     &mut ex.row_clusters[y],
                     &mut ex.row_codepoints[y],
                 )?;
@@ -451,13 +457,22 @@ unsafe fn export_row(
     r: &Render,
     p: &Palette,
     out: &mut [Cell],
+    wrapped: &mut bool,
     clusters: &mut Vec<Cluster>,
     cps: &mut Vec<u32>,
 ) -> Result<(), Error> {
     clusters.clear();
     cps.clear();
     let mut view = sys::GhosttyCellsView { ptr: ptr::null(), len: 0 };
+    let mut row: sys::GhosttyRow = 0;
     unsafe {
+        check(sys::ghostty_render_state_row_get(
+            r.rows,
+            sys::GHOSTTY_RENDER_STATE_ROW_DATA_RAW,
+            &mut row as *mut _ as *mut c_void,
+        ))?;
+        *wrapped = false;
+        check(sys::ghostty_row_get(row, sys::GHOSTTY_ROW_DATA_WRAP, wrapped as *mut bool as *mut c_void))?;
         check(sys::ghostty_render_state_row_get(
             r.rows,
             sys::GHOSTTY_RENDER_STATE_ROW_DATA_CELLS_RAW,
