@@ -88,7 +88,8 @@ struct DictationCleanup: Sendable {
   }
 
   /// The cleaned text from a reply: a finished answer whose whole content is
-  /// a JSON object with a non-empty `text` string; nil for anything else.
+  /// a JSON object with a `text` string that still has text once made safe
+  /// to type (`DictatedText.clean`); nil for anything else.
   static func text(status: Int, body: Data) -> String? {
     guard status == 200,
           let reply = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
@@ -96,7 +97,8 @@ struct DictationCleanup: Sendable {
           choice["finish_reason"] as? String == "stop",
           let content = (choice["message"] as? [String: Any])?["content"] as? String,
           let answer = (try? JSONSerialization.jsonObject(with: Data(content.utf8))) as? [String: Any],
-          let text = (answer["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+          let raw = answer["text"] as? String,
+          case let text = DictatedText.clean(raw),
           !text.isEmpty
     else { return nil }
     return text

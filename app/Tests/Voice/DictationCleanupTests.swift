@@ -79,6 +79,14 @@ final class DictationCleanupTests: XCTestCase {
     XCTAssertEqual(DictationCleanup(key: "k").deadline, .seconds(20))
   }
 
+  /// Catches an answer that types as nothing (a lone NUL, made safe to type,
+  /// is empty) releasing the recording with nothing typed: the transcript goes instead.
+  func testAnswerEmptyOnceSafeLeavesTheTranscript() async throws {
+    let server = try await server(ReplayServer.Reply(status: 200, body: RecordedCleanup.chat(#"{\"text\":\"\\u0000\"}"#)))
+    let result = await cleanup(server).clean("open the readme", vocabulary: [])
+    XCTAssertEqual(result, DictationCleanup.Result(text: "open the readme", status: .failed))
+  }
+
   /// Catches a request sent without a key.
   func testNoKeyIsUnavailable() async throws {
     let server = try await server(RecordedCleanup.cleaned)
