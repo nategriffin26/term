@@ -61,46 +61,79 @@ extension TerminalView {
     // ------------------------------------------------------------ tap
 
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
+        let p = g.location(in: self)
         if touchStoppedCoasting {
             touchStoppedCoasting = false
             doubleTap.reset()
+            recordTap("stopped-coasting", at: p, g)
             return
         }
         if selection != nil {
             clearSelection()
             doubleTap.reset()
+            recordTap("cleared-selection", at: p, g)
             return
         }
-        let p = g.location(in: self)
         if let diagram = diagramOverlay.diagram(at: p) {
             doubleTap.release()
+            recordTap("diagram", at: p, g)
             openDiagram(diagram)
             return
         }
-        if delegate?.terminalViewHasEdgeBand(self) == true, DoubleTap.band(in: bounds).contains(p),
-           let timed = g as? TimedTapGestureRecognizer {
-            bandTap(at: p, touch: timed.touchTime, lift: timed.liftTime)
+        let edgeBand = delegate?.terminalViewHasEdgeBand(self) == true
+        if edgeBand, DoubleTap.band(in: bounds).contains(p), let timed = g as? TimedTapGestureRecognizer {
+            bandTap(at: p, touch: timed.touchTime, lift: timed.liftTime, g)
             return
         }
         // A tap elsewhere comes after the one held in the band.
         doubleTap.release()
         guard isFirstResponder else {
+            recordTap("focus", at: p, g)
             _ = becomeFirstResponder()
             return
         }
+        recordTap("click", at: p, g)
         click(cell(at: p))
     }
 
     /// A tap in the right edge band never moves the keyboard: a second one
     /// inside the window opens Sessions, and a lone one is one click once the
     /// window has passed (nothing when the program does not track the mouse).
-    private func bandTap(at p: CGPoint, touch: TimeInterval, lift: TimeInterval) {
-        if doubleTap.pairs(at: p, touch: touch), delegate?.terminalViewDoubleTapped(self) == true {
-            doubleTap.reset()
-            return
+    private func bandTap(at p: CGPoint, touch: TimeInterval, lift: TimeInterval, _ g: UITapGestureRecognizer) {
+        if doubleTap.pairs(at: p, touch: touch) {
+            if delegate?.terminalViewDoubleTapped(self) == true {
+                recordTap("band-pair-sessions", at: p, g)
+                doubleTap.reset()
+                return
+            }
+            recordTap("band-pair-declined", at: p, g)
+        } else if let heldLift = doubleTap.heldLift {
+            // A tap still held that did not pair: how long after its lift this one touched.
+            recordTap("band-hold", at: p, g, "sinceHeldLift=\(DiagnosticLog.seconds(touch - heldLift))")
+        } else if let last = doubleTap.lastRelease, touch >= last.lift, touch - last.lift <= DoubleTap.interval {
+            // Inside the window of a tap already released: this pair was lost, and here is to what.
+            recordTap("band-hold", at: p, g, "missedPair=released-by-\(last.byTimer ? "timer" : "tap")"
+                + " sinceReleasedLift=\(DiagnosticLog.seconds(touch - last.lift))")
+        } else {
+            recordTap("band-hold", at: p, g)
         }
         let c = cell(at: p)
         doubleTap.hold(at: p, lift: lift) { [weak self] in self?.click(c) }
+    }
+
+    /// One line per tap: what it did, where (as a fraction of the terminal),
+    /// whether the edge band is on (posture) and the tap inside it, its touch
+    /// and lift times, how long after the lift the handler ran (uptime − lift;
+    /// UITouch times count on the uptime clock), and the clocks themselves.
+    private func recordTap(_ decision: String, at p: CGPoint, _ g: UITapGestureRecognizer, _ extra: String = "") {
+        var fields = "x=\(DiagnosticLog.fraction(p.x / max(bounds.width, 1))) y=\(DiagnosticLog.fraction(p.y / max(bounds.height, 1)))"
+            + " edgeBand=\(delegate?.terminalViewHasEdgeBand(self) == true) inBand=\(DoubleTap.band(in: bounds).contains(p))"
+        if let timed = g as? TimedTapGestureRecognizer {
+            fields += " touch=\(DiagnosticLog.seconds(timed.touchTime)) lift=\(DiagnosticLog.seconds(timed.liftTime))"
+                + " latency=\(DiagnosticLog.seconds(ProcessInfo.processInfo.systemUptime - timed.liftTime))"
+        }
+        fields += " " + DiagnosticLog.clocks + " focused=\(isFirstResponder)"
+        DiagnosticLog.record(.tap, decision, extra.isEmpty ? fields : fields + " " + extra)
     }
 
     private func click(_ c: (col: Int, row: Int)) {

@@ -98,6 +98,7 @@ final class Tab {
                         completer: { before in
                           Command.complete(before, aliases: MainActor.assumeIsolated { ConfigStore.shared.hosts.map(\.alias) })
                         })
+    view.diagnosticName = { [weak self] in self?.sessionName ?? "closed" }
     wireLocal()
     wireAutoReconnect()
     applySettings()
@@ -155,6 +156,8 @@ final class Tab {
     session.diagrams = DiagramSource(host: target, tmuxSession: self.tmuxSession)
     wireRemote(session)
     connecting = session
+    DiagnosticLog.record(.connection, "connect", "host=\(DiagnosticLog.name(target.alias)) transport=\(target.transport)"
+      + " tmux=\(self.tmuxSession.map(DiagnosticLog.name) ?? "none") replacing=\(remote != nil)")
     if remote == nil {
       let via = target.transport == .mosh ? "mosh" : "ssh"
       echo("Connecting to \(target.alias) (\(target.user)@\(target.hostname)) over \(via)…\r\n")
@@ -184,6 +187,8 @@ final class Tab {
       reconnectPreparation = nil
       var spec = Self.spec(for: target)
       spec.command = TmuxAttachment.reconnectCommand(startup: spec.command, session: tmuxSession)
+      DiagnosticLog.record(.connection, "reconnect", "host=\(DiagnosticLog.name(target.alias)) transport=\(target.transport)"
+        + " tmux=\(tmuxSession.map(DiagnosticLog.name) ?? "none") endOldServer=\(tmuxSession != nil || spec.runsInTmux)")
       remote.reconnect(spec: spec, endOldServer: tmuxSession != nil || spec.runsInTmux)
     }
   }
@@ -205,7 +210,10 @@ final class Tab {
   func disconnect() {
     connecting = nil
     dropPreview()
-    if remote != nil { closeRemote(reason: "") }
+    if remote != nil {
+      DiagnosticLog.record(.connection, "disconnect", "host=\(DiagnosticLog.name(target?.alias ?? "none"))")
+      closeRemote(reason: "")
+    }
   }
 
   static func spec(for host: Host) -> ConnectSpec {
@@ -235,6 +243,7 @@ final class Tab {
         session.map(Tmux.hasSessionCommand) ?? "true", timeout: .seconds(2))
       else { return false }
       if session != nil, out.status == 1, remote != nil {
+        DiagnosticLog.record(.connection, "tmux-session-gone", "tmux=\(DiagnosticLog.name(session ?? ""))")
         closeRemote(reason: "")
         return false
       }
@@ -280,6 +289,7 @@ final class Tab {
     firstAttachmentObservation = false
     guard tmuxSession != name else { return }
     tmuxSession = name
+    DiagnosticLog.record(.connection, "tmux-attached", "host=\(DiagnosticLog.name(target.alias)) tmux=\(name.map(DiagnosticLog.name) ?? "none")")
     session.diagrams = DiagramSource(host: target, tmuxSession: name)
     autoReconnect.statusChanged(unreachable: unreachable)
     host?.tabDidChange(self)
@@ -313,6 +323,8 @@ final class Tab {
     session.onReconnect = { [weak self, weak session] failure in
       guard let self, let session, session === remote else { return }
       reconnecting = false
+      DiagnosticLog.record(.connection, failure == nil ? "reconnected" : "reconnect-failed",
+        "tab=\(DiagnosticLog.name(sessionName))" + (failure.map { " error=\(DiagnosticLog.name($0))" } ?? ""))
       autoReconnect.reconnectFinished(succeeded: failure == nil)
       if failure == nil { firstAttachmentObservation = true }
       observeTmuxAttachment()
@@ -338,6 +350,10 @@ final class Tab {
   }
 
   private func statusChanged(_ session: Session, status: TermStatus, message: String) {
+    let role = session === connecting ? "connecting" : session === remote ? "remote" : "stale"
+    DiagnosticLog.record(.connection, "status", "kind=\(Self.statusName(status.kind)) session=\(role)"
+      + " host=\(DiagnosticLog.name(target?.alias ?? "none")) tab=\(DiagnosticLog.name(sessionName))"
+      + (message.isEmpty ? "" : " message=\(DiagnosticLog.name(message))"))
     switch Int(status.kind) {
     case Int(TERM_STATUS_CONNECTED.rawValue):
       unreachable = false
@@ -396,6 +412,16 @@ final class Tab {
       break
     }
     host?.tabDidChange(self)
+  }
+
+  private static func statusName(_ kind: UInt32) -> String {
+    switch Int(kind) {
+    case Int(TERM_STATUS_CONNECTING.rawValue): "connecting"
+    case Int(TERM_STATUS_CONNECTED.rawValue): "connected"
+    case Int(TERM_STATUS_UNREACHABLE.rawValue): "unreachable"
+    case Int(TERM_STATUS_CLOSED.rawValue): "closed"
+    default: "\(kind)"
+    }
   }
 
   /// The connected session takes over from the preview.

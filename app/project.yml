@@ -81,6 +81,18 @@ targets:
         ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIcon-Porcelain AppIcon-Graphite
         ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         OTHER_LDFLAGS: [-lc++]
+    # The diagnostic log's launch line names the build: commit (+ -dirty) and time.
+    postBuildScripts:
+      - name: Record Build Commit
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        script: |
+          plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          commit=$(git -C "$SRCROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+          if [ -n "$(git -C "$SRCROOT" status --porcelain 2>/dev/null)" ]; then commit="$commit-dirty"; fi
+          plutil -replace TermBuildCommit -string "$commit" "$plist"
+          plutil -replace TermBuildTime -string "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$plist"
     dependencies:
       - framework: ../build/TermCore.xcframework
         embed: false

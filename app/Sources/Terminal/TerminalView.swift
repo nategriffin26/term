@@ -145,6 +145,8 @@ final class TerminalView: UIView {
     var touchStoppedCoasting = false
     /// The tap held in the right edge band, which may start a double tap.
     let doubleTap = DoubleTap()
+    /// How the diagnostic log names this terminal (its tab's tmux session).
+    var diagnosticName: () -> String = { "terminal" }
     var pinchBaseSize: CGFloat = 0
     var selectionAnchor: (start: GridPoint, end: GridPoint)?
     let selectionLoupe = SelectionLoupe()
@@ -251,7 +253,7 @@ final class TerminalView: UIView {
         // next layout sizes it at once.
         if window == nil, let grid {
             sessionSized = true
-            apply(grid)
+            apply(grid, reason: "attach")
         } else {
             sessionSized = false
         }
@@ -317,7 +319,13 @@ final class TerminalView: UIView {
     /// each resize would make the remote (tmux) redraw.
     func layoutGrid() {
         resizeTask?.cancel()
-        guard !isTransforming, let m = renderer?.fonts.metrics, bounds.width > 0, bounds.height > 0 else { return }
+        let transforming = isTransforming
+        if transforming, sessionSized, !loggedTransformSkip {
+            loggedTransformSkip = true
+            DiagnosticLog.record(.grid, "skipped", "tab=\(DiagnosticLog.name(diagnosticName())) reason=transform")
+        }
+        guard !transforming, let m = renderer?.fonts.metrics, bounds.width > 0, bounds.height > 0 else { return }
+        loggedTransformSkip = false
         // Corner adaptation of the safe area itself, so a corner already under
         // a bar costs nothing. One axis alone stops at the corner's 45° point,
         // which still clips the first cell; both together clear it.
@@ -337,19 +345,19 @@ final class TerminalView: UIView {
             let grid = GridSize(cols: cols, rows: rows, cellWidth: m.width, cellHeight: m.height)
             if !sessionSized {
                 sessionSized = true
-                size(grid)
+                size(grid, reason: "first")
             } else {
                 resizeTask = Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(120))
                     guard !Task.isCancelled, let self, !self.isTransforming else { return }
-                    self.size(grid)
+                    self.size(grid, reason: "layout")
                 }
             }
         }
     }
 
-    private func size(_ next: GridSize) {
-        apply(next)
+    private func size(_ next: GridSize, reason: String) {
+        apply(next, reason: reason)
         delegate?.terminalView(self, didSizeGrid: next)
     }
 
@@ -358,10 +366,14 @@ final class TerminalView: UIView {
     func fit(_ next: GridSize) {
         resizeTask?.cancel()
         sessionSized = true
-        apply(next)
+        apply(next, reason: "fit")
     }
 
-    private func apply(_ next: GridSize) {
+    private func apply(_ next: GridSize, reason: String) {
+        if next != grid {
+            DiagnosticLog.record(.grid, "applied", "tab=\(DiagnosticLog.name(diagnosticName())) cols=\(next.cols) rows=\(next.rows)"
+                + " was=\(grid.map { "\($0.cols)x\($0.rows)" } ?? "none") reason=\(reason)")
+        }
         grid = next
         session.resize(cols: next.cols, rows: next.rows, cellWidth: next.cellWidth, cellHeight: next.cellHeight)
     }
@@ -371,6 +383,8 @@ final class TerminalView: UIView {
     /// The first size goes out at once so a new session starts at the right
     /// size; later ones wait for layout to settle.
     private var sessionSized = false
+    /// A sizing held back by a transform was logged; cleared when sizing runs again.
+    private var loggedTransformSkip = false
     private var resizeTask: Task<Void, Never>?
 
     /// Rebuilds the font set for the current size and display scale.
@@ -590,16 +604,22 @@ final class TerminalView: UIView {
     @discardableResult
     override func becomeFirstResponder() -> Bool {
         let previousBar = keyboardAccessory?.bar
+        let wasFocused = isFirstResponder
         keyboardAccessory?.show(smartKeys)
         let ok = super.becomeFirstResponder()
         guard ok else {
             if let previousBar { keyboardAccessory?.show(previousBar) }
             return false
         }
-        if let previous = Self.keyboardOwner, previous !== self, previous.isFirstResponder {
+        let previous = Self.keyboardOwner
+        if let previous, previous !== self, previous.isFirstResponder {
             previous.resignFirstResponder()
         }
         Self.keyboardOwner = self
+        if !wasFocused {
+            DiagnosticLog.record(.keyboard, "first-responder", "tab=\(DiagnosticLog.name(diagnosticName()))"
+                + " from=\(previous.map { DiagnosticLog.name($0.diagnosticName()) } ?? "none")")
+        }
         focusChanged(true)
         return true
     }
@@ -607,7 +627,10 @@ final class TerminalView: UIView {
     @discardableResult
     override func resignFirstResponder() -> Bool {
         let ok = super.resignFirstResponder()
-        if ok { focusChanged(false) }
+        if ok {
+            DiagnosticLog.record(.keyboard, "resigned", "tab=\(DiagnosticLog.name(diagnosticName()))")
+            focusChanged(false)
+        }
         return ok
     }
 
@@ -650,7 +673,12 @@ final class TerminalView: UIView {
         guard isFirstResponder, let window,
               let end = note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
         let frame = window.convert(end, from: window.screen.coordinateSpace).intersection(window.bounds)
-        guard !frame.isNull, frame.height > 0 else { return }
+        guard !frame.isNull, frame.height > 0 else {
+            DiagnosticLog.record(.keyboard, "hidden", "tab=\(DiagnosticLog.name(diagnosticName()))")
+            return
+        }
+        DiagnosticLog.record(.keyboard, "frame", "tab=\(DiagnosticLog.name(diagnosticName())) y=\(Int(frame.minY))"
+            + " height=\(Int(frame.height)) window=\(Int(window.bounds.width))x\(Int(window.bounds.height))")
         let had = inputAccessoryView != nil
         softwareKeyboardShown = frame.height > SmartKeysBar.height + 80
         guard (inputAccessoryView != nil) != had else { return }

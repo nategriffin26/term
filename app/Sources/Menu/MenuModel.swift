@@ -53,6 +53,7 @@ final class MenuModel {
 
   var tab: MenuTab {
     didSet {
+      if isOpen, tab != oldValue { DiagnosticLog.record(.menu, "tab", "tab=\(tab)") }
       UserDefaults.standard.set(tab.rawValue, forKey: Self.lastTabKey)
       updateThumbnails()
       updateScreen()
@@ -67,6 +68,7 @@ final class MenuModel {
   /// Every tab but Files opens at its root page; Files resumes where he left it.
   var isOpen = false {
     didSet {
+      if isOpen != oldValue { DiagnosticLog.record(.menu, isOpen ? "opened" : "closed", "tab=\(tab)") }
       if !isOpen {
         tmuxTarget = nil
         settingsStart = nil
@@ -84,7 +86,11 @@ final class MenuModel {
   var revision = 0
   /// The tab whose terminal is zooming into or out of its tile: the tile
   /// leaves its screen empty for it.
-  var zooming: UUID?
+  var zooming: UUID? {
+    didSet {
+      if (zooming == nil) != (oldValue == nil) { DiagnosticLog.record(.menu, zooming == nil ? "zoom-ended" : "zoom-began") }
+    }
+  }
   /// The tab focused when the panel opened: the overview outlines its window.
   private(set) var cameFrom: UUID?
 

@@ -106,6 +106,7 @@ final class SessionRegistry {
     try? JSONEncoder.pretty.encode(index).write(to: indexURL, options: .atomic)
     saveTilings()
     term_core_suspend_network()
+    DiagnosticLog.record(.connection, "suspended", "saved=\(index.values.reduce(0) { $0 + $1.count })")
   }
 
   /// App returns to the foreground with its sessions still in memory: drop
@@ -116,9 +117,12 @@ final class SessionRegistry {
   func resumeAll() {
     foreground = true
     clearSaved()
+    var count = 0
     for tabs in tabsByScene.values {
       for tab in tabs { tab.resume() }
+      count += tabs.count
     }
+    DiagnosticLog.record(.connection, "resumed", "tabs=\(count)")
     observeTmuxAttachments()
   }
 
@@ -138,6 +142,8 @@ final class SessionRegistry {
     clearSaved()
     for (scene, saved) in blobs {
       let restored = saved.compactMap { Tab(restoring: $0.0, state: $0.1) }
+      DiagnosticLog.record(.connection, "restored", "saved=\(saved.count) restored=\(restored.count)"
+        + " tmux=\(restored.map { DiagnosticLog.name($0.sessionName) }.joined(separator: ","))")
       if !restored.isEmpty { tabsByScene[scene, default: []].append(contentsOf: restored) }
     }
     observeTmuxAttachments()

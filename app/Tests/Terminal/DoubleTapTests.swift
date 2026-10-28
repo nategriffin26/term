@@ -124,6 +124,21 @@ final class DoubleTapTests: XCTestCase {
     XCTAssertEqual(sent(), "", "neither tap is a click")
   }
 
+  // Bug: the Duo's edge double tap stopped opening Sessions for good. The held
+  // tap's release was timed from its UITouch lift against systemUptime, so
+  // touch times running behind that clock released it at once (a click) and
+  // the second tap had nothing to pair with.
+  func testBandDoubleTapPairsWhenTouchTimesLagTheUptimeClock() async throws {
+    let (view, stub, sent) = try await terminal()
+    let lift = ProcessInfo.processInfo.systemUptime - 100
+    tap(view, at: band, touch: lift - 0.05, lift: lift)
+    try await Task.sleep(for: .milliseconds(50))
+    tap(view, at: band, touch: lift + 0.2, lift: lift + 0.25)
+    try await Task.sleep(for: .milliseconds(600))
+    XCTAssertEqual(stub.doubleTaps, 1, "a second tap 0.2 s after the first's lift opens Sessions")
+    XCTAssertEqual(sent(), "", "neither tap is a click")
+  }
+
   // Bug: a double tap with the keyboard down raising it (the grid shrinks and omp redraws its transcript).
   func testBandDoubleTapLeavesTheKeyboardDown() async throws {
     let (view, stub, _) = try await terminal(mouse: false, focused: false)
@@ -524,13 +539,20 @@ final class DoubleTapHoldTests: XCTestCase {
     XCTAssertEqual(order, ["first", "second"])
   }
 
-  // Bug: the window running from when the handler ran, not from the lift.
-  func testTheWindowRunsFromTheLift() async throws {
-    let t = DoubleTap()
-    var released = false
-    t.hold(at: here, lift: ProcessInfo.processInfo.systemUptime - 0.25) { released = true }
-    try await Task.sleep(for: .milliseconds(200))
-    XCTAssertTrue(released, "0.35 s after the lift, 0.1 s after the handler")
+  // Bug: the window timed by comparing the lift (a UITouch time) with
+  // systemUptime: touch times behind that clock released the tap at once,
+  // touch times ahead of it held the tap (and its click) far too long.
+  func testTheWindowRunsTheIntervalFromTheHoldWhateverClockTheLiftIsOn() async throws {
+    let uptime = ProcessInfo.processInfo.systemUptime
+    for skew in [-100.0, 100.0] {
+      let t = DoubleTap()
+      var released = false
+      t.hold(at: here, lift: uptime + skew) { released = true }
+      try await Task.sleep(for: .milliseconds(50))
+      XCTAssertFalse(released, "lift \(skew) s off the uptime clock: still held 0.05 s in")
+      try await Task.sleep(for: .milliseconds(500))
+      XCTAssertTrue(released, "lift \(skew) s off the uptime clock: released once 0.35 s have passed")
+    }
   }
 
   // Bug: the first tap released while the second finger is still down (touched

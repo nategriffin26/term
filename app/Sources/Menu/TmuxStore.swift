@@ -458,7 +458,17 @@ final class TmuxStore {
   private func setAgents(_ fresh: [String: AgentInfo], for key: String) {
     cleared[key] = cleared[key]?.filter { fresh[$0.key] != nil }
     let fresh = TmuxList.unseen(fresh, seen: cleared[key] ?? [:])
-    if agents[key] ?? [:] != fresh { agents[key] = fresh.isEmpty ? nil : fresh }
+    let old = agents[key] ?? [:]
+    // A stop that is new (unread now, and not this same unread stop before) is one badge event.
+    for (id, agent) in fresh where agent.unread && !(old[id]?.unread == true && old[id]?.stoppedAt == agent.stoppedAt) {
+      DiagnosticLog.record(.notification, "agent-stopped", "server=\(DiagnosticLog.name(key)) tmux=\(DiagnosticLog.name(agent.session))"
+        + " state=\(agent.state)")
+    }
+    if old != fresh {
+      let before = unreadCount
+      agents[key] = fresh.isEmpty ? nil : fresh
+      if unreadCount != before { DiagnosticLog.record(.notification, "badge", "unread=\(unreadCount) was=\(before)") }
+    }
     seeViewed()
   }
 
@@ -472,6 +482,7 @@ final class TmuxStore {
       cleared[key, default: [:]][id] = agents[key]?[id]?.stoppedAt
       agents[key]?[id]?.unread = false
     }
+    DiagnosticLog.record(.notification, "seen", "server=\(DiagnosticLog.name(key)) count=\(ids.count) unread=\(unreadCount)")
     let stops = Dictionary(uniqueKeysWithValues: ids.compactMap { id in
       agents[key]?[id]?.stoppedAt.map { (id, $0) }
     })

@@ -22,6 +22,13 @@ final class DoubleTap {
 
   private var held: (lift: TimeInterval, point: CGPoint, release: () -> Void, timer: Timer)?
 
+  /// The held tap's lift (UITouch time); nil when none is held.
+  var heldLift: TimeInterval? { held?.lift }
+
+  /// The last tap released (not dropped), for the diagnostic log: a band tap
+  /// inside the window of a tap already released shows what released it.
+  private(set) var lastRelease: (lift: TimeInterval, byTimer: Bool)?
+
   /// Whether a tap at `point`, touched at `touch` (event times, so a late
   /// handler changes nothing), completes a double tap with the held one.
   func pairs(at point: CGPoint, touch: TimeInterval) -> Bool {
@@ -30,30 +37,40 @@ final class DoubleTap {
       && hypot(point.x - held.point.x, point.y - held.point.y) <= Self.distance
   }
 
-  /// Holds a tap lifted at `lift`: `release` runs once the window has passed
-  /// with no second tap. A tap already held is released first.
+  /// Holds a tap lifted at `lift` (its UITouch time, which pairing compares
+  /// with the next touch): `release` runs once the window has passed with no
+  /// second tap. The window is timed from now, never by comparing `lift` with
+  /// another clock. A tap already held is released first.
   func hold(at point: CGPoint, lift: TimeInterval, release: @escaping () -> Void) {
     self.release()
-    held = (lift, point, release, schedule(after: lift + Self.interval - ProcessInfo.processInfo.systemUptime))
+    held = (lift, point, release, schedule(after: Self.interval))
   }
 
   /// Releases the held tap now.
   func release() {
+    release(byTimer: false)
+  }
+
+  private func release(byTimer: Bool) {
     guard let held else { return }
     self.held = nil
+    lastRelease = (held.lift, byTimer)
     held.timer.invalidate()
     held.release()
   }
 
   /// Something other than a plain tap happened, or the pair completed: the held tap is dropped.
   func reset() {
-    held?.timer.invalidate()
-    held = nil
+    guard let held else { return }
+    held.timer.invalidate()
+    self.held = nil
+    DiagnosticLog.record(.tap, "hold-dropped")
   }
 
   private func schedule(after delay: TimeInterval) -> Timer {
-    let timer = Timer(timeInterval: max(0, delay), repeats: false) { [weak self] _ in
-      MainActor.assumeIsolated { self?.windowPassed() }
+    let start = CACurrentMediaTime()
+    let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+      MainActor.assumeIsolated { self?.windowPassed(delay: delay, waited: CACurrentMediaTime() - start) }
     }
     // Common modes: the window runs out while another view is tracking a touch too.
     RunLoop.main.add(timer, forMode: .common)
@@ -62,13 +79,16 @@ final class DoubleTap {
 
   /// A finger that touched down inside the window may still lift as the
   /// second tap: wait for its tap before releasing the first.
-  private func windowPassed() {
+  private func windowPassed(delay: TimeInterval, waited: TimeInterval) {
     guard let held else { return }
+    let timing = "delay=\(DiagnosticLog.seconds(delay)) fired=\(DiagnosticLog.seconds(waited)) lift=\(DiagnosticLog.seconds(held.lift))"
     if let touch = touchDown(), touch >= held.lift, touch - held.lift <= Self.interval {
+      DiagnosticLog.record(.tap, "hold-extended", timing + " fingerDown=\(DiagnosticLog.seconds(touch - held.lift))")
       self.held?.timer = schedule(after: 0.03)
       return
     }
-    release()
+    DiagnosticLog.record(.tap, "hold-released", timing)
+    release(byTimer: true)
   }
 }
 

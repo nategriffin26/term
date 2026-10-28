@@ -13,6 +13,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private var lastFocusedPane = 0
   private var layout = SpaceLayout.single(.zero)
   private var foldActive = false
+  /// The posture last written to the diagnostic log.
+  private var loggedPosture: Posture?
   private let divider = UIView()
   private let failureLabel = UILabel()
   private var drag: Drag?
@@ -188,6 +190,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     panel.view.frame = view.bounds
     // Only the inner display upright has the edge band; a tap held there is dropped when that ends.
     if !innerDisplayUpright { for tab in tabs { tab.view.doubleTap.reset() } }
+    recordPosture(fold: fold)
     layoutDock()
   }
 
@@ -544,7 +547,11 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   /// pane's session; the keyboard stays as it is (if up, it moves to that
   /// pane). With the menu open, or a window still zooming, it is two plain taps.
   func terminalViewDoubleTapped(_ view: TerminalView) -> Bool {
-    guard !panel.isOpen, menu.zooming == nil, let i = panes.firstIndex(where: { $0.tab.view === view }) else { return false }
+    let declined = panel.isOpen ? "menu-open" : menu.zooming != nil ? "zooming" : nil
+    guard declined == nil, let i = panes.firstIndex(where: { $0.tab.view === view }) else {
+      DiagnosticLog.record(.tap, "sessions-declined", "guard=\(declined ?? "pane-not-found")")
+      return false
+    }
     if focusedTab?.view.isFirstResponder == true, !view.isFirstResponder { view.becomeFirstResponder() }
     lastFocusedPane = i
     openMenu(.sessions)
@@ -610,6 +617,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     case .changed:
       guard !overviewSwipeFired, g.translation(in: view).y < -24 else { return }
       overviewSwipeFired = true
+      DiagnosticLog.record(.menu, "requested", "source=three-finger-swipe tab=sessions")
       openMenu(.sessions)
     default:
       break
@@ -641,6 +649,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     settle = nil
     s.animator.stopAnimation(true)
     let offset = s.page.view.transform.tx
+    DiagnosticLog.record(.pager, "settle-caught", "offset=\(Int(offset)) page=\(DiagnosticLog.name(s.page.sessionName))")
     s.commit()
     return (s.pane, offset)
   }
@@ -668,6 +677,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       // Past the first or last session the strip follows at a quarter of the finger.
       if (start < 0 && next == nil) || (start > 0 && previous == nil) { start *= 4 }
       let d = Drag(pane: pane, previous: previous, next: next, start: start)
+      DiagnosticLog.record(.pager, "swipe-began",
+        "tab=\(DiagnosticLog.name(pane.tab.sessionName)) start=\(Int(start)) previous=\(previous != nil) next=\(next != nil)")
       for tab in [d.previous, d.next].compactMap({ $0 }) {
         tab.view.frame = pane.container.bounds
         pane.container.insertSubview(tab.view, belowSubview: pane.banner)
@@ -694,9 +705,14 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       // The finger's own direction picks the side; the distance counts from rest.
       if t < 0, x < -w * 0.35 || v < -500 { target = d.next }
       if t > 0, x > w * 0.35 || v > 500 { target = d.previous }
+      DiagnosticLog.record(.pager, "swipe-ended", "translation=\(Int(t)) velocity=\(Int(v)) width=\(Int(w))"
+        + " target=\(target == nil ? "none" : target === d.next ? "next" : "previous")")
       finishDrag(to: target, animated: true)
     default:
-      if drag != nil { finishDrag(to: nil, animated: true) }
+      if drag != nil {
+        DiagnosticLog.record(.pager, "swipe-cancelled")
+        finishDrag(to: nil, animated: true)
+      }
     }
   }
 
@@ -719,6 +735,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     let done = { [weak self] in
       guard let self else { return }
       if let target { show(target, in: d.pane) }
+      DiagnosticLog.record(.pager, target == nil ? "stayed" : "switched", "tab=\(DiagnosticLog.name((target ?? current).sessionName))")
       for tab in [d.previous, d.next, current].compactMap({ $0 }) where tab !== (target ?? current) {
         tab.view.removeFromSuperview()
         tab.view.transform = .identity
@@ -803,6 +820,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
 
   /// Double-tap ⌘ on Smart Keys and three-finger tap: the menu on its last tab.
   @objc func toggleMenu(_ sender: Any?) {
+    DiagnosticLog.record(.menu, "requested", "source=\(sender is UIGestureRecognizer ? "three-finger-tap" : "command") toggle=\(panel.isOpen ? "close" : "open")")
     if panel.isOpen { closeMenu() } else { openMenu() }
   }
 
@@ -1018,6 +1036,7 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   /// A dock icon: opens the panel out of itself, switches to its tab when the
   /// panel shows another, closes the panel when it shows this one.
   private func dockTapped(_ tab: MenuTab) {
+    DiagnosticLog.record(.menu, "requested", "source=dock tab=\(tab)")
     if panel.isOpen {
       if menu.tab == tab { closeMenu() } else { menu.tab = tab }
     } else {
@@ -1047,6 +1066,32 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     Self.innerDisplayUpright(
       regularWidth: traitCollection.horizontalSizeClass == .regular, bounds: view.bounds,
       verticalBar: navigationController?.isToolbarHidden == false)
+  }
+
+  /// What decides the edge band and the dock, as the diagnostic log shows it.
+  private struct Posture: Equatable {
+    var regularWidth: Bool
+    var size: CGSize
+    var barEdge: Int
+    var toolbar: Bool
+    var fold: Bool
+    var upright: Bool
+  }
+
+  /// One line whenever the posture or any of its inputs changes.
+  private func recordPosture(fold: CGRect?) {
+    var edge = 0
+    if #available(iOS 27.1, *) { edge = traitCollection.verticalBarEdge.rawValue }
+    let posture = Posture(
+      regularWidth: traitCollection.horizontalSizeClass == .regular, size: view.bounds.size, barEdge: edge,
+      toolbar: navigationController?.isToolbarHidden == false, fold: fold != nil, upright: innerDisplayUpright)
+    guard posture != loggedPosture else { return }
+    loggedPosture = posture
+    let edgeName = [0: "none", 1: "leading", 2: "trailing"][edge] ?? "\(edge)"
+    DiagnosticLog.record(.scene, "posture",
+      "upright=\(posture.upright) regularWidth=\(posture.regularWidth) bounds=\(Int(posture.size.width))x\(Int(posture.size.height))"
+      + " verticalBar=\(edgeName) toolbar=\(posture.toolbar) fold=\(posture.fold) panes=\(panes.count)"
+      + " scene=\(sceneID.prefix(8))")
   }
 
   /// The status bar reports itself 2 pt tall on the inner display, so the

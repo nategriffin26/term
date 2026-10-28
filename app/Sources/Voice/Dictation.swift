@@ -156,8 +156,12 @@ final class Dictation {
   func start(in target: DictationTarget) {
     // A tap delivered while the app is still coming back to the front is
     // dropped: the audio session does not start for an app that isn't active.
-    guard !isListening, UIApplication.shared.applicationState == .active else { return }
+    guard !isListening, UIApplication.shared.applicationState == .active else {
+      DiagnosticLog.record(.voice, "start-declined", "reason=\(isListening ? "listening" : "inactive")")
+      return
+    }
     guard transcriber() != nil else {
+      DiagnosticLog.record(.voice, "start-declined", "reason=no-key")
       target.dictationNeedsSettings()
       return
     }
@@ -172,6 +176,7 @@ final class Dictation {
         listen(into: target)
       }
     default:
+      DiagnosticLog.record(.voice, "start-declined", "reason=microphone-denied")
       target.dictationNotice("Turn on Microphone for Term in the Settings app")
     }
   }
@@ -181,6 +186,7 @@ final class Dictation {
     guard let capture else { return }
     capture.stop()
     self.capture = nil
+    DiagnosticLog.record(.voice, "stopped", "run=\(run) seconds=\(DiagnosticLog.seconds(Double(recording.samples.count) / Double(Recording.sampleRate)))")
     startTimer?.cancel()
     startTimer = nil
     transcribe(recording, into: destination, prompt: target?.dictationPrompt ?? "")
@@ -220,6 +226,7 @@ final class Dictation {
       self?.microphoneStopped(run: run)
     })
     microphoneFailed = false
+    DiagnosticLog.record(.voice, "listening", "run=\(run)")
     self.capture = capture
     self.target = target
     destination = Destination(view: target, place: target.dictationDestination)
@@ -242,6 +249,7 @@ final class Dictation {
   /// The microphone of listening `run` failed, or never started.
   private func microphoneStopped(run: Int) {
     guard run == self.run, isListening else { return }
+    DiagnosticLog.record(.voice, "microphone-failed", "run=\(run)")
     stop()
     microphoneFailed = true
     update()
@@ -260,11 +268,15 @@ final class Dictation {
   /// without, the strip says there was no speech, at once when the
   /// recording is empty.
   private func transcribe(_ recording: Recording, into destination: Destination, prompt: String) {
-    guard !recording.loudness.isEmpty else { return show(.noSpeech) }
+    guard !recording.loudness.isEmpty else {
+      DiagnosticLog.record(.voice, "no-speech", "reason=empty")
+      return show(.noSpeech)
+    }
     judging += 1
     gate.judge(recording) { [weak self] parts in
       guard let self else { return }
       judging -= 1
+      DiagnosticLog.record(.voice, parts.isEmpty ? "no-speech" : "judged", "parts=\(parts.count)")
       if parts.isEmpty {
         show(.noSpeech)
       } else {
@@ -338,10 +350,13 @@ final class Dictation {
     }
     for request in queue.send() {
       Task { [weak self] in
+        let start = ProcessInfo.processInfo.systemUptime
         do throws(TranscriptionFailure) {
           let text = try await transcriber.transcribe(request.audio, prompt: request.prompt) { [weak self] in
             Task { @MainActor in self?.waiting(request.id) }
           }
+          DiagnosticLog.record(.voice, "transcribed",
+            "part=\(request.id) seconds=\(DiagnosticLog.seconds(ProcessInfo.processInfo.systemUptime - start)) characters=\(text.count)")
           self?.finished(request.id, text)
         } catch {
           self?.failed(request.id, error)
@@ -362,6 +377,14 @@ final class Dictation {
   }
 
   private func failed(_ id: Int, _ failure: TranscriptionFailure) {
+    let kind = switch failure.problem {
+    case .offline: "offline"
+    case .badKey: "bad-key"
+    case .noCredit: "no-credit"
+    case .modelNotFound: "model-not-found"
+    case .other: "other"
+    }
+    DiagnosticLog.record(.voice, "transcription-failed", "part=\(id) problem=\(kind) retries=\(failure.retriesByItself)")
     let target = queue.entries.first { $0.id == id }?.target.view
     let wasStuck = queue.problem != nil
     queue.fail(id, failure, at: .now)
@@ -387,8 +410,10 @@ final class Dictation {
   private func output(_ ready: [TranscriptQueue<Destination>.Typed]) {
     for typed in ready {
       if let view = typed.target.view, let place = typed.target.place, place.admits(view.dictationDestination) {
+        DiagnosticLog.record(.voice, "typed")
         view.typeDictation(typed.text)
       } else {
+        DiagnosticLog.record(.voice, "copied", "reason=\(typed.target.view == nil ? "no-terminal" : "destination-changed")")
         copy(typed.text)
       }
     }
