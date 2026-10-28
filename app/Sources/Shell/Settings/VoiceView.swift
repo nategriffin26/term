@@ -9,6 +9,8 @@ struct VoiceView: View {
   @State private var other: String
   /// A word being typed into Words to Get Right.
   @State private var word = ""
+  /// The last word typed did not fit (`DictationWords.length`).
+  @State private var full = false
 
   struct Model: Identifiable {
     let id: String
@@ -77,7 +79,10 @@ struct VoiceView: View {
             Text(word)
               .font(Chrome.mono(.body))
               .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                Button("Remove", role: .destructive) { settings.dictationWords.removeAll { $0 == word } }
+                Button("Remove", role: .destructive) {
+                  settings.dictationWords.removeAll { $0 == word }
+                  full = false
+                }
                   .tint(Chrome.swipeBad)
               }
           }
@@ -87,6 +92,10 @@ struct VoiceView: View {
             .autocorrectionDisabled()
             .submitLabel(.done)
             .onSubmit(add)
+        } footer: {
+          if full {
+            Text("No room for another word. Remove one first.").font(Chrome.font(.secondary)).foregroundStyle(Chrome.bad)
+          }
         }
       }
       .chromeList()
@@ -98,12 +107,16 @@ struct VoiceView: View {
     }
   }
 
-  /// The typed word joins the list as written, once.
+  /// The typed word joins the list as written, once; one that does not fit
+  /// stays in the field and the section says so.
   private func add() {
-    let new = word.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let words = DictationWords.adding(word, to: settings.dictationWords) else {
+      full = true
+      return
+    }
+    full = false
     word = ""
-    guard !new.isEmpty, !settings.dictationWords.contains(new) else { return }
-    settings.dictationWords.append(new)
+    if words != settings.dictationWords { settings.dictationWords = words }
   }
 
   /// The root row's value: the model's own name, or what is missing.

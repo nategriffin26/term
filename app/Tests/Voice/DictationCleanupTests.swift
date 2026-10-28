@@ -87,6 +87,18 @@ final class DictationCleanupTests: XCTestCase {
     XCTAssertEqual(result, DictationCleanup.Result(text: "open the readme", status: .failed))
   }
 
+  /// Catches the word bound off by one: 399 and 400 characters joined fit, 401 does not.
+  func testWordsAreBoundAtFourHundredCharacters() {
+    for (length, fits) in [(396, true), (397, true), (398, false)] {
+      let words = [String(repeating: "a", count: length), "b"]  // joined: length + 3
+      XCTAssertEqual(DictationWords.bounded(words), fits ? words : [words[0]], "\(length + 3)")
+      XCTAssertEqual(DictationWords.adding("b", to: [words[0]]), fits ? words : nil, "\(length + 3)")
+    }
+    XCTAssertEqual(DictationWords.adding("  nstack ", to: ["omp"]), ["omp", "nstack"])
+    XCTAssertEqual(DictationWords.adding("omp", to: ["omp"]), ["omp"])
+    XCTAssertEqual(DictationWords.adding(" ", to: ["omp"]), ["omp"])
+  }
+
   /// Catches a request sent without a key.
   func testNoKeyIsUnavailable() async throws {
     let server = try await server(RecordedCleanup.cleaned)

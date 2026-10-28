@@ -946,6 +946,22 @@ final class DictationTests: XCTestCase {
     XCTAssertEqual(terminal.typed, ["ONE", "TWO"])
   }
 
+  /// Catches a word list longer than the bound sent whole: words past 400
+  /// characters go to neither the transcription prompt nor cleanup.
+  func testWordsPastTheBoundAreNotSent() async throws {
+    let server = try await server { _ in RecordedCleanup.cleaned }
+    let service = Service()
+    let long = String(repeating: "a", count: 398)
+    let dictation = make(service, cleanup: DictationCleanup(key: "k", baseURL: server.baseURL), words: [long, "b"])
+    let terminal = Terminal()
+    say(["one"], into: dictation, from: terminal)
+    await until("typed") { terminal.typed.count == 1 }
+    XCTAssertEqual(service.prompts, [long])
+    let user = try XCTUnwrap((server.requests.first?["messages"] as? [[String: Any]])?.last?["content"] as? String)
+    let data = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(user.utf8)) as? [String: Any])
+    XCTAssertEqual(data["vocabulary"] as? [String], [long])
+  }
+
   /// Catches the app's own cleanup ignoring the setting: with Clean Up
   /// Dictation turned off and stored, `openRouterCleanup` sends nothing; on,
   /// the same path reaches the server.

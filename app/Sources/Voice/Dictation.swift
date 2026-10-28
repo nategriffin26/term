@@ -372,7 +372,7 @@ final class Dictation {
       return
     }
     for request in queue.send() {
-      let prompt = DictationPrompt.adding(words(), to: request.prompt)
+      let prompt = DictationPrompt.adding(DictationWords.bounded(words()), to: request.prompt)
       Task { [weak self] in
         let start = ProcessInfo.processInfo.systemUptime
         do throws(TranscriptionFailure) {
@@ -409,7 +409,7 @@ final class Dictation {
         cleaned(item, DictationCleanup.Result(text: item.text, status: .off), after: .zero)
         continue
       }
-      let vocabulary = words()
+      let vocabulary = DictationWords.bounded(words())
       Task { [weak self] in
         let start = ContinuousClock.now
         let result = await cleanup.clean(item.text, vocabulary: vocabulary)

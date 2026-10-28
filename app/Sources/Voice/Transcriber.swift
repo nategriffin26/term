@@ -159,6 +159,34 @@ enum DictationPrompt {
   }
 }
 
+/// The words to get right as both requests carry them.
+enum DictationWords {
+  /// 400 characters joined with ", " (about 60 short terms, roughly 170 tokens):
+  /// Whisper reads only a prompt's last 224 tokens, so a longer list would
+  /// push the screen and the text last dictated out of it.
+  static let length = 400
+
+  /// Whether `words` fit, joined as the prompt joins them.
+  static func fit(_ words: [String]) -> Bool {
+    words.joined(separator: ", ").count <= length
+  }
+
+  /// The first of `words` that fit, whole and in order.
+  static func bounded(_ words: [String]) -> [String] {
+    var kept: [String] = []
+    for word in words where fit(kept + [word]) { kept.append(word) }
+    return kept
+  }
+
+  /// `words` with `word` (trimmed) at the end, unchanged for an empty or
+  /// listed word; nil when it does not fit.
+  static func adding(_ word: String, to words: [String]) -> [String]? {
+    let new = word.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !new.isEmpty, !words.contains(new) else { return words }
+    return fit(words + [new]) ? words + [new] : nil
+  }
+}
+
 /// Speech as OpenRouter takes it: AAC in an m4a, 16 kHz mono, 32 kbps (about 4 KB a second).
 enum SpeechAudio {
   static func m4a(_ samples: ArraySlice<Float>) throws -> Data {
