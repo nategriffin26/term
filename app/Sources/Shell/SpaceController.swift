@@ -414,6 +414,19 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     tab.connect(target, tmuxSession: name, preview: preview)
   }
 
+  /// Follows a link another app opened Term with.
+  func open(_ link: DeepLink) async {
+    switch link {
+    case .attach(let alias, let session):
+      DiagnosticLog.record(.scene, "link-attach", "host=\(DiagnosticLog.name(alias)) tmux=\(DiagnosticLog.name(session))")
+      guard let host = ConfigStore.shared.host(alias: alias) else {
+        focusedTab?.showNotice("No host named \(alias)", failed: true, for: 6)
+        return
+      }
+      await attach(host, session: session)
+    }
+  }
+
   /// A new local shell from the menu's + page.
   func newTabFromMenu() {
     menuRestoresFocus = false

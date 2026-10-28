@@ -72,6 +72,11 @@ targets:
         NSPhotoLibraryUsageDescription: Term uploads photos and videos you pick to your computer.
         NSPhotoLibraryAddUsageDescription: Term saves diagrams you share to your photo library.
         NSFaceIDUsageDescription: Term confirms it's you before typing your Mac password.
+        # term://attach?host=<alias>&session=<tmux session> (DeepLink.swift); Dross opens its workers with it.
+        CFBundleURLTypes:
+          - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
+            CFBundleURLSchemes:
+              - term
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(TERM_BUNDLE_ID)
