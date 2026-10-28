@@ -324,7 +324,7 @@ final class Tab {
       guard let self, let session, session === remote else { return }
       reconnecting = false
       DiagnosticLog.record(.connection, failure == nil ? "reconnected" : "reconnect-failed",
-        "tab=\(DiagnosticLog.name(sessionName))" + (failure.map { " error=\(DiagnosticLog.name($0))" } ?? ""))
+        "tab=\(DiagnosticLog.name(sessionName))" + (failure.map { " failure=\(DiagnosticLog.failure($0))" } ?? ""))
       autoReconnect.reconnectFinished(succeeded: failure == nil)
       if failure == nil { firstAttachmentObservation = true }
       observeTmuxAttachment()
@@ -353,7 +353,7 @@ final class Tab {
     let role = session === connecting ? "connecting" : session === remote ? "remote" : "stale"
     DiagnosticLog.record(.connection, "status", "kind=\(Self.statusName(status.kind)) session=\(role)"
       + " host=\(DiagnosticLog.name(target?.alias ?? "none")) tab=\(DiagnosticLog.name(sessionName))"
-      + (message.isEmpty ? "" : " message=\(DiagnosticLog.name(message))"))
+      + (message.isEmpty ? "" : " failure=\(DiagnosticLog.failure(message))"))
     switch Int(status.kind) {
     case Int(TERM_STATUS_CONNECTED.rawValue):
       unreachable = false

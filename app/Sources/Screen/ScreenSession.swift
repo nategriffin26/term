@@ -150,19 +150,41 @@ final class ScreenSession {
     didSet {
       guard phase != oldValue else { return }
       let now = ProcessInfo.processInfo.systemUptime
-      DiagnosticLog.record(.screen, "phase", "to=\(DiagnosticLog.name("\(phase)")) from=\(DiagnosticLog.name("\(oldValue)"))"
+      DiagnosticLog.record(.screen, "phase", "to=\(Self.logName(phase)) from=\(Self.logName(oldValue))"
         + " after=\(DiagnosticLog.seconds(now - phaseSince)) host=\(DiagnosticLog.name(host?.alias ?? "none"))")
       phaseSince = now
     }
   }
   @ObservationIgnored private var phaseSince = ProcessInfo.processInfo.systemUptime
+
+  /// A phase for the diagnostic log: its name and a failure's kind, never the failure's text.
+  private static func logName(_ phase: Phase) -> String {
+    switch phase {
+    case .connecting: "connecting"
+    case .live: "live"
+    case .hostNotRunning: "host-not-running"
+    case .unreachable(let reason): "unreachable/\(DiagnosticLog.failure(reason))"
+    case .lost(let reason): "lost/\(DiagnosticLog.failure(reason))"
+    }
+  }
+
+  private static func logName(_ sharing: Sharing) -> String {
+    switch sharing {
+    case .off: "off"
+    case .needsPassword: "needs-password"
+    case .signingIn: "signing-in"
+    case .live: "live"
+    case .held: "held"
+    case .failed(let reason): "failed/\(DiagnosticLog.failure(reason))"
+    }
+  }
   private(set) var macName = ""
   /// The Mac's displays as Term Screen Host reports them.
   private(set) var hostDisplays: [ScreenWire.Display] = []
   private(set) var sharing = Sharing.off {
     didSet {
       guard sharing != oldValue else { return }
-      DiagnosticLog.record(.screen, "sharing", "to=\(DiagnosticLog.name("\(sharing)")) from=\(DiagnosticLog.name("\(oldValue)"))")
+      DiagnosticLog.record(.screen, "sharing", "to=\(Self.logName(sharing)) from=\(Self.logName(oldValue))")
     }
   }
   /// Screen Sharing's one framebuffer, in pixels.
@@ -295,7 +317,7 @@ final class ScreenSession {
   func setShown(_ shown: Bool) {
     guard shown != isShown else { return }
     isShown = shown
-    DiagnosticLog.record(.screen, shown ? "shown" : "hidden", "phase=\(DiagnosticLog.name("\(phase)"))")
+    DiagnosticLog.record(.screen, shown ? "shown" : "hidden", "phase=\(Self.logName(phase))")
     if shown {
       if engine == nil, host != nil, UIApplication.shared.applicationState != .background { connect() }
       watchShown()
@@ -547,7 +569,7 @@ final class ScreenSession {
     case .quality(let state):
       quality = state
     case .failure(let message):
-      DiagnosticLog.record(.screen, "failure", "message=\(DiagnosticLog.name(message))")
+      DiagnosticLog.record(.screen, "failure", "kind=\(DiagnosticLog.failure(message))")
       show(notice: message)
     case .closed(let closure):
       engine = nil

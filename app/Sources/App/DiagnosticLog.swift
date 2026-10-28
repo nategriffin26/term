@@ -14,8 +14,9 @@ final class DiagnosticLog: @unchecked Sendable {
     case app, scene, tap, pager, keyboard, grid, menu, connection, voice, screen, notification
   }
 
-  /// Records `event` with its `fields` (`key=value` pairs, space-separated).
-  /// The calling thread only takes the time; formatting and writing happen on the log's queue.
+  /// Records `event` with its `fields` (`key=value` pairs, space-separated),
+  /// which the caller builds. Here the calling thread only takes the time; the
+  /// timestamp, the line and the writing are done on the log's queue.
   static func record(_ category: Category, _ event: String, _ fields: String = "") {
     let now = Date()
     shared.queue.async { shared.append(category, event, fields, at: now) }
@@ -34,6 +35,28 @@ final class DiagnosticLog: @unchecked Sendable {
 
   /// A name quoted so spaces and `=` cannot split it into fields.
   static func name(_ s: String) -> String { s.debugDescription }
+
+  /// The kind of a connection or Screen failure, from the wording of the
+  /// core's errors (core/ssh/src/error.rs, core/ssh/src/mosh.rs,
+  /// core/termcore/src/remote.rs). Never the text itself: it can carry the
+  /// remote's stderr or shell output.
+  static func failure(_ message: String) -> String {
+    let m = message.lowercased()
+    if m.isEmpty { return "none" }
+    if m == "connection lost" { return "lost" }
+    // Bootstrap errors end in the server's stderr, which may say anything: match them first.
+    if m.contains("mosh-server") || m.contains("mosh connect") || m.contains("detached server pid") { return "mosh-bootstrap" }
+    if m.hasPrefix("cannot resolve") { return "dns" }
+    if m.hasPrefix("cannot connect") {
+      return m.contains("refused") ? "refused" : m.contains("timed out") ? "timeout" : "connect"
+    }
+    if m.hasPrefix("host key changed") { return "host-key" }
+    if m.hasPrefix("authentication failed") { return "auth" }
+    if m.hasPrefix("invalid key") { return "key" }
+    if m.hasPrefix("ssh protocol error") { return m.contains("timed out") ? "timeout" : "protocol" }
+    if m.hasPrefix("mosh:") { return "mosh" }
+    return "other"
+  }
 
   /// The three clocks a touch time may be compared with, in seconds: uptime
   /// (`ProcessInfo.systemUptime`), media (`CACurrentMediaTime`) and continuous
@@ -103,7 +126,11 @@ final class DiagnosticLog: @unchecked Sendable {
     guard !pending.isEmpty else { return }
     if handle == nil { open() }
     if size > 0, size + pending.count > Self.limit { rotate() }
-    guard let handle else { return }
+    guard let handle else {
+      // No file to write to: drop these lines rather than hold them without bound.
+      pending.removeAll(keepingCapacity: false)
+      return
+    }
     do {
       try handle.write(contentsOf: pending)
       size += pending.count
