@@ -143,6 +143,8 @@ final class TerminalView: UIView {
     var momentumTime: CFTimeInterval = 0
     var isCoasting = false
     var touchStoppedCoasting = false
+    var scrollGesture: ScrollGesture?
+    var isScrollDragging = false
     /// The tap held in the right edge band, which may start a double tap.
     let doubleTap = DoubleTap()
     /// How the diagnostic log names this terminal (its tab's tmux session).

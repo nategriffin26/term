@@ -456,6 +456,31 @@ fn bad_parameters_close_with_a_reason_instead_of_failing_silently() {
 // ---------------------------------------------------------------- mosh
 
 #[test]
+fn plain_mosh_keeps_scrolled_rows_while_live_output_repaints() {
+    let sshd = Sshd::start();
+    let token = MoshToken::new("scrollback");
+    let mut p = Params::new(&sshd, transport::MOSH);
+    p.command = Some(token.command());
+    let rec = Recorder::new();
+    let s = p.connect(&rec);
+    rec.wait_status(status::CONNECTED, 20 * SEC);
+    write(s, "for i in {1..80}; do printf 'row-%03d\\n' $i; sleep 0.03; done; for j in {1..100}; do printf '\\033[24;1HLIVE-%03d\\033[6n' $j; sleep 0.03; done\r");
+    wait_screen(s, "LIVE-0", 20 * SEC);
+    unsafe { term_session_scroll(s, 30) };
+    let text = screen(s);
+    std::thread::sleep(Duration::from_millis(600));
+    let repainted = screen(s);
+    write(s, "\x03echo input-live\r");
+    wait_screen(s, "input-live", 10 * SEC);
+    let mut frame = TermFrame::default();
+    unsafe { term_session_frame(s, u64::MAX, &mut frame) };
+    unsafe { term_session_free(s) };
+    assert!(text.contains("row-04"), "plain mosh discarded its scrollback: {text}");
+    assert_eq!(repainted, text, "live repaint or terminal reply reset the viewport");
+    assert_eq!(frame.viewport_offset, 0, "user input must still return to live");
+}
+
+#[test]
 fn mosh_transport_trusts_on_first_use_types_resizes_and_closes_cleanly() {
     // Bugs caught: TOFU never reports the key to pin; no frame from mosh
     // states; resize never reaches the server's PTY; the shell's exit leaves

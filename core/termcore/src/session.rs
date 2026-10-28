@@ -104,6 +104,7 @@ impl FrameSchedule {
 
 pub(crate) struct State {
     pub(crate) term: vt::Terminal,
+    pub(crate) mosh_history: Option<crate::mosh_history::MoshHistory>,
     pub(crate) remote: Remote,
     pub(crate) network_epoch: u64,
     pub(crate) reconnecting: bool,
@@ -130,8 +131,10 @@ impl State {
     pub(crate) fn new(term: vt::Terminal, remote: Remote, status: u32) -> State {
         let bells = term.bell_count();
         let published_ssh_frame = matches!(remote, Remote::Ssh(_)).then(vt::Frame::default);
+        let mosh_history = matches!(remote, Remote::Mosh(_)).then(crate::mosh_history::MoshHistory::default);
         State {
             term,
+            mosh_history,
             remote,
             network_epoch: 0,
             reconnecting: false,
@@ -291,8 +294,13 @@ impl State {
         if bytes.is_empty() {
             return;
         }
-        if self.term.viewport_offset() != 0 {
+        let scrolled = if let Some(history) = &mut self.mosh_history {
+            history.to_live()
+        } else if self.term.viewport_offset() != 0 {
             self.term.scroll_to_live();
+            true
+        } else { false };
+        if scrolled {
             self.frame_changed(ev);
         }
         match &mut self.remote {
@@ -328,11 +336,29 @@ impl State {
     }
 
     pub(crate) fn scroll(&mut self, delta: i32, ev: &mut Vec<Event>) {
-        let before = self.term.viewport_offset();
-        self.term.scroll(delta);
-        if self.term.viewport_offset() != before {
+        let changed = if let Some(history) = &mut self.mosh_history {
+            history.scroll(delta)
+        } else {
+            let before = self.term.viewport_offset();
+            self.term.scroll(delta);
+            self.term.viewport_offset() != before
+        };
+        if changed {
             self.frame_changed(ev);
         }
+    }
+
+    pub(crate) fn text(&self, col0: u16, mut row0: u32, col1: u16, mut row1: u32, styled: bool) -> String {
+        if let Some(history) = &self.mosh_history
+            && self.term.modes() & vt::modes::ALT_SCREEN == 0 {
+            let rows = history.history_rows();
+            if row0.min(row1) < rows { return history.text(col0, row0, col1, row1, styled); }
+            // Keep the engine's wrapped-line copy semantics for live selections.
+            row0 -= rows;
+            row1 -= rows;
+        }
+        if styled { self.term.styled_text(col0, row0, col1, row1) }
+        else { self.term.text(col0, row0, col1, row1) }
     }
 
     /// Re-reads the remote's prediction overlay; FRAME when it changed.
@@ -360,10 +386,14 @@ impl State {
             }
         }
         let Some(f) = self.term.frame() else { return false };
+        let f = if let Some(history) = &mut self.mosh_history {
+            history.observe(f);
+            history.frame()
+        } else { f };
         if f.generation != self.built_from.0 || self.prediction != self.built_from.1 {
             self.generation += 1;
             self.built_from = (f.generation, self.prediction.clone());
-            if !self.prediction.cells.is_empty() {
+            if !self.prediction.cells.is_empty() && f.viewport_offset == 0 {
                 compose(f, &self.prediction, &mut self.composite);
             }
         }
@@ -377,7 +407,8 @@ impl State {
             f
         };
         let predicted = &self.built_from.1;
-        let (cursor_col, cursor_row) = match predicted.cursor {
+        let show_prediction = f.viewport_offset == 0;
+        let (cursor_col, cursor_row) = match predicted.cursor.filter(|_| show_prediction) {
             Some((c, r)) if f.cols > 0 && f.rows > 0 => (c.min(f.cols - 1), r.min(f.rows - 1)),
             _ => (f.cursor_col, f.cursor_row),
         };
@@ -398,7 +429,7 @@ impl State {
             history_rows: f.history_rows,
             viewport_offset: f.viewport_offset,
             bell_count: f.bell_count,
-            cells: if predicted.cells.is_empty() { f.cells.as_ptr() } else { self.composite.as_ptr() },
+            cells: if predicted.cells.is_empty() || !show_prediction { f.cells.as_ptr() } else { self.composite.as_ptr() },
             grapheme_count: f.graphemes.len() as u32,
             graphemes: if f.graphemes.is_empty() { ptr::null() } else { f.graphemes.as_ptr() },
             codepoints: if f.codepoints.is_empty() { ptr::null() } else { f.codepoints.as_ptr() },

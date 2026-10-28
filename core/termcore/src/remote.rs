@@ -404,6 +404,12 @@ impl State {
             self.set_status(status::CONNECTED, "", ev);
         }
         if changed {
+            // Capture each accepted screen, even if the app coalesces its FRAME events.
+            // Protocol restores touch only `term`, never this local history.
+            if self.term.update_frame().is_ok()
+                && let (Some(history), Some(frame)) = (&mut self.mosh_history, self.term.frame()) {
+                history.observe(frame);
+            }
             self.effects(ev);
         }
         self.refresh_prediction(ev);

@@ -5,6 +5,7 @@
 pub mod abi;
 pub mod files;
 pub mod net;
+mod mosh_history;
 mod remote;
 mod session;
 pub mod svg;
@@ -358,7 +359,7 @@ pub unsafe extern "C" fn term_session_status(s: *const Session) -> TermStatus {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn term_session_text(s: *const Session, col0: u16, row0: u32, col1: u16, row1: u32) -> *mut c_char {
     let Some(s) = (unsafe { session(s) }) else { return std::ptr::null_mut() };
-    let text = s.lock().term.text(col0, row0, col1, row1);
+    let text = s.lock().text(col0, row0, col1, row1, false);
     into_c(text)
 }
 
@@ -369,7 +370,7 @@ pub unsafe extern "C" fn term_session_text(s: *const Session, col0: u16, row0: u
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn term_session_history(s: *const Session) -> *mut c_char {
     let Some(s) = (unsafe { session(s) }) else { return std::ptr::null_mut() };
-    let text = s.lock().term.styled_text(0, 0, u16::MAX, u32::MAX);
+    let text = s.lock().text(0, 0, u16::MAX, u32::MAX, true);
     into_c(text)
 }
 

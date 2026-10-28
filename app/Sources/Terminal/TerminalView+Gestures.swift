@@ -11,6 +11,16 @@ struct GridPoint: Comparable {
     }
 }
 
+/// Start state and routed lines for one pan, including its momentum.
+struct ScrollGesture {
+    let branch: String
+    let historyRows: Int
+    let viewportOffset: Int
+    let alternateScreen: Bool
+    let mouseTracking: Bool
+    var lines = 0
+}
+
 extension TerminalView {
     func installGestures() {
         let tap = TimedTapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -150,6 +160,12 @@ extension TerminalView {
             doubleTap.reset()
             touchStoppedCoasting = false
             stopCoasting()
+            isScrollDragging = true
+            let mouse = snapshot.has(TERM_MODE_MOUSE_TRACKING)
+            let alternate = snapshot.has(TERM_MODE_ALT_SCREEN)
+            scrollGesture = ScrollGesture(branch: mouse ? "wheel" : alternate ? "arrows" : "scrollback",
+                historyRows: snapshot.historyRows, viewportOffset: snapshot.viewportOffset,
+                alternateScreen: alternate, mouseTracking: mouse)
             scrollRemainder = 0
             lastPanTranslation = 0
             scrollAnchor = cell(at: g.location(in: self))
@@ -158,8 +174,13 @@ extension TerminalView {
             scroll(points: t - lastPanTranslation)
             lastPanTranslation = t
         case .ended:
+            isScrollDragging = false
             let v = g.velocity(in: self).y
             if abs(v) > 120 { startCoasting(velocity: v) }
+            else { finishScrollGesture() }
+        case .cancelled, .failed:
+            isScrollDragging = false
+            stopCoasting()
         default:
             break
         }
@@ -181,11 +202,13 @@ extension TerminalView {
     /// local scrollback moves.
     private func scroll(lines: Int) {
         if snapshot.has(TERM_MODE_MOUSE_TRACKING) {
+            scrollGesture?.lines += lines
             let button = lines > 0 ? TERM_MOUSE_WHEEL_UP : TERM_MOUSE_WHEEL_DOWN
             for _ in 0..<abs(lines) {
                 session.mouse(TERM_MOUSE_PRESS, button, col: scrollAnchor.col, row: scrollAnchor.row)
             }
         } else if snapshot.has(TERM_MODE_ALT_SCREEN) {
+            scrollGesture?.lines += lines
             let key = lines > 0 ? TERM_KEY_UP : TERM_KEY_DOWN
             for _ in 0..<abs(lines) { session.key(key) }
         } else {
@@ -198,6 +221,7 @@ extension TerminalView {
                 return
             }
             session.scroll(by: Int32(lines))
+            scrollGesture?.lines += lines
             updateScrollIndicator()
         }
     }
@@ -213,6 +237,7 @@ extension TerminalView {
     func stopCoasting() {
         isCoasting = false
         momentumVelocity = 0
+        if !isScrollDragging { finishScrollGesture() }
     }
 
     func coast(to time: CFTimeInterval) {
@@ -224,6 +249,19 @@ extension TerminalView {
         momentumVelocity *= CGFloat(decay)
         scroll(points: distance)
         if abs(momentumVelocity) < 15 { stopCoasting() }
+    }
+
+    private func finishScrollGesture() {
+        guard let gesture = scrollGesture else { return }
+        scrollGesture = nil
+        var frame = TermFrame()
+        let offset = session.frame(after: .max, into: &frame) ? Int(frame.viewport_offset) : snapshot.viewportOffset
+        let moved = gesture.branch == "scrollback" ? offset - gesture.viewportOffset : gesture.lines
+        DiagnosticLog.record(.scroll, gesture.branch,
+            "terminal=\(DiagnosticLog.name(diagnosticName())) historyRows=\(gesture.historyRows)"
+            + " viewportOffset=\(gesture.viewportOffset) alternateScreen=\(gesture.alternateScreen)"
+            + " mouseTracking=\(gesture.mouseTracking) lines=\(gesture.lines) linesMoved=\(moved)"
+            + " endOffset=\(offset) endHistoryRows=\(frame.history_rows)")
     }
 
     // ------------------------------------------------------------ pinch

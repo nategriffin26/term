@@ -50,6 +50,8 @@ The app is Swift and UIKit with its own Metal renderer. Everything that touches 
 
 tmux on the host is the session store. Term doesn't replace it. The phone lists sessions with `tmux list-sessions`, reads a tab's history with `tmux capture-pane` (a tab outside tmux shows its own scrollback), and attaches with `tmux new -A -s NAME`, so the same sessions open on the phone and on the computer.
 
+Vertical swipes scroll with momentum in plain shells too. SSH keeps the byte stream's scrollback; mosh keeps up to 10,000 rows observed leaving the top of successive screens, separately from its protocol snapshots. Mosh can skip intermediate output, so its local history is not a complete transcript; use SSH or tmux when every line matters. Program redraws and resizes do not manufacture history. Typing returns to the live screen. Mouse-tracking programs still receive wheel events, and alternate-screen programs without mouse tracking receive arrow keys.
+
 Term learns a tab's client on the host's default tmux server through process ancestry over SSH, without changing the host's configuration or terminal output. It checks while the app is active, before reconnecting, and before opening a session from the tmux tab. The learned name labels the existing terminal, so selecting that session switches to it rather than opening a duplicate. A manually attached session returns to a login shell when it ends. SSH retains its last observation after a lost connection: an attach or detach between the last successful check and the drop cannot be recovered; mosh can usually inspect its surviving server before replacing it.
 
 ### omp agents
