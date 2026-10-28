@@ -269,11 +269,8 @@ final class TmuxListTests: XCTestCase {
 
   /// Bug it catches: a working agent's time counted from the session's last
   /// output (seconds ago while it prints) instead of when the turn began.
-  func testWorkingShowsTodoProgressAndTimeSinceItBegan() {
-    var working = agent(.working, since: 720)
-    XCTAssertEqual(TmuxList.status(working, quiet, now: now), .working(done: nil, total: nil, elapsed: "12m"))
-    working.todo = .init(done: 3, total: 7, current: "Wire refresh")
-    XCTAssertEqual(TmuxList.status(working, quiet, now: now), .working(done: 3, total: 7, elapsed: "12m"))
+  func testWorkingShowsTimeSinceItBegan() {
+    XCTAssertEqual(TmuxList.status(agent(.working, since: 720), quiet, now: now), .working(elapsed: "12m"))
   }
 
   /// Bug it catches: every agent row grows a second line (or a stop he

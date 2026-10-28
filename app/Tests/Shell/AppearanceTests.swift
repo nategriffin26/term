@@ -495,7 +495,7 @@ final class AppThemeRefreshTests: XCTestCase {
     XCTAssertEqual(Chrome.UI.bg.resolvedColor(with: UITraitCollection()).argb, UIColor(rgb: 0x15121C).argb, "the fixed palette's ground")
   }
 
-  func testTheProgressRingFollowsTheThemeOfItsWindow() {
+  func testTheBannerRingFollowsTheThemeOfItsWindow() {
     let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 300))
     window.traitOverrides[AppThemeTrait.self] = AppTheme.fixed()
     let ring = RingView()

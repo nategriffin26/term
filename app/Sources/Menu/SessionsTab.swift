@@ -654,7 +654,7 @@ private struct TileTitleBar: View {
 }
 
 /// An agent's state at a title bar's end: needs you as the accent pill (a dot
-/// when narrow), working as a ring, an unseen stop as its glyph.
+/// when narrow), working as WorkingMark, an unseen stop as its glyph.
 private struct TileState: View {
   let agent: AgentInfo
   let compact: Bool
@@ -677,7 +677,7 @@ private struct TileState: View {
         NeedsYouPill(text: TmuxList.stateWord(agent.state) ?? "", compact: true)
       }
     case .working:
-      ProgressRing(fraction: agent.todo.flatMap { $0.total > 0 ? Double($0.done) / Double($0.total) : nil })
+      WorkingMark()
     case .done where agent.unread:
       Image(systemName: "checkmark").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.done)
     case .error where agent.unread, .exited where agent.unread:

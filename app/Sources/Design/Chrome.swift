@@ -15,9 +15,9 @@ import UIKit
 ///   Swipe actions fill with `swipeBad` and `swipeAccent`: their labels are always white.
 /// - State: `needsYou` (the accent) is the one loud signal: a filled pill on
 ///   a row and the count on the dock and the tmux tab. `done` is the accent
-///   as a check and a word, `working` a ring in fg, `failed` is bad. The
-///   accent marks nothing else but the open tab's icon and switches that
-///   are on. `folder` (ANSI blue) marks folders in Files.
+///   as a check and a word, `working` WorkingMark's dots in fg, `failed`
+///   is bad. The accent marks nothing else but the open tab's icon and
+///   switches that are on. `folder` (ANSI blue) marks folders in Files.
 /// - Type: SF Pro for words, SF Mono for machine facts (session, host and
 ///   file names, paths, commands, sizes, keys). Four steps: title 17 (page
 ///   titles), body 15 (rows, tabs, buttons), secondary 13 (second lines,
@@ -68,7 +68,6 @@ enum Chrome {
   // States.
   @MainActor static var needsYou: Color { accent }
   @MainActor static var done: Color { accent }
-  @MainActor static var working: Color { fg }
   @MainActor static var failed: Color { bad }
 
   // Swipe actions: white labels on every theme (see AppTheme.swipeBad).
@@ -101,6 +100,7 @@ enum Chrome {
     static var overlay: UIColor { tone(\.overlay) }
     static var ok: UIColor { tone(\.ok) }
     static var folder: UIColor { tone(\.folder) }
+    static var working: UIColor { fg }
 
     private static func tone(_ key: KeyPath<AppTheme, AppTheme.Tone> & Sendable) -> UIColor {
       UIColor { traits in traits[AppThemeTrait.self][keyPath: key].uiColor }

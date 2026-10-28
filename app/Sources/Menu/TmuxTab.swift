@@ -352,7 +352,7 @@ private struct TmuxRow: View {
 }
 
 /// A row's right edge: a pill when the agent waits on him, a check when it
-/// finished, a ring at its todo's progress while it works, else an age.
+/// finished, WorkingMark and how long it has run while it works, else an age.
 private struct TmuxStatusView: View {
   let status: TmuxList.Status
 
@@ -363,9 +363,9 @@ private struct TmuxStatusView: View {
         .font(Chrome.font(.secondary, .medium))
         .monospacedDigit()
         .foregroundStyle(Chrome.muted)
-    case .working(let done, let total, let elapsed):
+    case .working(let elapsed):
       HStack(spacing: Chrome.Space.s) {
-        ProgressRing(fraction: total.flatMap { total in done.map { total > 0 ? Double($0) / Double(total) : 0 } })
+        WorkingMark()
         Text(elapsed)
           .font(Chrome.font(.secondary, .medium))
           .monospacedDigit()

@@ -147,8 +147,8 @@ enum TmuxList {
   enum Status: Equatable {
     /// Time since its last output: a shell, a server, an agent at rest.
     case age(String)
-    /// An agent at work: its todo's progress when it keeps one, and how long it has run.
-    case working(done: Int?, total: Int?, elapsed: String)
+    /// An agent at work, and how long it has run.
+    case working(elapsed: String)
     /// It waits on him until he answers, seen or not: "Asks you", "Approve".
     case waits(String)
     case finished
@@ -180,7 +180,7 @@ enum TmuxList {
     guard let agent else { return resting }
     switch agent.state {
     case .working:
-      return .working(done: agent.todo?.done, total: agent.todo?.total, elapsed: age(agent.since ?? session.lastActivity, now: now))
+      return .working(elapsed: age(agent.since ?? session.lastActivity, now: now))
     case .ask, .approval: return .waits(stateWord(agent.state) ?? "")
     case .idle: return resting
     case .done, .error, .aborted, .exited:

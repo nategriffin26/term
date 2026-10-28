@@ -130,8 +130,8 @@ final class StatusBanner: UIView {
   }
 }
 
-/// Working, after Controls' ProgressRing: a ring in the text colour filled
-/// to the fraction done; with no fraction, an arc that turns.
+/// The banner's progress: a ring in the text colour filled to the fraction
+/// done; with no fraction, an arc that turns.
 final class RingView: UIView {
   static let side: CGFloat = 15
   private let track = CAShapeLayer()

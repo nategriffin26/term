@@ -18,6 +18,7 @@ struct MenuContent: View {
             .offset(y: shown ? 0 : 6)
             .allowsHitTesting(shown)
             .accessibilityHidden(!shown)
+            .environment(\.isOnScreen, model.isOpen && shown)
         }
       }
       .animation(Chrome.Panel.tabContent, value: model.tab)

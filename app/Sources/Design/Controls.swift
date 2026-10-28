@@ -453,18 +453,119 @@ struct NeedsYouPill: View {
   }
 }
 
-/// Working: a ring filled to the fraction done; with no fraction, a fixed arc that reads as busy.
-struct ProgressRing: View {
-  let fraction: Double?
+extension EnvironmentValues {
+  /// False while the surface around a view is out of sight (the menu closed,
+  /// or its tab not the one showing): what moves there holds still.
+  @Entry var isOnScreen = true
+}
+
+/// Working: a light spiralling over a 3 × 3 cell of dots, clockwise round the
+/// edge from the top-left to the centre with a fading tail, then again. It
+/// moves only while on screen; under Reduce Motion it holds a still tail.
+struct WorkingMark: View {
+  @Environment(\.isOnScreen) private var isOnScreen
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  /// False while a scroll view has it out of sight.
+  @State private var inView = true
 
   var body: some View {
-    ZStack {
-      Circle().stroke(Chrome.fill3, lineWidth: 2)
-      Circle()
-        .trim(from: 0, to: max(fraction ?? 0.3, 0.04))
-        .stroke(Chrome.working, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-        .rotationEffect(.degrees(-90))
+    WorkingMarkLayers(moving: isOnScreen && inView && !reduceMotion)
+      .frame(width: WorkingMarkView.side, height: WorkingMarkView.side)
+      .onScrollVisibilityChange(threshold: 0.01) { inView = $0 }
+  }
+}
+
+private struct WorkingMarkLayers: UIViewRepresentable {
+  let moving: Bool
+
+  func makeUIView(context: Context) -> WorkingMarkView { WorkingMarkView() }
+  func updateUIView(_ view: WorkingMarkView, context: Context) { view.moving = moving }
+}
+
+/// WorkingMark's dots. Core Animation runs the spiral, so a moving mark costs
+/// the app no work per frame; every mark keeps the same phase.
+final class WorkingMarkView: UIView {
+  static let side: CGFloat = 15
+  static let dot: CGFloat = 2.4
+  static let gap: CGFloat = 1.9
+  /// The dots in the order the light visits them, as (column, row).
+  static let path = [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (0, 1), (1, 1)]
+  /// How long the light rests on each dot, and how long a dot takes to dim after it.
+  static let step: CFTimeInterval = 0.12
+  static let fade: CFTimeInterval = 0.36
+  static var loop: CFTimeInterval { step * Double(path.count) }
+  /// A dot's opacity between visits: the cell always reads as a grid.
+  static let rest: Float = 0.18
+  /// Still, in path order: the top row lit toward its right end.
+  static let still: [Float] = [0.4, 0.65, 1, rest, rest, rest, rest, rest, rest]
+
+  /// In path order.
+  let dots: [CALayer] = path.map { _ in CALayer() }
+
+  var moving = false {
+    didSet { if moving != oldValue { update() } }
+  }
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    isUserInteractionEnabled = false
+    for (dot, opacity) in zip(dots, Self.still) {
+      dot.cornerRadius = Self.dot / 2
+      dot.opacity = opacity
+      layer.addSublayer(dot)
     }
-    .frame(width: 15, height: 15)
+    registerForTraitChanges([AppThemeTrait.self]) { (self: Self, _) in self.updateColour() }
+    updateColour()
+  }
+
+  required init?(coder: NSCoder) { fatalError("not used") }
+
+  override var intrinsicContentSize: CGSize { CGSize(width: Self.side, height: Self.side) }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    let span = 3 * Self.dot + 2 * Self.gap
+    let origin = CGPoint(x: (bounds.width - span) / 2, y: (bounds.height - span) / 2)
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    for (dot, (column, row)) in zip(dots, Self.path) {
+      dot.frame = CGRect(x: origin.x + CGFloat(column) * (Self.dot + Self.gap),
+                         y: origin.y + CGFloat(row) * (Self.dot + Self.gap), width: Self.dot, height: Self.dot)
+    }
+    CATransaction.commit()
+  }
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    update()
+  }
+
+  /// A layer's CGColor does not follow the app theme by itself.
+  private func updateColour() {
+    let colour = Chrome.UI.working.resolvedColor(with: traitCollection).cgColor
+    for dot in dots { dot.backgroundColor = colour }
+  }
+
+  private func update() {
+    let running = dots[0].animation(forKey: "lit") != nil
+    let runs = moving && window != nil
+    if runs, !running {
+      // Phase from the media clock, so every mark lights the same dot at once.
+      let now = CACurrentMediaTime()
+      let start = now - fmod(now, Self.loop) - Self.loop
+      for (index, dot) in dots.enumerated() {
+        let lit = CAKeyframeAnimation(keyPath: "opacity")
+        lit.values = [1, Self.rest, Self.rest]
+        lit.keyTimes = [0, NSNumber(value: Self.fade / Self.loop), 1]
+        lit.calculationMode = .linear
+        lit.duration = Self.loop
+        lit.repeatCount = .infinity
+        lit.isRemovedOnCompletion = false
+        lit.beginTime = dot.convertTime(start + Double(index) * Self.step, from: nil)
+        dot.add(lit, forKey: "lit")
+      }
+    } else if !runs, running {
+      for dot in dots { dot.removeAnimation(forKey: "lit") }
+    }
   }
 }
