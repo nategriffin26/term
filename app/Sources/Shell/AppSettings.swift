@@ -61,6 +61,10 @@ final class AppSettings {
   var haptics: Bool { didSet { store(haptics, "haptics") } }
   /// The OpenRouter model dictation transcribes with (Settings › Voice).
   var voiceModel: String { didSet { store(voiceModel, "voiceModel") } }
+  /// Dictation goes through `DictationCleanup` before it is typed (Settings › Voice).
+  var cleansUpDictation: Bool { didSet { store(cleansUpDictation, "cleansUpDictation") } }
+  /// Words dictation spells exactly as written here, for the transcription prompt and cleanup (Settings › Voice).
+  var dictationWords: [String] { didSet { store(dictationWords, "dictationWords") } }
   /// Whether the Keychain holds an OpenRouter key; set it through `setOpenRouterKey`.
   private(set) var hasOpenRouterKey: Bool
 
@@ -93,6 +97,8 @@ final class AppSettings {
     textSize = defaults.string(forKey: "textSize").flatMap(TextSize.init(rawValue:)) ?? .standard
     haptics = (defaults.object(forKey: "haptics") as? Bool) ?? true
     voiceModel = defaults.string(forKey: "voiceModel").flatMap { $0.isEmpty ? nil : $0 } ?? Self.recommendedVoiceModel
+    cleansUpDictation = (defaults.object(forKey: "cleansUpDictation") as? Bool) ?? true
+    dictationWords = defaults.stringArray(forKey: "dictationWords") ?? []
     hasOpenRouterKey = Keychain.openRouterKey()?.isEmpty == false
     refreshAppTheme()
   }

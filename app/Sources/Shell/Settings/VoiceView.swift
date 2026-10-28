@@ -1,12 +1,14 @@
 import SwiftUI
 
-/// Settings › Voice: the OpenRouter key (kept in the Keychain) and the
-/// model dictation transcribes with.
+/// Settings › Voice: the OpenRouter key (kept in the Keychain), the model
+/// dictation transcribes with, its cleanup, and the words to get right.
 struct VoiceView: View {
   @Bindable private var settings = AppSettings.shared
   @State private var key = Keychain.openRouterKey() ?? ""
   /// A model id typed in, when it is none of the listed ones.
   @State private var other: String
+  /// A word being typed into Words to Get Right.
+  @State private var word = ""
 
   struct Model: Identifiable {
     let id: String
@@ -64,11 +66,44 @@ struct VoiceView: View {
               }
           }
         }
+        ListSection("Cleanup") {
+          Toggle("Clean Up Dictation", isOn: $settings.cleansUpDictation)
+          ValueRow("Model", DictationCleanup.modelName)
+        } footer: {
+          Text("Needs a connection.").font(Chrome.font(.secondary)).foregroundStyle(Chrome.muted)
+        }
+        ListSection("Words to Get Right") {
+          ForEach(settings.dictationWords, id: \.self) { word in
+            Text(word)
+              .font(Chrome.mono(.body))
+              .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button("Remove", role: .destructive) { settings.dictationWords.removeAll { $0 == word } }
+                  .tint(Chrome.swipeBad)
+              }
+          }
+          TextField("Add a Word", text: $word, prompt: Text("Add a Word").foregroundStyle(Chrome.faint))
+            .font(Chrome.mono(.body))
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.done)
+            .onSubmit(add)
+        }
       }
       .chromeList()
     }
-    // Speech held for a bad key or model goes again once they are fixed.
-    .onDisappear { Dictation.shared.retry() }
+    .onDisappear {
+      add()
+      // Speech held for a bad key or model goes again once they are fixed.
+      Dictation.shared.retry()
+    }
+  }
+
+  /// The typed word joins the list as written, once.
+  private func add() {
+    let new = word.trimmingCharacters(in: .whitespacesAndNewlines)
+    word = ""
+    guard !new.isEmpty, !settings.dictationWords.contains(new) else { return }
+    settings.dictationWords.append(new)
   }
 
   /// The root row's value: the model's own name, or what is missing.

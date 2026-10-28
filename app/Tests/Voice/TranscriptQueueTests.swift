@@ -218,6 +218,55 @@ final class TranscriptQueueTests: XCTestCase {
     XCTAssertEqual(Set(q.takeReleasedAudio()), [file(0), file(1), file(9)])
     XCTAssertEqual(q.takeReleasedAudio(), [])
   }
+
+  /// Catches a recording that cleans up typed before its cleanup answers, a
+  /// later recording's cleanup typing ahead of an earlier one, or a cleaned
+  /// text that presses Enter: each waits for its cleaned text, in spoken
+  /// order, as one line, and its audio stays until it types.
+  func testCleanedRecordingsTypeInSpokenOrder() {
+    var q = TranscriptQueue<String>()
+    let ids = (0..<2).map { i in
+      let id = q.reserve(parts: 1, target: "t", prompt: "", cleansUp: true)[0]
+      q.setAudio(file(i), for: id)
+      return id
+    }
+    _ = q.send()
+    XCTAssertEqual(q.complete(ids[0], reply: "um one").map(\.text), [])
+    XCTAssertEqual(q.complete(ids[1], reply: "two").map(\.text), [])
+    XCTAssertEqual(q.takeCleanups(), [.init(recording: 0, text: "um one"), .init(recording: 1, text: "two")])
+    XCTAssertEqual(q.takeCleanups(), [], "each is handed out once")
+    XCTAssertEqual(q.cleaningCount, 2)
+    XCTAssertEqual(q.cleaned(1, text: "Two.").map(\.text), [])
+    XCTAssertEqual(q.takeReleasedAudio(), [], "audio kept while text is out")
+    XCTAssertEqual(q.cleaned(0, text: "One.\n\nThree.").map(\.text), ["One. Three.", "Two."])
+    XCTAssertTrue(q.isEmpty)
+    XCTAssertEqual(q.cleaningCount, 0)
+    XCTAssertEqual(Set(q.takeReleasedAudio()), [file(0), file(1)])
+  }
+
+  /// Catches a recording with nothing said held for a cleanup that never comes.
+  func testRecordingWithNothingSaidSkipsCleanup() {
+    var q = TranscriptQueue<String>()
+    let id = q.reserve(parts: 1, target: "t", prompt: "", cleansUp: true)[0]
+    q.setAudio(file(0), for: id)
+    _ = q.send()
+    XCTAssertEqual(q.complete(id, reply: " ").map(\.text), [])
+    XCTAssertTrue(q.isEmpty, "nothing waits")
+    XCTAssertEqual(q.takeCleanups(), [])
+  }
+
+  /// Catches a discarded recording's late cleanup typing.
+  func testDiscardIgnoresALateCleanup() {
+    var q = TranscriptQueue<String>()
+    let id = q.reserve(parts: 1, target: "t", prompt: "", cleansUp: true)[0]
+    q.setAudio(file(0), for: id)
+    _ = q.send()
+    _ = q.complete(id, reply: "one")
+    XCTAssertEqual(q.takeCleanups().count, 1)
+    q.discard()
+    XCTAssertEqual(q.cleaned(0, text: "One.").map(\.text), [])
+    XCTAssertEqual(q.cleaningCount, 0)
+  }
 }
 
 final class DictatedTextTests: XCTestCase {
@@ -260,6 +309,17 @@ final class OpenRouterTranscriberTests: XCTestCase {
     XCTAssertEqual(audio?["format"] as? String, "m4a")
     let options = (json["provider"] as? [String: Any])?["options"] as? [String: Any]
     XCTAssertEqual((options?["openai"] as? [String: Any])?["prompt"] as? String, "git status")
+  }
+
+  /// Catches the bug where the user's whisper-large-v3, which OpenRouter
+  /// mostly serves from DeepInfra, got no prompt: it goes under DeepInfra's
+  /// options too, and never to Together or Groq.
+  func testPromptReachesDeepInfra() {
+    let r = OpenRouterTranscriber.request(audio: Data([1]), prompt: "nstack, omp", model: "openai/whisper-large-v3", key: "k",
+                                          baseURL: OpenRouterTranscriber.defaultBaseURL)
+    let options = (body(r)["provider"] as? [String: Any])?["options"] as? [String: Any]
+    XCTAssertEqual((options?["deepinfra"] as? [String: Any])?["prompt"] as? String, "nstack, omp")
+    XCTAssertEqual(options.map { Set($0.keys) }, ["openai", "deepinfra"])
   }
 
   /// Catches an empty prompt sent (it invites the echo on silence).
@@ -785,6 +845,105 @@ final class DictationTests: XCTestCase {
     XCTAssertEqual(terminal.typed, [])
     await until("files let go") { files(in: spool).isEmpty }
     XCTAssertEqual(relaunched.state, .idle)
+  }
+
+  // MARK: - Cleanup
+
+  private func make(_ service: Service, cleanup: DictationCleanup?, words: [String] = [], spool: SpeechSpool? = nil) -> Dictation {
+    Dictation(transcriber: { service }, cleanup: { cleanup }, words: { words }, spool: spool ?? self.spool(), pasteboard: pasteboard)
+  }
+
+  private func server(_ answer: @escaping @Sendable ([String: Any]) -> ReplayServer.Reply?) async throws -> ReplayServer {
+    let server = try await ReplayServer(answer: answer)
+    addTeardownBlock { server.stop() }
+    return server
+  }
+
+  /// The transcript a cleanup request carries.
+  private nonisolated static func transcript(_ request: [String: Any]) -> String? {
+    guard let user = (request["messages"] as? [[String: Any]])?.last?["content"] as? String,
+          let data = try? JSONSerialization.jsonObject(with: Data(user.utf8)) as? [String: Any] else { return nil }
+    return data["transcript"] as? String
+  }
+
+  /// Catches speech sent to the cleanup model with cleanup off: nothing is
+  /// sent and the transcript types as it came.
+  func testCleanupOffSendsNothing() async throws {
+    let server = try await server { _ in RecordedCleanup.cleaned }
+    let dictation = make(Service(), cleanup: nil)
+    let terminal = Terminal()
+    say(["um open the readme"], into: dictation, from: terminal)
+    await until("typed") { terminal.typed == ["um open the readme"] }
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(server.requests.count, 0)
+  }
+
+  /// Catches the cleaned text not typed, typed twice, or the waiting strip
+  /// saying nothing about it: while cleanup runs the strip says "Cleaning
+  /// up", the audio is still spooled, and then the cleaned text types once.
+  func testCleanedTextTypesOnceAfterCleaningUp() async throws {
+    var reply = RecordedCleanup.cleaned
+    reply.delay = 0.5
+    let server = try await server { [reply] _ in reply }
+    let spool = spool()
+    let dictation = make(Service(), cleanup: DictationCleanup(key: "k", baseURL: server.baseURL), spool: spool)
+    let terminal = Terminal()
+    say(["Um so uh open the readme no the changelog and add a line for the n stack flag"], into: dictation, from: terminal)
+    await until("cleaning up") { dictation.state == .cleaningUp(pending: 1) }
+    XCTAssertEqual(files(in: spool).count, 1, "the audio waits until the text is typed")
+    await until("typed") { !terminal.typed.isEmpty }
+    try await Task.sleep(for: .milliseconds(200))
+    XCTAssertEqual(terminal.typed, ["Open the changelog and add a line for the nstack flag."])
+    XCTAssertEqual(server.requests.count, 1)
+    XCTAssertEqual(dictation.state, .idle)
+    await until("files let go") { files(in: spool).isEmpty }
+  }
+
+  /// Catches a cleanup failure treated as a dictation failure or losing
+  /// words: a refused key and a cleanup that never answers each type the
+  /// exact transcript, and the strip shows no failure.
+  func testCleanupFailureTypesTheTranscript() async throws {
+    for reply in [RecordedCleanup.badKey, nil] {
+      let server = try await server { _ in reply }
+      let cleanup = DictationCleanup(key: "k", baseURL: server.baseURL, deadline: .milliseconds(300))
+      let dictation = make(Service(), cleanup: cleanup)
+      let terminal = Terminal()
+      say(["um open the readme"], into: dictation, from: terminal)
+      await until("typed") { terminal.typed == ["um open the readme"] }
+      XCTAssertEqual(dictation.state, .idle)
+      XCTAssertEqual(terminal.notices, [])
+    }
+  }
+
+  /// Catches the words to get right missing from either request: they end
+  /// the transcription prompt, after the screen, and go to cleanup as its vocabulary.
+  func testWordsReachTranscriptionAndCleanup() async throws {
+    let server = try await server { _ in RecordedCleanup.cleaned }
+    let service = Service()
+    let dictation = make(service, cleanup: DictationCleanup(key: "k", baseURL: server.baseURL), words: ["nstack", "omp", "tmux", "Term"])
+    let terminal = Terminal()
+    terminal.dictationPrompt = "~/src % ls\nREADME.md"
+    say(["one"], into: dictation, from: terminal)
+    await until("typed") { terminal.typed.count == 1 }
+    XCTAssertEqual(service.prompts, ["~/src % ls\nREADME.md\nnstack, omp, tmux, Term"])
+    let user = try XCTUnwrap((server.requests.first?["messages"] as? [[String: Any]])?.last?["content"] as? String)
+    let data = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(user.utf8)) as? [String: Any])
+    XCTAssertEqual(data["vocabulary"] as? [String], ["nstack", "omp", "tmux", "Term"])
+  }
+
+  /// Catches cleaned text typed in the order cleanup answers: the first
+  /// recording's cleanup answers last but its text still types first.
+  func testCleanedRecordingsTypeInSpokenOrder() async throws {
+    let server = try await server { request in
+      let said = Self.transcript(request) ?? ""
+      let content = #"{\"text\":\"\#(said.uppercased())\"}"#
+      return ReplayServer.Reply(status: 200, body: RecordedCleanup.chat(content), delay: said == "one" ? 0.5 : 0)
+    }
+    let dictation = make(Service(), cleanup: DictationCleanup(key: "k", baseURL: server.baseURL))
+    let terminal = Terminal()
+    say(["one", "two"], into: dictation, from: terminal)
+    await until("both typed") { terminal.typed.count == 2 }
+    XCTAssertEqual(terminal.typed, ["ONE", "TWO"])
   }
 }
 

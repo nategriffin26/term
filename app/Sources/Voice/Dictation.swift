@@ -44,16 +44,18 @@ struct DictationDestination {
 /// cuts the clearly silent stretches, sets what is left to one level, cuts it
 /// at pauses into parts of a minute at most, sends it when the speech
 /// classifier hears speech anywhere in it (less any part it is sure holds
-/// none), transcribes the parts two at a time and types the recording's
-/// text once, joined in order. A recording with no speech types nothing and
-/// says so.
+/// none), transcribes the parts two at a time, cleans the recording's text
+/// up when that is on (`DictationCleanup`; the transcript itself when that
+/// fails) and types it once, joined in order. A recording with no speech
+/// types nothing and says so.
 /// Speech is never dropped for a slow or missing network: parts wait on
 /// disk, failed ones keep their place and go again on their own schedule,
 /// when the network returns, on coming back to the app, or on a tap. Text
 /// whose terminal now shows another session goes to the clipboard instead.
 @MainActor
 final class Dictation {
-  static let shared = Dictation(transcriber: Dictation.openRouter)
+  static let shared = Dictation(transcriber: Dictation.openRouter, cleanup: Dictation.openRouterCleanup,
+                                words: { AppSettings.shared.dictationWords })
 
   private(set) var state = VoiceState.idle {
     didSet { if state != oldValue { NotificationCenter.default.post(name: .voiceStateChanged, object: self) } }
@@ -67,6 +69,10 @@ final class Dictation {
   private var microphoneFailed = false
 
   private let transcriber: @MainActor () -> Transcriber?
+  /// Cleanup as Settings › Voice has it now; nil when it is off.
+  private let cleanup: @MainActor () -> DictationCleanup?
+  /// The words to get right, for the transcription prompt and cleanup.
+  private let words: @MainActor () -> [String]
   private let microphone: MicrophoneFactory
   private let startDeadline: Duration
   private let spool: SpeechSpool
@@ -105,11 +111,15 @@ final class Dictation {
   /// `startDeadline`: how long the microphone may take to start before listening
   /// fails; AudioToolbox's own limit for an audio server that stopped answering.
   init(transcriber: @escaping @MainActor () -> Transcriber?,
+       cleanup: @escaping @MainActor () -> DictationCleanup? = { nil },
+       words: @escaping @MainActor () -> [String] = { [] },
        microphone: @escaping MicrophoneFactory = { MicrophoneCapture(onSamples: $0, onFailure: $1) },
        startDeadline: Duration = .seconds(9),
        spool: SpeechSpool = SpeechSpool(directory: AppDirectories.speech),
        pasteboard: UIPasteboard = .general) {
     self.transcriber = transcriber
+    self.cleanup = cleanup
+    self.words = words
     self.microphone = microphone
     self.startDeadline = startDeadline
     self.spool = spool
@@ -132,6 +142,19 @@ final class Dictation {
 
   /// The OpenRouter key and model from Settings › Voice; nil without a key.
   static func openRouter() -> Transcriber? {
+    let (key, base) = openRouterAccess()
+    guard let key else { return nil }
+    return OpenRouterTranscriber(key: key, model: AppSettings.shared.voiceModel, baseURL: base)
+  }
+
+  /// Cleanup through the same OpenRouter key; nil when Settings › Voice turned it off.
+  static func openRouterCleanup() -> DictationCleanup? {
+    guard AppSettings.shared.cleansUpDictation else { return nil }
+    let (key, base) = openRouterAccess()
+    return DictationCleanup(key: key, baseURL: base)
+  }
+
+  private static func openRouterAccess() -> (key: String?, baseURL: URL) {
     #if targetEnvironment(simulator)
     // Simulator runs may pass these in the environment (SIMCTL_CHILD_…);
     // a device build has no way to send the key anywhere but OpenRouter.
@@ -142,8 +165,7 @@ final class Dictation {
     let key = Keychain.openRouterKey()
     let base = OpenRouterTranscriber.defaultBaseURL
     #endif
-    guard let key, !key.isEmpty else { return nil }
-    return OpenRouterTranscriber(key: key, model: AppSettings.shared.voiceModel, baseURL: base)
+    return (key?.isEmpty == false ? key : nil, base)
   }
 
   // MARK: - Listening
@@ -303,7 +325,7 @@ final class Dictation {
 
   private func reserve(parts: Int, _ destination: Destination, prompt: String) -> [Int] {
     watchNetwork()
-    let ids = queue.reserve(parts: parts, target: destination, prompt: prompt)
+    let ids = queue.reserve(parts: parts, target: destination, prompt: prompt, cleansUp: true)
     update()
     return ids
   }
@@ -323,6 +345,7 @@ final class Dictation {
       sendReady()
     } else {
       output(queue.drop(id))
+      cleanUp()
     }
     update()
   }
@@ -349,10 +372,11 @@ final class Dictation {
       return
     }
     for request in queue.send() {
+      let prompt = DictationPrompt.adding(words(), to: request.prompt)
       Task { [weak self] in
         let start = ProcessInfo.processInfo.systemUptime
         do throws(TranscriptionFailure) {
-          let text = try await transcriber.transcribe(request.audio, prompt: request.prompt) { [weak self] in
+          let text = try await transcriber.transcribe(request.audio, prompt: prompt) { [weak self] in
             Task { @MainActor in self?.waiting(request.id) }
           }
           DiagnosticLog.record(.voice, "transcribed",
@@ -372,8 +396,35 @@ final class Dictation {
 
   private func finished(_ id: Int, _ text: String) {
     output(queue.complete(id, reply: text))
+    cleanUp()
     sendReady()
     update()
+  }
+
+  /// Each recording whose text is all back goes through cleanup (or, with
+  /// it off, straight on); its text types once every earlier one's has.
+  private func cleanUp() {
+    for item in queue.takeCleanups() {
+      guard let cleanup = cleanup() else {
+        cleaned(item, DictationCleanup.Result(text: item.text, status: .off), after: .zero)
+        continue
+      }
+      let vocabulary = words()
+      Task { [weak self] in
+        let start = ContinuousClock.now
+        let result = await cleanup.clean(item.text, vocabulary: vocabulary)
+        self?.cleaned(item, result, after: ContinuousClock.now - start)
+        self?.update()
+      }
+    }
+  }
+
+  /// Logs the outcome (never the text) and types what is now ready.
+  private func cleaned(_ item: TranscriptQueue<Destination>.Cleanup, _ result: DictationCleanup.Result, after time: Duration) {
+    DiagnosticLog.record(.voice, "cleanup",
+      "status=\(result.status.rawValue) ms=\(Int(time / .milliseconds(1))) model=\(DictationCleanup.model) "
+        + "words-in=\(DictationCleanup.words(item.text)) words-out=\(DictationCleanup.words(result.text))")
+    output(queue.cleaned(item.recording, text: result.text))
   }
 
   private func failed(_ id: Int, _ failure: TranscriptionFailure) {
@@ -505,6 +556,8 @@ final class Dictation {
       state = .failed(queued: queue.count, problem: problem)
     } else if microphoneFailed {
       state = .microphoneUnavailable
+    } else if busy, judging == 0, queue.cleaningCount == queue.count {
+      state = .cleaningUp(pending: queue.count)
     } else if busy {
       state = .transcribing(pending: queue.count + judging)
     } else {

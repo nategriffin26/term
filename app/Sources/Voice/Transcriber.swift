@@ -47,8 +47,12 @@ struct OpenRouterTranscriber: Transcriber {
     return try Self.text(status: status, body: data)
   }
 
-  /// The request: the audio as base64 m4a, English, and the prompt for
-  /// OpenAI's models (OpenRouter ignores a top-level prompt; others ignore this).
+  /// The request: the audio as base64 m4a, English, and the prompt for the
+  /// providers that read one: OpenAI (gpt-4o-transcribe) and DeepInfra, which
+  /// serves most whisper-large-v3 requests (measured 2026-10-28; OpenRouter
+  /// ignores a top-level prompt and forwards only the serving provider's
+  /// options). Together and Groq, which serve the rest, get none: a long
+  /// prompt there failed one request in ten with a 400.
   static func request(audio: Data, prompt: String, model: String, key: String, baseURL: URL) -> URLRequest {
     var request = URLRequest(url: baseURL.appending(path: "audio/transcriptions"))
     request.httpMethod = "POST"
@@ -59,7 +63,9 @@ struct OpenRouterTranscriber: Transcriber {
       "input_audio": ["data": audio.base64EncodedString(), "format": "m4a"],
       "language": "en",
     ]
-    if !prompt.isEmpty { body["provider"] = ["options": ["openai": ["prompt": prompt]]] }
+    if !prompt.isEmpty {
+      body["provider"] = ["options": ["openai": ["prompt": prompt], "deepinfra": ["prompt": prompt]]]
+    }
     request.httpBody = try? JSONSerialization.data(withJSONObject: body)
     return request
   }
@@ -99,14 +105,17 @@ struct OpenRouterTranscriber: Transcriber {
 }
 
 /// What the transcriber is told a recording is about: the end of what its
-/// terminal shows, then the text last dictated into it. Paths, flags and
-/// names on the screen are then spelled the way they are written (measured:
-/// 2 of 6 invented names right without it, 5 to 6 with it, at the same speed).
+/// terminal shows, then the text last dictated into it, then the words to
+/// get right. Paths, flags and names on the screen are then spelled the way
+/// they are written (measured: 2 of 6 invented names right without it, 5 to
+/// 6 with it, at the same speed).
 enum DictationPrompt {
   /// 8,000 characters of screen: a full phone screen and then some (4,000
   /// and 16,000 character prompts were measured to cost no time).
   static let screenLength = 8_000
   static let typedLength = 200
+  /// The longest prompt with its words: as long as screen and typed text.
+  static var length: Int { screenLength + 1 + typedLength }
 
   /// The screen's last lines that fit in `screenLength`, without trailing
   /// spaces or blank lines at the end, then `typed`'s last `typedLength` characters.
@@ -130,6 +139,23 @@ enum DictationPrompt {
     }
     let shown = kept.reversed().joined(separator: "\n")
     return [shown, String(typed.suffix(typedLength))].filter { !$0.isEmpty }.joined(separator: "\n")
+  }
+
+  /// `prompt` with `words` after it on a line of their own: last, because
+  /// Whisper reads only a prompt's final 224 tokens. The prompt's earliest
+  /// lines give way so the whole stays within `length`; the words never do.
+  static func adding(_ words: [String], to prompt: String) -> String {
+    let line = words.joined(separator: ", ")
+    guard !line.isEmpty else { return prompt }
+    let room = max(length - line.count - 1, 0)
+    var kept = Substring(prompt)
+    if kept.count > room {
+      kept = kept.suffix(room)
+      // From the first whole line, unless the end is all one line.
+      let cutMidLine = prompt[..<kept.startIndex].last != "\n"
+      if cutMidLine, let newline = kept.firstIndex(of: "\n") { kept = kept[kept.index(after: newline)...] }
+    }
+    return kept.isEmpty ? line : String(kept) + "\n" + line
   }
 }
 

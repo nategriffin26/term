@@ -215,4 +215,22 @@ final class DictationPromptTests: XCTestCase {
     XCTAssertEqual(DictationPrompt.text(screen: "", typed: String(typed.prefix(200))).count, 200)
     XCTAssertEqual(DictationPrompt.text(screen: " \n\n", typed: ""), "")
   }
+
+  /// Catches the words to get right missing, cut, or pushed out by the
+  /// screen: they go last on their own line, whole, and the screen's
+  /// earliest lines give way so the prompt stays within 8,201 characters.
+  func testWordsGoLastAndTheScreenGivesWay() {
+    XCTAssertEqual(DictationPrompt.adding(["nstack", "Term"], to: "$ ls\ngit status"), "$ ls\ngit status\nnstack, Term")
+    XCTAssertEqual(DictationPrompt.adding(["nstack"], to: ""), "nstack")
+    XCTAssertEqual(DictationPrompt.adding([], to: "$ ls"), "$ ls")
+    let rest = Array(repeating: String(repeating: "b", count: 199), count: 40)
+    let full = ([String(repeating: "a", count: 200)] + rest).joined(separator: "\n")
+    XCTAssertEqual(full.count, 8_200)
+    let prompt = DictationPrompt.adding(["nstack", "omp", "tmux", "Term"], to: full)
+    XCTAssertEqual(prompt, (rest + ["nstack, omp, tmux, Term"]).joined(separator: "\n"), "the first line gave way, whole")
+    XCTAssertLessThanOrEqual(prompt.count, 8_201)
+    let line = String(repeating: "a", count: 8_300)
+    XCTAssertEqual(DictationPrompt.adding(["nstack"], to: line), String(repeating: "a", count: 8_194) + "\nnstack",
+                   "one long line keeps its end")
+  }
 }

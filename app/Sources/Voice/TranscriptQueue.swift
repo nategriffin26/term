@@ -27,11 +27,13 @@ struct TranscriptionFailure: Error, Equatable {
 
 /// Recordings in the order they were stopped, each sent as one or more
 /// parts. Parts are transcribed two at a time; a recording's text is typed
-/// once, joined in order, when all its parts are back and every earlier
+/// once, joined in order, when all its parts are back (and, for a recording
+/// that is cleaned up, its cleaned text is back) and every earlier
 /// recording's text is out, so replies that return out of order still type
 /// in order. A failed part keeps its audio and its place until it succeeds
 /// or is discarded; one that fails by itself goes again on its own schedule
 /// (2 s, then 4, 8 … up to a minute), which no other part's answer moves.
+/// A recording's audio stays spooled until its text is typed.
 struct TranscriptQueue<Target> {
   enum Status: Equatable {
     /// Waiting for its audio to be encoded and spooled.
@@ -50,6 +52,8 @@ struct TranscriptQueue<Target> {
     /// The recording the part is from.
     let recording: Int
     let target: Target
+    /// Its recording's whole text goes through cleanup before it is typed.
+    let cleansUp: Bool
     /// What the transcriber is told the part is about (`DictationPrompt`).
     let prompt: String
     /// The m4a file the part is spooled to.
@@ -74,6 +78,12 @@ struct TranscriptQueue<Target> {
     let text: String
   }
 
+  /// A recording's whole text, ready for cleanup.
+  struct Cleanup: Equatable {
+    let recording: Int
+    let text: String
+  }
+
   /// Requests in flight at once; the rest wait their turn in order.
   static var slots: Int { 2 }
 
@@ -82,6 +92,10 @@ struct TranscriptQueue<Target> {
   private var nextRecording = 0
   /// Spool files of parts no longer queued, for the owner to delete.
   private var released: [URL] = []
+  /// Recordings handed out for cleanup, until they are typed.
+  private var cleaning: Set<Int> = []
+  /// Their cleaned text, once it is back.
+  private var cleaned: [Int: String] = [:]
 
   var isEmpty: Bool { entries.isEmpty }
   /// Recordings not typed yet.
@@ -93,6 +107,8 @@ struct TranscriptQueue<Target> {
     }
     return count
   }
+  /// Recordings whose text is out for cleanup, or cleaned and waiting for an earlier recording.
+  var cleaningCount: Int { cleaning.count }
 
   /// Why the queue is stuck, if it is: the first failed or offline part's problem.
   var problem: VoiceProblem? {
@@ -112,11 +128,11 @@ struct TranscriptQueue<Target> {
   }
 
   /// Holds a recording's place in order before its parts' audio is ready; returns the parts' ids.
-  mutating func reserve(parts: Int, target: Target, prompt: String) -> [Int] {
+  mutating func reserve(parts: Int, target: Target, prompt: String, cleansUp: Bool = false) -> [Int] {
     defer { nextRecording += 1 }
     return (0..<parts).map { _ in
       defer { nextID += 1 }
-      entries.append(Entry(id: nextID, recording: nextRecording, target: target, prompt: prompt))
+      entries.append(Entry(id: nextID, recording: nextRecording, target: target, cleansUp: cleansUp, prompt: prompt))
       return nextID
     }
   }
@@ -163,6 +179,30 @@ struct TranscriptQueue<Target> {
     return popReady()
   }
 
+  /// Recordings that clean up and whose parts are all back, each handed out once.
+  mutating func takeCleanups() -> [Cleanup] {
+    var cleanups: [Cleanup] = []
+    var start = entries.startIndex
+    while start < entries.endIndex {
+      let recording = entries[start].recording
+      let end = entries[start...].firstIndex { $0.recording != recording } ?? entries.endIndex
+      if entries[start].cleansUp, !cleaning.contains(recording), let text = Self.text(of: entries[start..<end]), !text.isEmpty {
+        cleaning.insert(recording)
+        cleanups.append(Cleanup(recording: recording, text: text))
+      }
+      start = end
+    }
+    return cleanups
+  }
+
+  /// A recording's text back from cleanup (the transcript itself when cleanup
+  /// failed); returns every recording now ready to type, in order.
+  mutating func cleaned(_ recording: Int, text: String) -> [Typed] {
+    guard cleaning.contains(recording) else { return [] }
+    cleaned[recording] = DictatedText.clean(text)
+    return popReady()
+  }
+
   /// A failed request at `now`. One that clears up by itself goes again
   /// after 2 s, doubling with each failure in a row, up to a minute.
   mutating func fail(_ id: Int, _ failure: TranscriptionFailure, at now: ContinuousClock.Instant) {
@@ -202,6 +242,8 @@ struct TranscriptQueue<Target> {
   mutating func discard() {
     released += entries.compactMap(\.audio)
     entries.removeAll()
+    cleaning.removeAll()
+    cleaned.removeAll()
   }
 
   /// Gives up one part (its audio could not be encoded); returns what can now be typed.
@@ -218,21 +260,36 @@ struct TranscriptQueue<Target> {
     return released
   }
 
-  /// The first recordings whose parts are all back, as one text each.
+  /// The first recordings whose text is ready, as one text each: all parts
+  /// back, and cleaned if the recording cleans up and has any text.
   private mutating func popReady() -> [Typed] {
     var ready: [Typed] = []
     while let first = entries.first {
       let parts = entries.prefix { $0.recording == first.recording }
-      var text = ""
-      for part in parts {
-        guard case .done(let said) = part.status else { return ready }
-        if !said.isEmpty { text += DictatedText.typed(said, continuing: !text.isEmpty) }
+      guard var text = Self.text(of: parts) else { return ready }
+      if cleaning.contains(first.recording) {
+        guard let done = cleaned[first.recording] else { return ready }
+        text = done
+      } else if first.cleansUp, !text.isEmpty {
+        return ready
       }
       released += parts.compactMap(\.audio)
       entries.removeFirst(parts.count)
+      cleaning.remove(first.recording)
+      cleaned[first.recording] = nil
       if !text.isEmpty { ready.append(Typed(target: first.target, text: text)) }
     }
     return ready
+  }
+
+  /// A recording's parts joined in order, or nil while any is not back.
+  private static func text(of parts: ArraySlice<Entry>) -> String? {
+    var text = ""
+    for part in parts {
+      guard case .done(let said) = part.status else { return nil }
+      if !said.isEmpty { text += DictatedText.typed(said, continuing: !text.isEmpty) }
+    }
+    return text
   }
 
   private func index(_ id: Int) -> Int? { entries.firstIndex { $0.id == id } }

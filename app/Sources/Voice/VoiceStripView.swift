@@ -7,6 +7,8 @@ enum VoiceState: Equatable, Sendable {
   case listening(HeardLevels)
   /// Not listening; `pending` recordings are still being transcribed.
   case transcribing(pending: Int)
+  /// Not listening; every recording left is transcribed and its text is being cleaned up.
+  case cleaningUp(pending: Int)
   /// Not listening; `queued` recordings wait behind a failure.
   case failed(queued: Int, problem: VoiceProblem)
   /// Not listening: the microphone did not start, or stopped by itself.
@@ -42,8 +44,8 @@ enum VoiceNote: Equatable, Sendable {
 /// The mic key and the free middle of the Smart Keys bar, as one (Trace,
 /// the direction the user picked). Listening lights the mic key like a
 /// locked modifier and scrolls a trace of the voice through the middle in
-/// the text colour (`LevelTape`); transcribing flattens it to dots with a
-/// light passing across; a failure shows its glyph and the queued count in
+/// the text colour (`LevelTape`); transcribing and cleaning up flatten it to
+/// dots with a light passing across; a failure shows its glyph and the queued count in
 /// the error colour; a note ("Copied", "No speech") shows its glyph and
 /// words in the text colour for a moment. Tapping a failure retries, or
 /// opens Settings › Voice when it is fixed there; the close button discards
@@ -164,6 +166,8 @@ final class VoiceStripView: UIView {
       status.accessibilityLabel = "Listening"
     case .transcribing(let pending):
       status.accessibilityLabel = pending > 1 ? "Transcribing \(pending) recordings" : "Transcribing"
+    case .cleaningUp(let pending):
+      status.accessibilityLabel = pending > 1 ? "Cleaning up \(pending) recordings" : "Cleaning up"
     case .failed(let queued, let problem):
       icon.image = UIImage(systemName: Self.symbol(for: problem),
                            withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
@@ -276,7 +280,7 @@ final class VoiceStripView: UIView {
     var listening = false, waiting = false, failed = false
     switch state {
     case .listening: listening = true
-    case .transcribing: waiting = true
+    case .transcribing, .cleaningUp: waiting = true
     case .failed, .microphoneUnavailable: failed = true
     case .idle: break
     }
