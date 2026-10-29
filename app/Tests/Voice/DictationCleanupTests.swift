@@ -142,4 +142,25 @@ final class DictationSettingsTests: XCTestCase {
     XCTAssertEqual(relaunched.dictationWords, ["nstack", "omp", "Term"])
     XCTAssertFalse(relaunched.cleansUpDictation)
   }
+
+  /// Catches a stored Whisper or GPT-4o model (the user's was
+  /// openai/whisper-large-v3) kept after the update: it becomes GPT
+  /// Transcribe at launch and stays so; a model the user typed into Other
+  /// that is still offered stays, and a fresh install starts on GPT Transcribe.
+  func testStoredRetiredModelMovesToTheDefault() throws {
+    let name = "voice-model-\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+    addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+    XCTAssertEqual(AppSettings(defaults: defaults).voiceModel, "openai/gpt-transcribe")
+    for retired in ["openai/whisper-large-v3", "openai/whisper-large-v3-turbo", "openai/gpt-4o-transcribe",
+                    "openai/gpt-4o-mini-transcribe"] {
+      defaults.set(retired, forKey: "voiceModel")
+      XCTAssertEqual(AppSettings(defaults: defaults).voiceModel, "openai/gpt-transcribe", retired)
+      XCTAssertEqual(defaults.string(forKey: "voiceModel"), "openai/gpt-transcribe", "\(retired) moved for good")
+    }
+    for kept in ["assemblyai/universal-3-6-pro", "mistralai/voxtral-mini-transcribe-3-0"] {
+      defaults.set(kept, forKey: "voiceModel")
+      XCTAssertEqual(AppSettings(defaults: defaults).voiceModel, kept)
+    }
+  }
 }

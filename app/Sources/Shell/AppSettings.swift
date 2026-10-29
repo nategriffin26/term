@@ -63,13 +63,10 @@ final class AppSettings {
   var voiceModel: String { didSet { store(voiceModel, "voiceModel") } }
   /// Dictation goes through `DictationCleanup` before it is typed (Settings › Voice).
   var cleansUpDictation: Bool { didSet { store(cleansUpDictation, "cleansUpDictation") } }
-  /// Words dictation spells exactly as written here, for the transcription prompt and cleanup (Settings › Voice).
+  /// Words dictation spells exactly as written here, for transcription and cleanup (Settings › Voice).
   var dictationWords: [String] { didSet { store(dictationWords, "dictationWords") } }
   /// Whether the Keychain holds an OpenRouter key; set it through `setOpenRouterKey`.
   private(set) var hasOpenRouterKey: Bool
-
-  /// The most accurate on commands, paths and flags (measured: a 30 s recording in about 2 s).
-  static let recommendedVoiceModel = "openai/gpt-4o-transcribe"
 
   @ObservationIgnored private let defaults: UserDefaults
 
@@ -96,7 +93,10 @@ final class AppSettings {
     glassStyle = defaults.string(forKey: "glassStyle").flatMap(GlassStyle.init(rawValue:)) ?? .tinted
     textSize = defaults.string(forKey: "textSize").flatMap(TextSize.init(rawValue:)) ?? .standard
     haptics = (defaults.object(forKey: "haptics") as? Bool) ?? true
-    voiceModel = defaults.string(forKey: "voiceModel").flatMap { $0.isEmpty ? nil : $0 } ?? Self.recommendedVoiceModel
+    let storedModel = defaults.string(forKey: "voiceModel").flatMap { $0.isEmpty ? nil : $0 }
+    let model = storedModel.flatMap { VoiceModel.isRetired($0) ? nil : $0 } ?? VoiceModel.recommended.id
+    if let storedModel, storedModel != model { defaults.set(model, forKey: "voiceModel") }
+    voiceModel = model
     cleansUpDictation = (defaults.object(forKey: "cleansUpDictation") as? Bool) ?? true
     dictationWords = defaults.stringArray(forKey: "dictationWords") ?? []
     hasOpenRouterKey = Keychain.openRouterKey()?.isEmpty == false

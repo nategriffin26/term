@@ -13,7 +13,7 @@ final class TranscriptQueueTests: XCTestCase {
   private func queue(_ count: Int) -> (TranscriptQueue<String>, [Int]) {
     var q = TranscriptQueue<String>()
     let ids = (0..<count).map { i in
-      let id = q.reserve(parts: 1, target: "t", prompt: "")[0]
+      let id = q.reserve(parts: 1, target: "t")[0]
       q.setAudio(file(i), for: id)
       return id
     }
@@ -25,7 +25,7 @@ final class TranscriptQueueTests: XCTestCase {
   /// order: nothing types until every part is back, then one text, in order.
   func testRecordingTypesOnceWithItsPartsInOrder() {
     var q = TranscriptQueue<String>()
-    let ids = q.reserve(parts: 3, target: "t", prompt: "")
+    let ids = q.reserve(parts: 3, target: "t")
     for (i, id) in ids.enumerated() { q.setAudio(file(i), for: id) }
     XCTAssertEqual(q.count, 1, "one recording")
     XCTAssertEqual(q.send().map(\.id), [ids[0], ids[1]])
@@ -41,8 +41,8 @@ final class TranscriptQueueTests: XCTestCase {
   /// and a recording with nothing said typing an empty text.
   func testEmptyPartsAreSkippedInTheJoin() {
     var q = TranscriptQueue<String>()
-    let said = q.reserve(parts: 3, target: "t", prompt: "")
-    let nothing = q.reserve(parts: 2, target: "t", prompt: "")
+    let said = q.reserve(parts: 3, target: "t")
+    let nothing = q.reserve(parts: 2, target: "t")
     for (i, id) in (said + nothing).enumerated() { q.setAudio(file(i), for: id) }
     for _ in 0..<3 { _ = q.send() }
     XCTAssertEqual(q.complete(said[0], reply: "one").map(\.text), [])
@@ -59,8 +59,8 @@ final class TranscriptQueueTests: XCTestCase {
   /// failed part, or a failed part dropping its recording's other text.
   func testFailedPartHoldsItsRecordingAndLaterOnes() {
     var q = TranscriptQueue<String>()
-    let first = q.reserve(parts: 2, target: "t", prompt: "")
-    let second = q.reserve(parts: 1, target: "t", prompt: "")
+    let first = q.reserve(parts: 2, target: "t")
+    let second = q.reserve(parts: 1, target: "t")
     for (i, id) in (first + second).enumerated() { q.setAudio(file(i), for: id) }
     XCTAssertEqual(q.count, 2)
     _ = q.send()
@@ -73,17 +73,6 @@ final class TranscriptQueueTests: XCTestCase {
     q.retry(all: false)
     XCTAssertEqual(q.send().map(\.id), [first[1]])
     XCTAssertEqual(q.complete(first[1], reply: "b").map(\.text), ["a b", "c"])
-  }
-
-  /// Catches a part sent with another recording's prompt, or none.
-  func testEachPartCarriesItsRecordingsPrompt() {
-    var q = TranscriptQueue<String>()
-    let first = q.reserve(parts: 2, target: "t", prompt: "~/src % git status")
-    let second = q.reserve(parts: 1, target: "t", prompt: "")
-    for (i, id) in (first + second).enumerated() { q.setAudio(file(i), for: id) }
-    XCTAssertEqual(q.send().map(\.prompt), ["~/src % git status", "~/src % git status"])
-    _ = q.complete(first[0], reply: "a")
-    XCTAssertEqual(q.send().map(\.prompt), [""])
   }
 
   /// Catches typing in reply order: later recordings wait for every earlier one.
@@ -130,11 +119,11 @@ final class TranscriptQueueTests: XCTestCase {
   func testAtMostTwoInFlightInSpokenOrder() {
     var q = TranscriptQueue<String>()
     let ids = (0..<4).map { i in
-      let id = q.reserve(parts: 1, target: "t", prompt: "")[0]
+      let id = q.reserve(parts: 1, target: "t")[0]
       q.setAudio(file(i), for: id)
       return id
     }
-    let encoding = q.reserve(parts: 1, target: "t", prompt: "")[0]
+    let encoding = q.reserve(parts: 1, target: "t")[0]
     XCTAssertEqual(q.send().map(\.id), [ids[0], ids[1]])
     XCTAssertEqual(q.send().map(\.id), [])
     q.waiting(ids[0])
@@ -210,7 +199,7 @@ final class TranscriptQueueTests: XCTestCase {
   /// (a part still encoding when the queue was discarded included).
   func testDiscardForgetsRecordingsAndLetsTheirFilesGo() {
     var (q, ids) = queue(2)
-    let encoding = q.reserve(parts: 1, target: "t", prompt: "")[0]
+    let encoding = q.reserve(parts: 1, target: "t")[0]
     q.discard()
     XCTAssertEqual(q.complete(ids[0], reply: "late").map(\.text), [])
     XCTAssertTrue(q.isEmpty)
@@ -226,7 +215,7 @@ final class TranscriptQueueTests: XCTestCase {
   func testCleanedRecordingsTypeInSpokenOrder() {
     var q = TranscriptQueue<String>()
     let ids = (0..<2).map { i in
-      let id = q.reserve(parts: 1, target: "t", prompt: "", cleansUp: true)[0]
+      let id = q.reserve(parts: 1, target: "t", cleansUp: true)[0]
       q.setAudio(file(i), for: id)
       return id
     }
@@ -247,7 +236,7 @@ final class TranscriptQueueTests: XCTestCase {
   /// Catches a recording with nothing said held for a cleanup that never comes.
   func testRecordingWithNothingSaidSkipsCleanup() {
     var q = TranscriptQueue<String>()
-    let id = q.reserve(parts: 1, target: "t", prompt: "", cleansUp: true)[0]
+    let id = q.reserve(parts: 1, target: "t", cleansUp: true)[0]
     q.setAudio(file(0), for: id)
     _ = q.send()
     XCTAssertEqual(q.complete(id, reply: " ").map(\.text), [])
@@ -258,7 +247,7 @@ final class TranscriptQueueTests: XCTestCase {
   /// Catches a discarded recording's late cleanup typing.
   func testDiscardIgnoresALateCleanup() {
     var q = TranscriptQueue<String>()
-    let id = q.reserve(parts: 1, target: "t", prompt: "", cleansUp: true)[0]
+    let id = q.reserve(parts: 1, target: "t", cleansUp: true)[0]
     q.setAudio(file(0), for: id)
     _ = q.send()
     _ = q.complete(id, reply: "one")
@@ -291,42 +280,56 @@ final class OpenRouterTranscriberTests: XCTestCase {
     (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any] ?? [:]
   }
 
-  /// Catches a request OpenRouter rejects or ignores: the measured shape (m4a base64,
-  /// English, the prompt under provider.options.openai, never top-level).
+  /// Catches a request OpenRouter rejects: the measured shape (m4a base64,
+  /// English, the words in the model's field), and nothing else top-level.
   func testRequestShape() {
-    let r = OpenRouterTranscriber.request(audio: Data([1, 2, 3]), prompt: "git status", model: "openai/gpt-4o-transcribe",
+    let r = OpenRouterTranscriber.request(audio: Data([1, 2, 3]), words: ["nstack", "omp"], model: "openai/gpt-transcribe",
                                           key: "k", baseURL: OpenRouterTranscriber.defaultBaseURL)
     XCTAssertEqual(r.url?.absoluteString, "https://openrouter.ai/api/v1/audio/transcriptions")
     XCTAssertEqual(r.httpMethod, "POST")
     XCTAssertEqual(r.value(forHTTPHeaderField: "Authorization"), "Bearer k")
     XCTAssertEqual(r.value(forHTTPHeaderField: "Content-Type"), "application/json")
     let json = body(r)
-    XCTAssertEqual(json["model"] as? String, "openai/gpt-4o-transcribe")
+    XCTAssertEqual(Set(json.keys), ["model", "input_audio", "language", "provider"])
+    XCTAssertEqual(json["model"] as? String, "openai/gpt-transcribe")
     XCTAssertEqual(json["language"] as? String, "en")
-    XCTAssertNil(json["prompt"])
     let audio = json["input_audio"] as? [String: Any]
     XCTAssertEqual(audio?["data"] as? String, "AQID")
     XCTAssertEqual(audio?["format"] as? String, "m4a")
-    let options = (json["provider"] as? [String: Any])?["options"] as? [String: Any]
-    XCTAssertEqual((options?["openai"] as? [String: Any])?["prompt"] as? String, "git status")
   }
 
-  /// Catches the bug where the user's whisper-large-v3, which OpenRouter
-  /// mostly serves from DeepInfra, got no prompt: it goes under DeepInfra's
-  /// options too, and never to Together or Groq.
-  func testPromptReachesDeepInfra() {
-    let r = OpenRouterTranscriber.request(audio: Data([1]), prompt: "nstack, omp", model: "openai/whisper-large-v3", key: "k",
-                                          baseURL: OpenRouterTranscriber.defaultBaseURL)
-    let options = (body(r)["provider"] as? [String: Any])?["options"] as? [String: Any]
-    XCTAssertEqual((options?["deepinfra"] as? [String: Any])?["prompt"] as? String, "nstack, omp")
-    XCTAssertEqual(options.map { Set($0.keys) }, ["openai", "deepinfra"])
+  /// Catches the words sent where a model ignores them: top-level (OpenRouter
+  /// drops it, or answers 400), or under another provider. Each model's
+  /// field as measured on 2026-10-28, and MAI's audio as FLAC (it refuses m4a).
+  func testWordsGoInEachModelsOwnField() {
+    let words = ["nstack", "omp"]
+    let expected: [String: (options: NSDictionary, format: String)] = [
+      "openai/gpt-transcribe": (["openai": ["keywords": words]], "m4a"),
+      "assemblyai/universal-3-6-pro": (["assemblyai": ["keyterms_prompt": words]], "m4a"),
+      "elevenlabs/scribe-v2": (["elevenlabs": ["keyterms": words]], "m4a"),
+      "microsoft/mai-transcribe-2": (["azure": ["phraseList": ["phrases": words]]], "flac"),
+    ]
+    XCTAssertEqual(Set(VoiceModel.menu.map(\.id)), Set(expected.keys))
+    for (model, want) in expected {
+      let json = body(OpenRouterTranscriber.request(audio: Data([1]), words: words, model: model, key: "k",
+                                                    baseURL: OpenRouterTranscriber.defaultBaseURL))
+      XCTAssertEqual(Set(json.keys), ["model", "input_audio", "language", "provider"], model)
+      let provider = json["provider"] as? [String: Any]
+      XCTAssertEqual(provider.map { Set($0.keys) }, ["options"], model)
+      XCTAssertEqual(provider?["options"] as? NSDictionary, want.options, model)
+      XCTAssertEqual((json["input_audio"] as? [String: Any])?["format"] as? String, want.format, model)
+    }
   }
 
-  /// Catches an empty prompt sent (it invites the echo on silence).
-  func testNoPromptWithoutContext() {
-    let r = OpenRouterTranscriber.request(audio: Data([1]), prompt: "", model: "m", key: "k",
-                                          baseURL: OpenRouterTranscriber.defaultBaseURL)
-    XCTAssertNil(body(r)["provider"])
+  /// Catches an empty list sent, or a guessed field for a model typed into
+  /// Other: neither carries provider options.
+  func testNoOptionsWithoutWordsOrAKnownField() {
+    let cases: [(words: [String], model: String)] = [([], "openai/gpt-transcribe"), (["nstack"], "mistralai/voxtral-mini-transcribe-3-0")]
+    for (words, model) in cases {
+      let json = body(OpenRouterTranscriber.request(audio: Data([1]), words: words, model: model, key: "k",
+                                                    baseURL: OpenRouterTranscriber.defaultBaseURL))
+      XCTAssertEqual(Set(json.keys), ["model", "input_audio", "language"], model)
+    }
   }
 
   /// Replies as OpenRouter sends them (recorded 2026-10-26, ids removed).
@@ -373,6 +376,30 @@ final class OpenRouterTranscriberTests: XCTestCase {
     XCTAssertEqual(peak, 0.3, accuracy: 0.1, "the samples survive, not just the header")
     XCTAssertThrowsError(try SpeechAudio.m4a([]))
   }
+
+  /// Catches MAI-Transcribe 2 (which refuses m4a) sent audio it cannot read:
+  /// a spooled m4a becomes real FLAC that still decodes to its second of audio.
+  func testSpooledSpeechConvertsToFLAC() throws {
+    let second = (0..<16_000).map { sinf(Float($0) * 0.1) * 0.3 }
+    let m4a = FileManager.default.temporaryDirectory.appending(path: "spooled-\(UUID().uuidString).m4a")
+    let flac = FileManager.default.temporaryDirectory.appending(path: "decoded-\(UUID().uuidString).flac")
+    defer {
+      try? FileManager.default.removeItem(at: m4a)
+      try? FileManager.default.removeItem(at: flac)
+    }
+    try SpeechAudio.m4a(second[...]).write(to: m4a)
+    let data = try SpeechAudio.flac(fromM4A: m4a)
+    XCTAssertEqual(String(decoding: data[0..<4], as: UTF8.self), "fLaC")
+    try data.write(to: flac)
+    let file = try AVAudioFile(forReading: flac)
+    XCTAssertEqual(file.fileFormat.sampleRate, 16_000)
+    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 20_000))
+    try file.read(into: buffer)
+    XCTAssertEqual(Double(buffer.frameLength), 16_000, accuracy: 1_100)
+    let channel = try XCTUnwrap(buffer.floatChannelData)[0]
+    let peak = (0..<Int(buffer.frameLength)).map { abs(channel[$0]) }.max() ?? 0
+    XCTAssertEqual(peak, 0.3, accuracy: 0.1, "the samples survive, not just the header")
+  }
 }
 
 /// The pipeline end to end with a fake service: a local fake of our own seam, failing on demand.
@@ -382,7 +409,6 @@ final class DictationTests: XCTestCase {
     static let host = UUID()
     var typed: [String] = []
     var notices: [String] = []
-    var dictationPrompt = ""
     /// A tab showing tmux session "main" on a host, unless a test moves it.
     var dictationDestination: DictationDestination? = DictationDestination(host: Terminal.host, tmuxSession: "main")
     func typeDictation(_ text: String) { typed.append(text) }
@@ -392,14 +418,15 @@ final class DictationTests: XCTestCase {
 
   /// Answers with `reply(audio)` (the audio's bytes as text unless a test says
   /// otherwise) after `delay(text)`, or fails while `failure` is set or
-  /// `fails(text)` says so. Counts calls per text and the most at once.
+  /// `fails(text)` says so. Counts calls per text, the most at once, and pre-warms.
   private final class Service: Transcriber, @unchecked Sendable {
     let lock = NSLock()
     private var _failure: TranscriptionFailure?
     private var _calls: [String] = []
-    private var _prompts: [String] = []
+    private var _words: [[String]] = []
     private var _inFlight = 0
     private var _mostInFlight = 0
+    private var _prewarms = 0
     var delay: @Sendable (String) -> Double = { _ in 0 }
     var reply: @Sendable (Data) -> String = { String(decoding: $0, as: UTF8.self) }
     var fails: @Sendable (String) -> TranscriptionFailure? = { _ in nil }
@@ -409,29 +436,39 @@ final class DictationTests: XCTestCase {
     }
     var calls: Int { lock.withLock { _calls.count } }
     func calls(_ text: String) -> Int { lock.withLock { _calls.filter { $0 == text }.count } }
-    var prompts: [String] { lock.withLock { _prompts } }
+    var words: [[String]] { lock.withLock { _words } }
     var mostInFlight: Int { lock.withLock { _mostInFlight } }
+    var prewarms: Int { lock.withLock { _prewarms } }
 
-    func transcribe(_ audio: URL, prompt: String,
-                    waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> String {
-      let text = reply((try? Data(contentsOf: audio)) ?? Data())
+    func prewarm() {
+      lock.withLock { _prewarms += 1 }
+    }
+
+    func transcribe(_ audio: URL, words: [String],
+                    waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> Transcript {
+      let data = (try? Data(contentsOf: audio)) ?? Data()
+      let text = reply(data)
       lock.withLock {
         _calls.append(text)
-        _prompts.append(prompt)
+        _words.append(words)
         _inFlight += 1
         _mostInFlight = max(_mostInFlight, _inFlight)
       }
       try? await Task.sleep(for: .seconds(delay(text)))
       lock.withLock { _inFlight -= 1 }
       if let failure = failure ?? fails(text) { throw failure }
-      return text
+      return Transcript(text: text, model: "test", bytes: data.count, milliseconds: 0, status: 200, provider: nil)
     }
   }
 
   /// A microphone the test speaks into.
   private final class TestMicrophone: Microphone {
     var onSamples: (@Sendable ([Float]) -> Void)?
-    func start(_ done: @escaping @MainActor @Sendable (Error?) -> Void) { MainActor.assumeIsolated { done(nil) } }
+    private(set) var started = false
+    func start(_ done: @escaping @MainActor @Sendable (Error?) -> Void) {
+      started = true
+      MainActor.assumeIsolated { done(nil) }
+    }
     func stop() {}
   }
 
@@ -484,8 +521,7 @@ final class DictationTests: XCTestCase {
 
   /// Catches the bug the user reported: text generated while they are still
   /// talking. Two sentences with a pause between send nothing while
-  /// listening; stopping sends the recording once, with the terminal's
-  /// screen as its prompt, and types it once.
+  /// listening; stopping sends the recording once and types it once.
   func testNothingIsSentWhileRecordingAndTheTextTypesOnceAfterStop() async throws {
     let service = Service()
     service.reply = { _ in "Open the config, then run the tests." }
@@ -500,14 +536,12 @@ final class DictationTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(500))
     XCTAssertEqual(service.calls, 0, "sent while recording")
     XCTAssertEqual(terminal.typed, [])
-    terminal.dictationPrompt = "~/src % ls\nkubeconfig.yaml  zxq-deploy.sh"
     dictation.stop()
     XCTAssertEqual(dictation.state, .transcribing(pending: 1), "transcribing shows from the stop")
     await until("typed after stop") { !terminal.typed.isEmpty }
     try await Task.sleep(for: .milliseconds(300))
     XCTAssertEqual(terminal.typed, ["Open the config, then run the tests."])
     XCTAssertEqual(service.calls, 1)
-    XCTAssertEqual(service.prompts, ["~/src % ls\nkubeconfig.yaml  zxq-deploy.sh"])
     XCTAssertEqual(dictation.state, .idle)
   }
 
@@ -558,16 +592,82 @@ final class DictationTests: XCTestCase {
     XCTAssertEqual(terminal.typed, ["part part"])
   }
 
-  /// Catches a request sent without the terminal's screen, which spells
-  /// the names on it right (measured: 2 of 6 names without, 5 to 6 with).
-  func testRequestCarriesTheTerminalsPrompt() async {
-    let service = Service()
-    let dictation = make(service)
+  /// Dictation through the app's own request code to a server replaying
+  /// what OpenRouter answered.
+  private func make(model: String, server: ReplayServer, words: [String] = [], microphone: TestMicrophone? = nil) -> Dictation {
+    let transcriber = OpenRouterTranscriber(key: "k", model: model, baseURL: server.baseURL)
+    return Dictation(transcriber: { transcriber }, words: { words }, microphone: { onSamples, _ in
+      let microphone = microphone ?? TestMicrophone()
+      microphone.onSamples = onSamples
+      return microphone
+    }, spool: spool(), pasteboard: pasteboard)
+  }
+
+  /// Catches the words to get right sent where the model ignores them: for
+  /// GPT Transcribe and Universal-3.6 Pro each request carries them in that
+  /// model's own field only, and the recorded reply types.
+  func testWordsReachEachModelsFieldFromTheApp() async throws {
+    let words = ["omp", "Dictation.swift"]
+    let cases: [(model: String, reply: ReplayServer.Reply, options: NSDictionary, typed: String)] = [
+      ("openai/gpt-transcribe", RecordedTranscription.gptTranscribe, ["openai": ["keywords": words]],
+       "Okay, so in omp, open app slash Sources slash Voice slash Dictation.swift, and tell me what the stop function does."),
+      ("assemblyai/universal-3-6-pro", RecordedTranscription.universal, ["assemblyai": ["keyterms_prompt": words]],
+       "Okay, so in ompa, open app/sources/voice/dictation.swift and tell me what the stop function does."),
+    ]
+    for test in cases {
+      let reply = test.reply
+      let server = try await server { _ in reply }
+      let dictation = make(model: test.model, server: server, words: words)
+      let terminal = Terminal()
+      say(["one"], into: dictation, from: terminal)
+      await until("typed") { !terminal.typed.isEmpty }
+      XCTAssertEqual(terminal.typed, [test.typed], test.model)
+      let request = try XCTUnwrap(server.requests.first, test.model)
+      XCTAssertEqual(Set(request.keys), ["model", "input_audio", "language", "provider"], test.model)
+      XCTAssertEqual((request["provider"] as? [String: Any])?["options"] as? NSDictionary, test.options, test.model)
+    }
+  }
+
+  /// Catches the terminal's screen (or any prompt) sent with the audio: the
+  /// request holds the model, the audio, the language and the words, and
+  /// nothing called a prompt at any depth.
+  func testNoScreenPromptIsSent() async throws {
+    let server = try await server { _ in RecordedTranscription.gptTranscribe }
+    let dictation = make(model: "openai/gpt-transcribe", server: server, words: ["omp"])
     let terminal = Terminal()
-    terminal.dictationPrompt = "~/src % ls\nkubeconfig.yaml  zxq-deploy.sh"
     say(["one"], into: dictation, from: terminal)
-    await until("typed") { terminal.typed == ["one"] }
-    XCTAssertEqual(service.prompts, ["~/src % ls\nkubeconfig.yaml  zxq-deploy.sh"])
+    await until("typed") { !terminal.typed.isEmpty }
+    let request = try XCTUnwrap(server.requests.first)
+    func keys(_ value: Any) -> [String] {
+      guard let object = value as? [String: Any] else { return [] }
+      return object.flatMap { [$0.key] + keys($0.value) }
+    }
+    XCTAssertEqual(Set(keys(request)), ["model", "input_audio", "data", "format", "language", "provider", "options", "openai", "keywords"])
+  }
+
+  /// Catches a pre-warm that holds up the microphone, goes more than once a
+  /// recording, or never goes: with the pre-warm never answered, listening
+  /// and the microphone start at once, one GET of the key goes per
+  /// recording, and the recording still transcribes and types.
+  func testPrewarmGoesOncePerRecordingWithoutHoldingTheStart() async throws {
+    // The pre-warm's GET has no body; it is never answered.
+    let server = try await server { request in request.isEmpty ? nil : RecordedTranscription.gptTranscribe }
+    let microphone = TestMicrophone()
+    let dictation = make(model: "openai/gpt-transcribe", server: server, microphone: microphone)
+    let terminal = Terminal()
+    let said = try await TestAudio.speech("Open the config.")
+    for recording in 1...2 {
+      dictation.listen(into: terminal)
+      XCTAssertTrue(microphone.started, "the microphone started without waiting")
+      XCTAssertTrue(dictation.isListening)
+      await speak(TestAudio.room(seconds: 1) + said + TestAudio.room(seconds: 1), into: microphone, of: dictation)
+      dictation.stop()
+      await until("typed") { terminal.typed.count == recording }
+      try await Task.sleep(for: .milliseconds(300))
+      let lines = server.requestLines
+      XCTAssertEqual(lines.filter { $0 == "GET /api/v1/key" }.count, recording, "one pre-warm per recording")
+      XCTAssertEqual(lines.filter { $0 == "POST /api/v1/audio/transcriptions" }.count, recording)
+    }
   }
 
   /// Catches a one-word answer trimmed away as room or dropped before the
@@ -915,17 +1015,16 @@ final class DictationTests: XCTestCase {
     }
   }
 
-  /// Catches the words to get right missing from either request: they end
-  /// the transcription prompt, after the screen, and go to cleanup as its vocabulary.
+  /// Catches the words to get right missing from either request: they go
+  /// to transcription and to cleanup as its vocabulary.
   func testWordsReachTranscriptionAndCleanup() async throws {
     let server = try await server { _ in RecordedCleanup.cleaned }
     let service = Service()
     let dictation = make(service, cleanup: DictationCleanup(key: "k", baseURL: server.baseURL), words: ["nstack", "omp", "tmux", "Term"])
     let terminal = Terminal()
-    terminal.dictationPrompt = "~/src % ls\nREADME.md"
     say(["one"], into: dictation, from: terminal)
     await until("typed") { terminal.typed.count == 1 }
-    XCTAssertEqual(service.prompts, ["~/src % ls\nREADME.md\nnstack, omp, tmux, Term"])
+    XCTAssertEqual(service.words, [["nstack", "omp", "tmux", "Term"]])
     let user = try XCTUnwrap((server.requests.first?["messages"] as? [[String: Any]])?.last?["content"] as? String)
     let data = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(user.utf8)) as? [String: Any])
     XCTAssertEqual(data["vocabulary"] as? [String], ["nstack", "omp", "tmux", "Term"])
@@ -970,7 +1069,7 @@ final class DictationTests: XCTestCase {
   }
 
   /// Catches a word list longer than the bound sent whole: words past 400
-  /// characters go to neither the transcription prompt nor cleanup.
+  /// characters go to neither transcription nor cleanup.
   func testWordsPastTheBoundAreNotSent() async throws {
     let server = try await server { _ in RecordedCleanup.cleaned }
     let service = Service()
@@ -979,7 +1078,7 @@ final class DictationTests: XCTestCase {
     let terminal = Terminal()
     say(["one"], into: dictation, from: terminal)
     await until("typed") { terminal.typed.count == 1 }
-    XCTAssertEqual(service.prompts, [long])
+    XCTAssertEqual(service.words, [[long]])
     let user = try XCTUnwrap((server.requests.first?["messages"] as? [[String: Any]])?.last?["content"] as? String)
     let data = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(user.utf8)) as? [String: Any])
     XCTAssertEqual(data["vocabulary"] as? [String], [long])

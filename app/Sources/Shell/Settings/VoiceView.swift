@@ -12,22 +12,9 @@ struct VoiceView: View {
   /// The last word typed did not fit (`DictationWords.length`).
   @State private var full = false
 
-  struct Model: Identifiable {
-    let id: String
-    let name: String
-  }
-
-  /// Measured on OpenRouter: the recommendation first, then the fastest
-  /// runner-up (no context prompt) and the cheaper sibling.
-  static let models = [
-    Model(id: AppSettings.recommendedVoiceModel, name: "GPT-4o Transcribe"),
-    Model(id: "mistralai/voxtral-mini-transcribe-3-0", name: "Voxtral Mini Transcribe"),
-    Model(id: "openai/gpt-4o-mini-transcribe", name: "GPT-4o mini Transcribe"),
-  ]
-
   init() {
     let model = AppSettings.shared.voiceModel
-    _other = State(initialValue: Self.models.contains { $0.id == model } ? "" : model)
+    _other = State(initialValue: VoiceModel.named(model) == nil ? model : "")
   }
 
   var body: some View {
@@ -44,7 +31,7 @@ struct VoiceView: View {
           }
         }
         ListSection("Model") {
-          ForEach(Self.models) { model in
+          ForEach(VoiceModel.menu) { model in
             ChoiceRow(chosen: other.isEmpty && settings.voiceModel == model.id) {
               other = ""
               settings.voiceModel = model.id
@@ -53,6 +40,8 @@ struct VoiceView: View {
                 Text(model.name)
                 Text(model.id).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
               }
+              .frame(maxWidth: .infinity, alignment: .leading)
+              ValueText(String(format: "$%.2f/h", model.dollarsPerHour))
             }
           }
           LabeledContent("Other") {
@@ -64,7 +53,7 @@ struct VoiceView: View {
               .autocorrectionDisabled()
               .onChange(of: other) {
                 let id = other.trimmingCharacters(in: .whitespacesAndNewlines)
-                settings.voiceModel = id.isEmpty ? AppSettings.recommendedVoiceModel : id
+                settings.voiceModel = id.isEmpty ? VoiceModel.recommended.id : id
               }
           }
         }
@@ -123,6 +112,6 @@ struct VoiceView: View {
   static var summary: String {
     guard AppSettings.shared.hasOpenRouterKey else { return "No Key" }
     let model = AppSettings.shared.voiceModel
-    return models.first { $0.id == model }?.name ?? model.split(separator: "/").last.map(String.init) ?? model
+    return VoiceModel.named(model)?.name ?? model.split(separator: "/").last.map(String.init) ?? model
   }
 }
