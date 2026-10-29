@@ -35,6 +35,20 @@ def load_module():
 
 tn = load_module()
 
+
+def setUpModule():
+    # Fail closed: even a subprocess that accidentally uses the production runner cannot reach the real services.
+    directory = Path(tempfile.mkdtemp(prefix="term-notify-services-"))
+    previous_path = os.environ.get("PATH", "")
+    unittest.addModuleCleanup(shutil.rmtree, directory, True)
+    unittest.addModuleCleanup(os.environ.__setitem__, "PATH", previous_path)
+    for name in ("launchctl", "systemctl", "loginctl"):
+        executable = directory / name
+        executable.write_text("#!/bin/sh\nprintf '%s\\n' \"$0 $*\" >> " + json.dumps(str(directory / "calls"))
+                              + "\ncase \"${0##*/}\" in loginctl) printf 'Linger=yes\\n';; esac\nexit 0\n")
+        executable.chmod(0o700)
+    os.environ["PATH"] = str(directory) + os.pathsep + previous_path
+
 KEY = bytes(range(32)).hex()
 SECRET = "ab" * 32
 SECRET_B = "cd" * 32
@@ -768,11 +782,40 @@ class ServiceFilesTests(unittest.TestCase):
         self.uninstall("linux", purge=True)
         self.assertEqual([p.name for p in self.paths.pairings.iterdir()], ["keep.txt"])
 
-    def test_purge_removes_the_emptied_directories(self):
-        write_pairing(self.paths)
-        self.install("linux")
-        self.uninstall("linux", purge=True)
-        self.assertFalse((self.home / ".config/term").exists())
+    def test_install_uninstall_removes_only_created_directories(self):
+        for system in ("macos", "linux"):
+            with self.subTest(system=system):
+                self.install(system)
+                self.install(system)
+                self.uninstall(system)
+                self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_preexisting_empty_directories_survive_uninstall(self):
+        for directory in (self.paths.data, self.paths.pairings, self.paths.plist.parent, self.paths.log.parent,
+                          self.paths.unit.parent):
+            directory.mkdir(parents=True, exist_ok=True)
+        before = set(self.home.rglob("*"))
+        for system in ("macos", "linux"):
+            self.install(system)
+            self.uninstall(system, purge=True)
+            self.assertEqual(set(self.home.rglob("*")), before)
+
+    def test_unrelated_file_keeps_a_created_directory(self):
+        self.install("macos")
+        unrelated = self.paths.log.parent / "another-app.log"
+        unrelated.write_text("keep")
+        self.uninstall("macos")
+        self.assertEqual(unrelated.read_text(), "keep")
+
+    def test_cli_roundtrip_uses_stubbed_services(self):
+        environment = dict(os.environ, HOME=str(self.home))
+        stub_directory = Path(os.environ["PATH"].split(os.pathsep)[0])
+        for command in ("install", "uninstall"):
+            result = subprocess.run([sys.executable, str(PROGRAM), command], env=environment,
+                                    capture_output=True, text=True, timeout=15)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(list(self.home.iterdir()), [])
+        self.assertTrue((stub_directory / "calls").exists())
 
     def test_uninstall_when_nothing_is_installed(self):
         code, out = self.uninstall("linux")

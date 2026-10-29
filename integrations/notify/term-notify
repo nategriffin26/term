@@ -84,6 +84,7 @@ class Paths:
         self.data = self.home / ".local/share/term/notify"
         self.program = self.data / "term-notify"
         self.state = self.data / "state.json"
+        self.directories = self.data / "directories.json"
         self.lock = self.data / "lock"
         self.log = self.home / "Library/Logs/term-notify.log"
         self.plist = self.home / "Library/LaunchAgents" / (LABEL + ".plist")
@@ -691,24 +692,43 @@ def linger_enabled(runner: Runner) -> Optional[bool]:
     return result.stdout.strip() == "Linger=yes"
 
 
+def installed_directories(paths: Paths) -> List[Path]:
+    try:
+        return [Path(value) for value in json.loads(paths.directories.read_bytes())]
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError, TypeError):
+        raise Failure("cannot read installed directory ownership; restore directories.json before reinstalling or uninstalling")
+
+
 def cmd_install(args: argparse.Namespace, paths: Paths, system: str, runner: Runner = run_quiet, interpreter: Optional[str] = None,
                 sleep: Callable[[float], None] = time.sleep) -> int:
     interpreter = interpreter or sys.executable
     if not interpreter or not os.access(interpreter, os.X_OK):
         raise Failure("cannot find the python3 running this script; run it as: python3 term-notify install")
+    created = installed_directories(paths)
+    directories = [paths.data, paths.pairings]
+    directories += [paths.plist.parent, paths.log.parent] if system == "macos" else [paths.unit.parent]
+    for directory in directories:
+        missing = []
+        parent = directory
+        while not parent.exists():
+            missing.append(parent)
+            parent = parent.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        created.extend(reversed(missing))
     private_directory(paths.data)
     private_directory(paths.pairings)
+    write_private(paths.directories, json.dumps([str(path) for path in created]).encode("utf-8"))
     source = Path(os.path.abspath(__file__))
     if not (paths.program.exists() and os.path.samefile(source, paths.program)):
         write_private(paths.program, source.read_bytes(), 0o700)
     print("installed %s" % paths.program)
     if system == "macos":
-        paths.plist.parent.mkdir(parents=True, exist_ok=True)
-        paths.log.parent.mkdir(parents=True, exist_ok=True)
+        # The directory ownership record is durable before the service can create its log.
         write_private(paths.plist, render_plist(paths, interpreter))
         service_file = paths.plist
     else:
-        paths.unit.parent.mkdir(parents=True, exist_ok=True)
         write_private(paths.unit, render_unit(paths, interpreter))
         service_file = paths.unit
     print("wrote %s" % service_file)
@@ -744,6 +764,7 @@ def remove_empty(path: Path) -> None:
 
 def cmd_uninstall(args: argparse.Namespace, paths: Paths, system: str, runner: Runner = run_quiet) -> int:
     report: List[str] = []
+    created = installed_directories(paths)
     if system == "macos":
         for domain in macos_domains():
             runner(["launchctl", "bootout", "%s/%s" % (domain, LABEL)])
@@ -755,22 +776,20 @@ def cmd_uninstall(args: argparse.Namespace, paths: Paths, system: str, runner: R
         remove_file(paths.unit, report)
         if existed:
             runner(["systemctl", "--user", "daemon-reload"])
-    for path in (paths.program, paths.state, paths.lock):
+    for path in (paths.program, paths.state, paths.lock, paths.directories):
         remove_file(path, report)
     for stray in list(paths.data.glob(".*")) if paths.data.is_dir() else []:
-        if re.match(r"\A\.(term-notify|state\.json|lock)\.", stray.name):
+        if re.match(r"\A\.(term-notify|state\.json|lock|directories\.json)\.", stray.name):
             remove_file(stray, report)
-    remove_empty(paths.data)
-    remove_empty(paths.data.parent)
     if args.purge:
         if paths.pairings.is_dir():
             for pairing in paths.pairings.glob("*.json"):
                 if pairing.is_file() and not pairing.is_symlink():
                     remove_file(pairing, report)
-        remove_empty(paths.pairings)
-        remove_empty(paths.pairings.parent)
     elif any(paths.pairings.glob("*.json")) if paths.pairings.is_dir() else False:
         report.append("kept the pairing files in %s (term-notify uninstall --purge removes them)" % paths.pairings)
+    for directory in sorted(set(created), key=lambda path: len(path.parts), reverse=True):
+        remove_empty(directory)
     print("\n".join(report) if report else "nothing to remove")
     return 0
 

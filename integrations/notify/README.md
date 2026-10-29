@@ -38,6 +38,8 @@ On Linux, a user service stops when you log out. For a server you only reach by 
 
 Uninstall never touches tmux or any agent's configuration. `term-notify run` starts the watcher in the foreground (`--debounce SECONDS`, `--interval SECONDS`, `--tmux-socket NAME` for `tmux -L NAME`); `term-notify once` makes one pass and exits.
 
+Install records the directories it creates in `~/.local/share/term/notify/directories.json`; reinstall preserves that ownership record. Uninstall removes only recorded directories that are empty. Pre-existing directories and directories containing pairing files or another application's files remain.
+
 ## Pairing files
 
 `~/.config/term/notify/<pairing_id>.json`, directory mode 0700, files 0600 (a wider mode is tightened, and files that are symlinks or owned by someone else are ignored):
@@ -89,3 +91,5 @@ python3 -m unittest discover -s integrations/notify/tests -v
 ```
 
 Unit tests need nothing. `RealTmuxTests` run the real program against a private tmux server (`tmux -L termnotify-test-<pid>`) and a local relay, and are skipped without tmux; they take about 15 seconds and touch only a temporary `HOME`.
+
+Service tests inject runners and stub `launchctl`, `systemctl` and `loginctl` on PATH. The `integrations/test/term-host.sh` installer test uses the same isolation; neither suite contacts the real service manager. Round-trip checks cover fresh installs, reinstalls, pre-existing empty directories and unrelated files.
