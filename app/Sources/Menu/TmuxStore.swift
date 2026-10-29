@@ -193,6 +193,17 @@ enum TmuxList {
     }
   }
 
+  /// The wash behind a title bar's or row's state: a finished stop he hasn't
+  /// seen, or work under way; nil for the rest (needs you has its pill).
+  static func wash(_ agent: AgentInfo?) -> StateWash.Tone? {
+    guard let agent else { return nil }
+    switch agent.state {
+    case .working: return .working
+    case .done where agent.unread: return .finished
+    default: return nil
+    }
+  }
+
   /// A stop he hasn't seen grows a second line: the question, or the answer.
   /// One line of it, whitespace folded.
   static func note(_ agent: AgentInfo?) -> String? {

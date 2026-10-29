@@ -15,9 +15,12 @@ import UIKit
 ///   Swipe actions fill with `swipeBad` and `swipeAccent`: their labels are always white.
 /// - State: `needsYou` (the accent) is the one loud signal: a filled pill on
 ///   a row and the count on the dock and the tmux tab. `done` is the accent
-///   as a check and a word, `working` WorkingMark's dots in fg, `failed`
-///   is bad. The accent marks nothing else but the open tab's icon and
-///   switches that are on. `folder` (ANSI blue) marks folders in Files.
+///   as a bolder check and a word, `working` WorkingMark's dots in fg, each
+///   over a `StateWash` from the end of its title bar or row (done fuller
+///   than working), so a finished stop he hasn't seen outranks work under way
+///   and neither reads like the other; `failed` is bad. The accent marks
+///   nothing else but the open tab's icon and switches that are on. `folder`
+///   (ANSI blue) marks folders in Files.
 /// - Type: SF Pro for words, SF Mono for machine facts (session, host and
 ///   file names, paths, commands, sizes, keys). Four steps: title 17 (page
 ///   titles), body 15 (rows, tabs, buttons), secondary 13 (second lines,
@@ -28,7 +31,8 @@ import UIKit
 ///   keyboard. Weights: regular; medium for
 ///   controls; semibold for titles, group heads and the chosen item.
 /// - Symbols: one weight (medium) at four sizes: inline 13, control 17,
-///   dock 20, hero 34; inline and control follow Text Size. Outline glyphs;
+///   dock 20, hero 34; inline and control follow Text Size. The finished
+///   check alone is inline + 1 and semibold (`doneCheck`). Outline glyphs;
 ///   the `.fill` variant only for the chosen tab and folders in Files.
 /// - Space: 4, 8, 12, 16, 24. Rows are 50 tall, controls 36, circle buttons
 ///   40, and every target at least 44.
@@ -68,6 +72,7 @@ enum Chrome {
   // States.
   @MainActor static var needsYou: Color { accent }
   @MainActor static var done: Color { accent }
+  @MainActor static var working: Color { fg }
   @MainActor static var failed: Color { bad }
 
   // Swipe actions: white labels on every theme (see AppTheme.swipeBad).
@@ -161,6 +166,9 @@ enum Chrome {
   }
 
   @MainActor static func symbol(_ step: SymbolStep) -> Font { .system(size: step.size(in: textSize), weight: .medium) }
+
+  /// The finished check: a point over inline and semibold, so it holds against its wash.
+  @MainActor static var doneCheck: Font { .system(size: SymbolStep.inline.size(in: textSize) + 1, weight: .semibold) }
 
   @MainActor static func uiSymbol(_ step: SymbolStep, size: TextSize? = nil) -> UIImage.SymbolConfiguration {
     UIImage.SymbolConfiguration(pointSize: step.size(in: size ?? textSize), weight: .medium)

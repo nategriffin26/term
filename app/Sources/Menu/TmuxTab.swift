@@ -128,7 +128,9 @@ struct TmuxTab: View {
     .buttonStyle(RowStyle())
     .clipShape(ends.shape)
     .listRowInsets(EdgeInsets())
-    .listRowBackground(ends.shape.fill(Chrome.fill))
+    .listRowBackground(ends.shape.fill(Chrome.fill).overlay {
+      if let tone = TmuxList.wash(agent) { StateWash(tone: tone, place: .row).clipShape(ends.shape) }
+    })
     .listRowSeparatorTint(Chrome.line)
     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
       Button("Close", role: .destructive) { Haptics.firm(); close() }
@@ -352,7 +354,8 @@ private struct TmuxRow: View {
 }
 
 /// A row's right edge: a pill when the agent waits on him, a check when it
-/// finished, WorkingMark and how long it has run while it works, else an age.
+/// finished, WorkingMark and how long it has run while it works, else an
+/// age. The row's wash (TmuxList.wash) sits behind finished and working.
 private struct TmuxStatusView: View {
   let status: TmuxList.Status
 
@@ -375,7 +378,7 @@ private struct TmuxStatusView: View {
       NeedsYouPill(text: word)
     case .finished:
       HStack(spacing: Chrome.Space.xs) {
-        Image(systemName: "checkmark").font(Chrome.symbol(.inline))
+        Image(systemName: "checkmark").font(Chrome.doneCheck)
         Text(TmuxList.stateWord(.done) ?? "").font(Chrome.font(.secondary, .semibold))
       }
       .foregroundStyle(Chrome.done)

@@ -453,6 +453,33 @@ struct NeedsYouPill: View {
   }
 }
 
+/// The wash behind an agent's state mark, fading in from the edge the mark
+/// sits at: the accent for a finished stop he hasn't seen, the text colour
+/// while it works. A title bar or shelf chip takes it fuller than a list row.
+struct StateWash: View {
+  enum Tone { case finished, working }
+  enum Place { case bar, row }
+
+  let tone: Tone
+  let place: Place
+  var from: HorizontalEdge = .trailing
+
+  var body: some View {
+    // (colour, its opacity at the edge, how far across it fades out)
+    let (colour, strength, reach): (Color, Double, CGFloat) = switch (tone, place) {
+    case (.finished, .bar): (Chrome.done, 0.30, 0.60)
+    case (.finished, .row): (Chrome.done, 0.18, 0.55)
+    case (.working, .bar): (Chrome.working, 0.22, 0.55)
+    case (.working, .row): (Chrome.working, 0.11, 0.45)
+    }
+    LinearGradient(stops: [.init(color: colour.opacity(strength), location: 0),
+                           .init(color: colour.opacity(0), location: reach)],
+                   startPoint: from == .trailing ? .trailing : .leading,
+                   endPoint: from == .trailing ? .leading : .trailing)
+      .allowsHitTesting(false)
+  }
+}
+
 extension EnvironmentValues {
   /// False while the surface around a view is out of sight (the menu closed,
   /// or its tab not the one showing): what moves there holds still.
