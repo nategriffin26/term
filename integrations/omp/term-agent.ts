@@ -8,7 +8,8 @@
 //   rewrites it every 30 s) · pid · title · doing (current step) · todo [done, total, current] · q and opts (the
 //   question and its choices, or the tool waiting for approval) · last (the final answer, cut) · took (seconds the
 //   turn ran) · stop {at, why} (the last time it stopped for you) · model · think · ctx (% of the context window) ·
-//   cost (USD, subagents included) · subs (subagents running) · cwd · branch
+//   cost (USD, subagents included) · subs (subagents running) · cwd · branch · n (messages listed in `@messages` since
+//   omp started, so a reader polling `@agent` sees a new one)
 // Strings are cut short and non-ASCII is \u-escaped, so the value survives a tmux without a UTF-8 locale.
 //
 // It also keeps the Mermaid sources of this session's answers in the pane option `@diagrams`, so Term can draw the
@@ -16,6 +17,16 @@
 // newest last, written as soon as a ```mermaid fence closes and again when the message ends, at most 12 KB (oldest
 // dropped first; tmux refuses an option value near 17 KB), \u-escaped the same way. It outlives omp: its ASCII stays
 // in the pane's history. And it tells the model, in the system prompt, how to draw diagrams that read on a phone.
+//
+// And it lists this session's messages in the pane option `@messages`, so Term can mark where each one starts in the
+// pane's history: {"v":1,"m":[{"i":id,"t":unix s,"h":head}]}, newest last, at most 12 KB (oldest dropped first),
+// \u-escaped the same way. A message is an answer or a note with text (thinking and tool output never are), or a
+// question it asks. id is the message's timestamp in ms, base 36, with "q" (then "q2", "q3"…) for the questions of an
+// ask. head is how its first prose line starts on the terminal: markdown stripped, ending after a link's text (omp
+// prints the URL after it), at most 32 characters, cut back to a word. The pane option `@read` holds the ids the user
+// has read, space-separated, appended with `set-option -F '#{@read} id'` (Term when a message's first line has been on
+// screen, and this extension when the user prompts or answers: the newest). When omp starts, messages that were not
+// listed before are read (no flood of old marks), and ids no longer listed leave `@read`.
 // @ts-nocheck
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -29,6 +40,10 @@ const SETTLE_POLL_MS = 250;
 const SETTLE_MAX_MS = 10_000;
 /** Largest `@diagrams` value written. */
 const DIAGRAMS_CAP = 12_000;
+/** Largest `@messages` value written. */
+const MESSAGES_CAP = 12_000;
+/** Characters of a message's first line that Term finds it by. */
+const HEAD_MAX = 32;
 
 const DIAGRAMS = [
   "# Diagrams",
@@ -182,6 +197,7 @@ function payload() {
   } catch {}
   put("cwd", ctx?.cwd);
   put("branch", s.branch);
+  if (msg.count) put("n", msg.count);
   return p;
 }
 
@@ -288,6 +304,137 @@ async function writeDiagrams() {
   }
 }
 
+// `@messages`: messages listed, oldest first; how many were listed since omp started; and the start's reading of the
+// pane's earlier lists, which every write waits for.
+const msg = { list: [], count: 0, writing: undefined, again: false, ready: Promise.resolve() };
+
+/** How a message's first prose line starts on the terminal; undefined when it has none. */
+function head(text) {
+  let fenced = false;
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.trim();
+    if (/^(```|~~~)/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    // omp draws tables with borders and padding, and rules as lines: neither reads as its source.
+    if (fenced || !line || line.startsWith("|") || /^([-*_]\s*){3,}$/.test(line)) continue;
+    const plain = plainLine(line);
+    if (plain) return cutWord(plain, HEAD_MAX);
+  }
+  return undefined;
+}
+
+/** A markdown line as omp prints it, up to the end of its first link's text. */
+function plainLine(line) {
+  let text = line.replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/, "").replace(/^\[[ xX]\]\s+/, "");
+  const link = /!?\[([^\]]*)\]\([^)]*\)/.exec(text);
+  if (link) text = text.slice(0, link.index) + link[1];
+  text = text
+    .replace(/\*\*|__|~~|`/g, "")
+    .replace(/(?<![\w*])\*(?=\S)([^*]*?\S)\*(?![\w*])/g, "$1")
+    .replace(/(?<![\w_])_(?=\S)([^_]*?\S)_(?![\w_])/g, "$1");
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** At most `max` characters (code points), cut back to the last whole word. */
+function cutWord(text, max) {
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  let kept = chars.slice(0, max).join("");
+  if (chars[max] !== " " && kept.includes(" ")) kept = kept.slice(0, kept.lastIndexOf(" "));
+  return kept.trimEnd();
+}
+
+/** An assistant message's entries: its text, then each question it asks. */
+function entriesOf(message) {
+  if (message?.role !== "assistant") return [];
+  const at = Number.isFinite(message.timestamp) ? message.timestamp : Date.now();
+  const id = Math.floor(at).toString(36);
+  const t = Math.floor(at / 1000);
+  const out = [];
+  const h = head(textOf(message));
+  if (h) out.push({ i: id, t, h });
+  for (const block of Array.isArray(message.content) ? message.content : []) {
+    if (block?.type !== "toolCall" || block.name !== "ask" || !Array.isArray(block.arguments?.questions)) continue;
+    block.arguments.questions.forEach((q, n) => {
+      const qh = head(q?.question);
+      if (qh) out.push({ i: id + (n === 0 ? "q" : `q${n + 1}`), t, h: qh });
+    });
+  }
+  return out;
+}
+
+/** A pane option's value; empty when unset or unreadable. */
+function showOption(option) {
+  const { promise, resolve } = Promise.withResolvers();
+  try {
+    execFile(tmux, ["show-options", "-pqv", "-t", pane, option], { timeout: 2_000 }, (error, stdout) =>
+      resolve(error ? "" : String(stdout).trim()),
+    );
+  } catch {
+    resolve("");
+  }
+  return promise;
+}
+
+/** A start, resume or switch lists the branch's messages. Ones the pane did not list before are read; ids no longer
+ *  listed leave `@read`. */
+function seedMessages(ctx) {
+  if (!tmux || s.closing) return;
+  const seeded = new Map();
+  try {
+    for (const entry of ctx.sessionManager?.getBranch?.() ?? []) {
+      if (entry?.type === "message") for (const e of entriesOf(entry.message)) seeded.set(e.i, e);
+    }
+  } catch {}
+  msg.list = [...seeded.values()];
+  msg.count += msg.list.length;
+  msg.ready = Promise.all([showOption("@messages"), showOption("@read")]).then(([listed, read]) => {
+    let before = [];
+    try {
+      before = JSON.parse(listed)?.m?.map((e) => e?.i) ?? [];
+    } catch {}
+    const wasListed = new Set(before);
+    const wasRead = new Set(read.split(" "));
+    const kept = msg.list.filter((e) => (wasListed.has(e.i) ? wasRead.has(e.i) : seeded.has(e.i))).map((e) => e.i);
+    return run(["set-option", "-p", "-t", pane, "@read", kept.join(" ")]);
+  });
+  void writeMessages();
+  if (msg.list.length) changed();
+}
+
+/** Lists a message that just ended. */
+function publishMessages(message) {
+  if (!tmux || s.closing) return;
+  const added = entriesOf(message).filter((e) => !msg.list.some((x) => x.i === e.i));
+  if (added.length === 0) return;
+  msg.list.push(...added);
+  msg.count += added.length;
+  void writeMessages();
+  changed();
+}
+
+async function writeMessages() {
+  await msg.ready;
+  if (msg.writing) {
+    msg.again = true;
+    return;
+  }
+  let json = ascii(JSON.stringify({ v: 1, m: msg.list }));
+  while (json.length > MESSAGES_CAP && msg.list.length > 1) {
+    msg.list.shift();
+    json = ascii(JSON.stringify({ v: 1, m: msg.list }));
+  }
+  msg.writing = run(["set-option", "-p", "-t", pane, "@messages", json]);
+  await msg.writing;
+  msg.writing = undefined;
+  if (msg.again) {
+    msg.again = false;
+    void writeMessages();
+  }
+}
+
 /** A state change writes at once; progress at most every PROGRESS_MS. */
 function changed(progress = false) {
   if (!tmux || !s.ctx || s.closing) return;
@@ -307,13 +454,15 @@ function setState(state) {
   s.state = state;
 }
 
-/** He prompted or answered: whatever stopped for him is seen, on every device. */
+/** He prompted or answered: whatever stopped for him is seen, on every device, and the newest message is read. */
 function seen() {
   if (!tmux || s.closing) return;
   const at = now();
   // A delayed acknowledgement must never move the shared watermark backwards.
   const value = `#{?#{e|>|f|0:#{?@seen,#{@seen},0},${at}},#{@seen},${at}}`;
   void run(["set-option", "-F", "-t", pane, "@seen", value]);
+  const newest = msg.list.at(-1)?.i;
+  if (newest) void msg.ready.then(() => run(["set-option", "-p", "-F", "-t", pane, "@read", `#{@read} ${newest}`]));
 }
 
 function refreshBranch() {
@@ -436,8 +585,12 @@ export default function termAgent(pi) {
   on("session_start", (_e, ctx) => {
     seedDiagrams();
     start(pi, ctx);
+    seedMessages(ctx);
   });
-  on("session_switch", (_e, ctx) => start(pi, ctx));
+  on("session_switch", (_e, ctx) => {
+    start(pi, ctx);
+    seedMessages(ctx);
+  });
 
   on("input", (e) => {
     if (e.source !== "extension") seen();
@@ -470,6 +623,7 @@ export default function termAgent(pi) {
   on("message_end", (e) => {
     publishDiagrams(e.message);
     d.current = new Set();
+    publishMessages(e.message);
   });
 
   // Chains from the current base prompt; a retried preparation sees the section already there.
