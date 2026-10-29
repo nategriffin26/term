@@ -215,7 +215,7 @@ final class MessageRail {
   @discardableResult
   func saw(_ rows: [String], at now: Date = .now) -> [String] {
     guard let pane else {
-      sightings = [:]
+      stoppedReading()
       return []
     }
     // Lines above the screen.
@@ -240,6 +240,12 @@ final class MessageRail {
     }
     markRead(done)
     return done
+  }
+
+  /// The user stopped reading (the terminal lost focus, the app left the
+  /// foreground, the rail was hidden): each message needs a fresh, unbroken second.
+  func stoppedReading() {
+    sightings = [:]
   }
 
   /// How long a message's first line stays on screen before it counts as read.

@@ -288,4 +288,50 @@ final class MessageRailViewTests: XCTestCase {
     try await Task.sleep(for: .milliseconds(100))
     XCTAssertEqual(host.reads, ["b"])
   }
+
+  // Bug: a look, a switch to another tab and a return finished the second of reading: it kept its start.
+  func testLosingFocusStartsTheSecondAgain() async throws {
+    let (view, host) = try await terminal()
+    let reading = reading(view, text: "The fix is in.")
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(500))
+    reading.now = false
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(600))
+    reading.now = true
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(host.reads, [], "1.1 s since the first look, but not unbroken")
+    try await Task.sleep(for: .seconds(1.1))
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(host.reads, ["b"])
+  }
+
+  // Bug: leaving the app and coming back finished the second of reading begun before.
+  func testLeavingTheForegroundStartsTheSecondAgain() async throws {
+    let (view, host) = try await terminal()
+    _ = reading(view, text: "The fix is in.")
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(600))
+    NotificationCenter.default.post(name: UIApplication.willResignActiveNotification, object: UIApplication.shared)
+    try await Task.sleep(for: .milliseconds(500))
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(host.reads, [])
+  }
+
+  // Bug: switching the rail off and on (Settings) kept the time already spent reading.
+  func testSwitchingTheRailOffAndOnStartsTheSecondAgain() async throws {
+    let (view, host) = try await terminal()
+    _ = reading(view, text: "The fix is in.")
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(600))
+    view.showsMessageRail = false
+    view.showsMessageRail = true
+    try await Task.sleep(for: .milliseconds(500))
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(host.reads, [])
+  }
 }

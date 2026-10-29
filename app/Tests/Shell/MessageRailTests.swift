@@ -248,7 +248,9 @@ final class MessageRailTests: XCTestCase {
     XCTAssertEqual(rail.saw(screen("nothing", on: 9), at: t0.addingTimeInterval(0.5)), [], "it left the screen")
     XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(1)), [])
     XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(1.9)), [])
-    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(2)), ["b"])
+    rail.stoppedReading()
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(2)), [], "reading stopped: a fresh second")
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(3)), ["b"])
     XCTAssertTrue(rail.isRead("b"))
     XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(5)), [], "read ones are not counted again")
   }

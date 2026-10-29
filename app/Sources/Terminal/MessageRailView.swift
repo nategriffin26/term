@@ -160,6 +160,10 @@ final class MessageRailView: UIView {
     flash.layer.addSublayer(flashEdge)
     addSubview(flash)
     registerForTraitChanges([AppThemeTrait.self]) { (view: MessageRailView, _: UITraitCollection) in view.redraw() }
+    NotificationCenter.default.addObserver(self, selector: #selector(readingInterrupted),
+                                           name: UIApplication.willResignActiveNotification, object: nil)
+    NotificationCenter.default.addObserver(self, selector: #selector(readingInterrupted),
+                                           name: UIScene.willDeactivateNotification, object: nil)
   }
 
   @available(*, unavailable)
@@ -170,6 +174,7 @@ final class MessageRailView: UIView {
     guard rail !== self.rail else { return }
     self.rail?.onChange = nil
     self.rail?.isShown = false
+    self.rail?.stoppedReading()
     self.rail = rail
     rail?.onChange = { [weak self] in self?.redraw() }
     hideScrub(animated: false)
@@ -445,7 +450,8 @@ final class MessageRailView: UIView {
   // MARK: - Reading
 
   /// While unread messages exist and the user is reading this terminal,
-  /// its pane rows are looked at twice a second.
+  /// its pane rows are looked at twice a second. When looking stops, so
+  /// does every second of reading under way.
   private func updateViewedTimer() {
     let needed = window != nil && rail?.unread.isEmpty == false && !isHidden
     if needed, viewedTimer == nil {
@@ -455,10 +461,16 @@ final class MessageRailView: UIView {
       timer.tolerance = 0.1
       RunLoop.main.add(timer, forMode: .common)
       viewedTimer = timer
-    } else if !needed, let timer = viewedTimer {
-      timer.invalidate()
+    } else if !needed {
+      viewedTimer?.invalidate()
       viewedTimer = nil
+      rail?.stoppedReading()
     }
+  }
+
+  /// The app or this scene stopped being active: reading starts again when it returns.
+  @objc private func readingInterrupted() {
+    rail?.stoppedReading()
   }
 
   /// Whether the user reads `terminal` now: its window's focused tab, in front (tests replace it).
@@ -466,7 +478,11 @@ final class MessageRailView: UIView {
 
   /// One look at the pane's rows (the timer's tick).
   func lookAtScreen() {
-    guard let rail, let pane = rail.pane, isReading(terminal) else { return }
+    guard let rail else { return }
+    guard let pane = rail.pane, isReading(terminal) else {
+      rail.stoppedReading()
+      return
+    }
     let snapshot = terminal.snapshot
     let base = snapshot.historyRows - snapshot.viewportOffset
     let first = min(pane.top, terminal.session.rows - 1), last = min(pane.top + pane.height, terminal.session.rows) - 1
