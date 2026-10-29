@@ -150,8 +150,7 @@ chmod 600 ~/.ssh/authorized_keys</code></pre>
     <!-- CONFIRM: that term-host install copies integrations/omp/term-agent.ts into ~/.omp/agent/extensions. -->
     <p><code>term-host install</code> also installs Term's omp extension. To install it by hand from a copy of the <a href="REPO_URL">source</a>, run in its folder:</p>
     <pre><code>ln -s "$PWD/integrations/omp/term-agent.ts" ~/.omp/agent/extensions/term-agent.ts</code></pre>
-    <p>New omp sessions load it. Also set omp to repaint only the screen when the phone's keyboard rises or the phone rotates:</p>
-    <pre><code>omp config set tui.resizeScrollback preserve</code></pre>
+    <p>New omp sessions load it.</p>
     <p class="if-fails"><strong>If it fails:</strong> make sure the agent runs inside tmux (outside tmux nothing is reported) and that you started it after installing. For omp without the extension, Term still shows working, asks you or idle from omp's terminal title.</p>
   </section>
 

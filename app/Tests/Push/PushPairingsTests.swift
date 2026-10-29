@@ -75,7 +75,7 @@ final class PushPairingsTests: XCTestCase {
   private let files = Files()
   private var service = ""
   private var pinned: String? = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
-  private let host = Host(alias: "mac", hostname: "mac.local", user: "nate")
+  private let host = Host(alias: "mac", hostname: "mac.local", user: "user")
 
   override func setUp() async throws {
     service = "push-tests-" + UUID().uuidString
@@ -222,7 +222,7 @@ final class PushPairingsTests: XCTestCase {
     let store = pairings()
     try await store.pair(host)
     relay.lock.withLock { relay.refuseDevice = true }
-    let other = Host(alias: "linux", hostname: "box", user: "nate")
+    let other = Host(alias: "linux", hostname: "box", user: "user")
     let error = await failure { () async throws(PushPairings.Failure) in try await store.pair(other) }
     XCTAssertEqual(error, .relay(.deviceUnknown))
     XCTAssertFalse(store.isOn)

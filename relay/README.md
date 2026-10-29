@@ -19,7 +19,7 @@ Wrangler serves the Worker locally and stores local Durable Object data under `.
 ```dotenv
 APNS_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n<the .p8 key body>\n-----END PRIVATE KEY-----"
 APNS_KEY_ID="<Apple key ID>"
-APNS_TEAM_ID="8KLMX3958A"
+APNS_TEAM_ID="<Apple team ID>"
 APNS_TOPIC="<the installed app's bundle ID>"
 ```
 

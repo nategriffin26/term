@@ -688,7 +688,7 @@ class ServiceFilesTests(unittest.TestCase):
         code, _ = self.install("macos")
         self.assertEqual(code, 0)
         plist = plistlib.loads(self.paths.plist.read_bytes())
-        self.assertEqual(plist["Label"], "dev.nategriffin.term.notify")
+        self.assertEqual(plist["Label"], "term-notify")
         self.assertEqual(plist["ProgramArguments"], ["/usr/bin/env", str(self.paths.program), "run"])
         self.assertTrue(plist["RunAtLoad"])
         self.assertEqual(plist["KeepAlive"], {"SuccessfulExit": False})

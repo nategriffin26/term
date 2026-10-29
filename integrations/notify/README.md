@@ -24,7 +24,7 @@ Session names, pane ids, titles, questions, answers, agent-provided file paths a
 integrations/notify/term-notify install
 ```
 
-This copies the program to `~/.local/share/term/notify/`, writes a LaunchAgent (macOS, `~/Library/LaunchAgents/dev.nategriffin.term.notify.plist`) or a systemd user unit (Linux, `~/.config/systemd/user/term-notify.service`), and starts it. It is safe to run again; run it again after updating Term to update the program. `--no-start` writes the files only.
+This copies the program to `~/.local/share/term/notify/`, writes a LaunchAgent (macOS, `~/Library/LaunchAgents/term-notify.plist`) or a systemd user unit (Linux, `~/.config/systemd/user/term-notify.service`), and starts it. It is safe to run again; run it again after updating Term to update the program. `--no-start` writes the files only.
 
 Then pair the host from Term on your phone. The phone writes a pairing file over SSH; the running notifier picks it up within a few seconds, with no restart.
 
