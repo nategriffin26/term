@@ -31,6 +31,8 @@ final class Session {
     /// The Mermaid sources of the tmux session it shows, for drawing omp's
     /// ASCII diagrams as diagrams; nil where there can be none (the prompt).
     var diagrams: DiagramSource?
+    /// Where each omp message starts in the tmux session it shows; nil where there are none.
+    var rail: MessageRail?
 
     /// A session whose remote end is the app: typed bytes arrive on
     /// `onOutput`, and the app writes host output with `feed`.
