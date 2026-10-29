@@ -471,6 +471,7 @@ final class ScreenSession {
     releaseInput()
     hostPointer = pointer
     sharing = .live
+    UsageCounter.shared.record(.screenOpened)
     viewport = nil
     let shown = shownDisplays.map(\.frame.cg)
     if let point = sharingPoint(hostPointer) ?? shown.first.map({ CGPoint(x: $0.midX, y: $0.midY) }) {
@@ -537,6 +538,7 @@ final class ScreenSession {
       pointer = CGPoint(x: welcome.pointer.x, y: welcome.pointer.y)
       hostPointer = pointer
       phase = .live
+      UsageCounter.shared.record(.screenOpened)
       engine?.setQuality(settings.quality)
       watchShown()
       updateSharing()

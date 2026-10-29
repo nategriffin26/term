@@ -9,6 +9,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     Dictation.shared.transcribeLeftovers()
     TerminalView.registerFonts()
     SessionRegistry.shared.restoreSaved()
+    PushNotifications.shared.install()
 
     // App lifecycle → core: suspend and save when the whole app leaves the
     // screen, resume the moment it returns.
@@ -23,10 +24,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
       MainActor.assumeIsolated { SessionRegistry.shared.resumeAll() }
     }
     // The tmux badge: agents checked at once on coming to the front, then
-    // every few seconds while Term stays there.
+    // every few seconds while Term stays there. The usage count sends a
+    // finished day's flags at the first chance after it ends.
     center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
       DiagnosticLog.record(.app, "active")
-      MainActor.assumeIsolated { TmuxStore.shared.checkAgents(retry: true) }
+      MainActor.assumeIsolated {
+        TmuxStore.shared.checkAgents(retry: true)
+        Task { await UsageCounter.shared.becameActive() }
+      }
     }
     center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { _ in
       DiagnosticLog.record(.app, "inactive")
@@ -41,6 +46,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
   func applicationWillTerminate(_ application: UIApplication) {
     DiagnosticLog.record(.app, "terminate")
     DiagnosticLog.flush()
+  }
+
+  func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+    PushNotifications.shared.registered(deviceToken)
+  }
+
+  func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+    PushNotifications.shared.failed(error)
   }
 
   func application(_ application: UIApplication, configurationForConnecting session: UISceneSession,

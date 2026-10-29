@@ -8,4 +8,19 @@
 TERM_BUNDLE_ID = com.example.term
 DEVELOPMENT_TEAM =
 
+// Notifications. The push relay the app registers with (relay/README.md);
+// empty leaves Settings › Notifications showing that none is set. xcconfig
+// reads `//` as a comment, so write the URL as
+//
+//   TERM_RELAY_URL = https:/$()/term-relay.yourname.workers.dev
+//
+// Device builds sign with the push entitlement only once the App ID has Push
+// Notifications enabled (developer.apple.com › Identifiers); then set
+//
+//   TERM_DEVICE_ENTITLEMENTS = Config/Term.entitlements
+//
+// Simulator builds always carry it.
+TERM_RELAY_URL =
+TERM_DEVICE_ENTITLEMENTS =
+
 #include? "Local.xcconfig"

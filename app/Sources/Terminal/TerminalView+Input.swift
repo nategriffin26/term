@@ -35,6 +35,7 @@ extension TerminalView {
         session.key(key, mods: all, text: text)
         smartKeys.consumeModifiers()
         didSendInput()
+        if key == TERM_KEY_ENTER, all == 0 { onSubmit?() }
     }
 
     func didSendInput() {

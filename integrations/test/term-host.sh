@@ -4,6 +4,25 @@
 #   sh integrations/test/term-host.sh
 root=$(cd "$(dirname "$0")/../.." && pwd)
 fail=0
+test_root=$(mktemp -d)
+trap 'rm -rf "$test_root"' 0
+trap 'exit 1' 1 2 15
+mkdir "$test_root/bin"
+export TERM_HOST_SERVICE_CALLS="$test_root/service-calls"
+for service in launchctl systemctl loginctl; do
+  cat >"$test_root/bin/$service" <<'EOF'
+#!/bin/sh
+printf '%s %s\n' "${0##*/}" "$*" >>"$TERM_HOST_SERVICE_CALLS"
+case "${0##*/}" in
+  loginctl) printf 'Linger=yes\n' ;;
+esac
+exit 0
+EOF
+  chmod +x "$test_root/bin/$service"
+done
+PATH="$test_root/bin:$PATH"
+export PATH
+unset XDG_CONFIG_HOME
 say_ok() { echo "ok   $*"; }
 say_fail() { echo "FAIL $*"; fail=1; }
 
@@ -13,7 +32,7 @@ tree() { (cd "$1" && find . | sort | while read -r p; do if [ -f "$p" ]; then ec
 run() { # JSON_TOOL
   tool=$1
   case $tool in jq) command -v jq >/dev/null || { echo "skip $tool"; return; } ;; python3) command -v python3 >/dev/null || { echo "skip $tool"; return; } ;; esac
-  H=$(mktemp -d)
+  H=$(mktemp -d "$test_root/home.XXXXXX")
   export HOME=$H TERM_HOST_JSON_TOOL=$tool
   unset CLAUDE_CONFIG_DIR CODEX_HOME
   mkdir -p "$H/.claude" "$H/.codex" "$H/.omp/agent"
@@ -73,6 +92,9 @@ run python3
 run none
 
 # check runs and names what is missing without failing on a missing optional tool
-out=$(HOME=$(mktemp -d) sh "$root/scripts/term-host" check 2>&1); echo "$out" | grep -q "Connection" && say_ok "check prints a report" || say_fail "check: $out"
+out=$(HOME=$(mktemp -d "$test_root/check.XXXXXX") sh "$root/scripts/term-host" check 2>&1); echo "$out" | grep -q "Connection" && say_ok "check prints a report" || say_fail "check: $out"
+if [ -x "$root/integrations/notify/term-notify" ]; then
+  [ -s "$TERM_HOST_SERVICE_CALLS" ] && say_ok "service operations used test stubs" || say_fail "service stubs were not exercised"
+fi
 
 [ $fail = 0 ] && echo PASS || { echo FAILED; exit 1; }

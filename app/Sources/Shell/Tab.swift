@@ -47,6 +47,8 @@ final class Tab {
   private var reconnectPreparation: Task<Void, Never>?
   private var foreground = true
   private var firstAttachmentObservation = true
+  /// Watches for an answer to the agent in the pane this tab shows.
+  private var answerWatch = AnswerWatch()
 
   var pollsTmuxAttachment: Bool {
     foreground && !unreachable && !reconnecting && remote != nil && connecting == nil
@@ -100,6 +102,7 @@ final class Tab {
                           Command.complete(before, aliases: MainActor.assumeIsolated { ConfigStore.shared.hosts.map(\.alias) })
                         })
     view.diagnosticName = { [weak self] in self?.sessionName ?? "closed" }
+    view.onSubmit = { [weak self] in self?.submitted() }
     wireLocal()
     wireAutoReconnect()
     applySettings()
@@ -141,12 +144,14 @@ final class Tab {
 
   // MARK: - Connecting
 
-  /// Opens `target` (its startup command, or `command` instead), replacing any remote.
-  func connect(_ target: Host, tmuxSession: String? = nil, preview screen: Data? = nil) {
+  /// Opens `target` (its startup command, or `command` instead for this
+  /// connection only; reconnects use the startup command), replacing any remote.
+  func connect(_ target: Host, tmuxSession: String? = nil, preview screen: Data? = nil, command: String? = nil) {
     stopAttachmentObservation()
     connecting = nil
     dropPreview()
-    let spec = Self.spec(for: target)
+    var spec = Self.spec(for: target)
+    if let command { spec.command = command }
     guard let session = Session(connect: spec, cols: local.cols, rows: local.rows) else {
       echo("\u{1b}[31mCould not start a connection to \(target.alias).\u{1b}[0m\r\n")
       prompt()
@@ -350,6 +355,19 @@ final class Tab {
     }
   }
 
+  /// Return without modifiers typed into the remote: an answer if the pane
+  /// it shows waits on its agent and the next probe sees that stop over.
+  private func submitted() {
+    guard let remote, view.session === remote else { return }
+    answerWatch.submitted()
+  }
+
+  /// The attachment probe's view of the pane this tab's tmux client shows.
+  func applyShownAgent(_ agent: ShownAgent?, session: Session) {
+    guard remote === session, connecting == nil else { return }
+    if answerWatch.observe(agent) { UsageCounter.shared.record(.askAnswered) }
+  }
+
   private func statusChanged(_ session: Session, status: TermStatus, message: String) {
     let role = session === connecting ? "connecting" : session === remote ? "remote" : "stale"
     DiagnosticLog.record(.connection, "status", "kind=\(Self.statusName(status.kind)) session=\(role)"
@@ -358,6 +376,7 @@ final class Tab {
     switch Int(status.kind) {
     case Int(TERM_STATUS_CONNECTED.rawValue):
       unreachable = false
+      if session === connecting || session === remote { UsageCounter.shared.record(.hostOK) }
       if session === connecting {
         connecting = nil
         let old = remote

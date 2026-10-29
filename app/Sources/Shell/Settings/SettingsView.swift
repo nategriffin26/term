@@ -6,6 +6,7 @@ enum SettingsPage: Hashable {
   case keys, key(Keychain.Key), generateKey, importKey
   case appearance, themes, fontFamily
   case keyboard, voice, about
+  case notifications
 }
 
 /// How a page opens the next one or goes back.
@@ -115,6 +116,7 @@ struct SettingsView: View {
     case .fontFamily: FontFamilyView()
     case .keyboard: KeyboardSettingsView()
     case .voice: VoiceView()
+    case .notifications: NotificationsView()
     case .about: AboutView()
     }
   }
@@ -191,6 +193,9 @@ private struct SettingsRoot: View {
       ListSection("Connect") {
         PageRow(page: .hosts, value: "\(config.hosts.count)") { IconLabel("Hosts", symbol: "server.rack") }
         PageRow(page: .keys) { IconLabel("Keys", symbol: "key") }
+        PageRow(page: .notifications, value: NotificationsView.summary, monoValue: false) {
+          IconLabel("Notifications", symbol: "bell")
+        }
       }
       ListSection {
         PageRow(page: .appearance, value: settings.themeName, monoValue: false) {
@@ -236,6 +241,8 @@ struct KeyboardSettingsView: View {
 }
 
 struct AboutView: View {
+  private let counter = UsageCounter.shared
+
   static let version: String = {
     let info = Bundle.main.infoDictionary
     let short = info?["CFBundleShortVersionString"] as? String ?? "?"
@@ -250,6 +257,9 @@ struct AboutView: View {
           ValueRow("Version", Self.version)
           ValueRow("Terminal Engine", "libghostty-vt cec8b92f")
           ValueRow("Font", "JetBrains Mono, Iosevka (Nerd Fonts)")
+        }
+        ListSection {
+          Toggle("Send Daily Usage Count", isOn: Binding(get: { counter.isEnabled }, set: { counter.setEnabled($0) }))
         }
         ListSection("Licenses") {
           Text("JetBrains Mono, Iosevka: SIL Open Font License 1.1. Nerd Fonts glyphs: MIT and OFL. Ghostty: MIT. "

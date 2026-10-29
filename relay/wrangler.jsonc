@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "term-push-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": false },
+  "durable_objects": {
+    "bindings": [
+      { "name": "PUSH_REGISTRY", "class_name": "PushRegistry" },
+      { "name": "COUNTER_LEDGER", "class_name": "CounterLedger" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["PushRegistry", "CounterLedger"] }
+  ],
+  "triggers": { "crons": ["5 0 * * *"] }
+}
