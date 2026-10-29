@@ -66,12 +66,15 @@ targets:
                 UISceneDelegateClassName: $(PRODUCT_MODULE_NAME).SceneDelegate
         NSUserActivityTypes:
           - $(PRODUCT_BUNDLE_IDENTIFIER).window
-        NSLocalNetworkUsageDescription: Term connects to computers on your network over SSH and mosh.
+        NSLocalNetworkUsageDescription: Term connects to your computers on this network over SSH and mosh, so you can use their terminals and files from your phone.
         NSCameraUsageDescription: Term uploads photos and videos you take to your computer.
-        NSMicrophoneUsageDescription: Term sends what you say to OpenRouter and types the text into the terminal, and records the sound of videos you take.
-        NSPhotoLibraryUsageDescription: Term uploads photos and videos you pick to your computer.
+        NSMicrophoneUsageDescription: When you dictate, Term sends your voice to OpenRouter with your own key and types the text into the terminal. Videos you take also record sound.
         NSPhotoLibraryAddUsageDescription: Term saves diagrams you share to your photo library.
-        NSFaceIDUsageDescription: Term confirms it's you before typing your Mac password.
+        NSFaceIDUsageDescription: Term confirms it's you before typing your saved Mac password.
+        # Export compliance: SSH and mosh use only standard, published cryptography, built from this
+        # public MIT source, so no export documentation is needed (EAR 734.3(b)(3), 742.15(b)).
+        # France still needs a declaration: leave it out of the storefronts until one is filed.
+        ITSAppUsesNonExemptEncryption: false
         # term://attach?host=<alias>&session=<tmux session> (DeepLink.swift); Dross opens its workers with it.
         CFBundleURLTypes:
           - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
