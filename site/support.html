@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support · Term</title>
+<meta name="description" content="How to get help with Term, what to include, and how purchases and refunds work.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#15121c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f4fa" media="(prefers-color-scheme: light)">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><img src="icon.png" alt="">Term</a>
+  <nav aria-label="Site">
+    <a href="setup.html">Setup</a>
+    <a href="faq.html">FAQ</a>
+    <a href="support.html" aria-current="page">Support</a>
+    <a href="privacy.html">Privacy</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Support</h1>
+  <p>Most connection problems are covered in the <a href="setup.html#troubleshooting">setup guide's troubleshooting table</a>, which lists the messages Term shows and what to do about each.</p>
+
+  <h2>Get help</h2>
+  <ul>
+    <li>Email <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a>.</li>
+    <li>Or open an issue on GitHub at <a href="REPO_URL/issues">REPO_URL/issues</a>. Issues are public, so leave out host addresses, user names, keys and anything private from your terminal.</li>
+  </ul>
+
+  <h2>What to include</h2>
+  <ul>
+    <li>Your iPhone model and iOS version (iPhone Settings › General › About).</li>
+    <li>Term's version: Term's Settings › About › Version.</li>
+    <li>Your computer's operating system and its version (macOS, Ubuntu, Fedora…).</li>
+    <li>How the phone reaches it: Tailscale or the same network, and whether the host uses Mosh or SSH.</li>
+    <li>The exact message Term showed, copied or in a screenshot.</li>
+    <li>What you tried, and what happened each time.</li>
+    <li>The output of <code>term-host check</code> on your computer, if you installed the host kit.</li>
+  </ul>
+  <!-- CONFIRM: keep the term-host check line only if the host kit ships with that command. -->
+
+  <h2>Purchases</h2>
+  <h3>Restore purchases</h3>
+  <p class="placeholder">RESTORE_PURCHASES_STEPS</p>
+  <!-- CONFIRM: describe where Restore Purchases sits in the shipped app once the paywall is built. -->
+
+  <h3>Cancel a subscription</h3>
+  <p>Subscriptions are managed by Apple: on your iPhone, open Settings, tap your name, then Subscriptions.</p>
+
+  <h3>Refunds</h3>
+  <p>Apple handles refunds for App Store purchases. Request one at <a href="https://reportaproblem.apple.com">reportaproblem.apple.com</a>. The developer cannot issue refunds directly.</p>
+</main>
+
+<footer class="site-footer">
+  © 2026 Nathanael Griffin · <a href="REPO_URL/blob/main/LICENSE">MIT License</a> · <a href="privacy.html">Privacy</a>
+</footer>
+</body>
+</html>

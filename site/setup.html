@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setup · Term</title>
+<meta name="description" content="Set up a Mac or Linux computer for Term, step by step, with what to do when a step fails.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#15121c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f4fa" media="(prefers-color-scheme: light)">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><img src="icon.png" alt="">Term</a>
+  <nav aria-label="Site">
+    <a href="setup.html" aria-current="page">Setup</a>
+    <a href="faq.html">FAQ</a>
+    <a href="support.html">Support</a>
+    <a href="privacy.html">Privacy</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Setup</h1>
+  <p>Term connects to a computer you own, where your agents run. This guide sets up that computer and adds it to Term. It takes about 15 minutes. Each step says what to do if it fails; the <a href="#troubleshooting">troubleshooting table</a> at the end lists the messages Term shows.</p>
+  <p>The examples call the computer <code>studio</code>. Use your own computer's name.</p>
+
+  <section class="step" id="computer">
+    <h2><span class="n">1</span> A computer that stays on</h2>
+    <p>Use a Mac or a Linux computer that stays on and awake while you are away. Your agents run there; Term only shows them.</p>
+    <ul>
+      <li>Mac: in System Settings › Energy (or Battery › Options on a laptop), turn on <strong>Prevent automatic sleeping when the display is off</strong>. A laptop must stay plugged in.</li>
+      <li>Linux: turn off automatic suspend in your desktop's power settings.</li>
+    </ul>
+    <p class="if-fails"><strong>If it fails:</strong> a computer that sleeps drops every connection. If Term stops reaching it after a while, check its sleep settings first.</p>
+  </section>
+
+  <section class="step" id="reach">
+    <h2><span class="n">2</span> Reach it from your phone</h2>
+    <p>Term connects over SSH. First turn on the computer's SSH server. On a Mac: System Settings › General › Sharing › <strong>Remote Login</strong>, on. On Linux:</p>
+    <pre><code># Ubuntu or Debian
+sudo apt install openssh-server
+
+# Fedora
+sudo dnf install openssh-server
+sudo systemctl enable --now sshd</code></pre>
+    <p>Then pick how your phone reaches the computer.</p>
+
+    <h3>From anywhere: Tailscale (recommended)</h3>
+    <ol>
+      <li>Install <a href="https://tailscale.com/download">Tailscale</a> on the computer and sign in.</li>
+      <li>Install Tailscale on your iPhone from the App Store, sign in with the same account, and turn it on.</li>
+      <li>In the Tailscale app, find your computer. Its address is its name (for example <code>studio</code>, through Tailscale's MagicDNS) or a number starting with <code>100.</code>. Either works in Term.</li>
+    </ol>
+
+    <h3>At home only: the same Wi-Fi</h3>
+    <p>If the phone and the computer share a network, use the computer's local address:</p>
+    <ul>
+      <li>Mac: System Settings › Wi-Fi › Details next to your network, or run <code>ipconfig getifaddr en0</code>.</li>
+      <li>Linux: run <code>hostname -I</code> and use the first address.</li>
+    </ul>
+    <p>This stops working when you leave home. Tailscale keeps working everywhere.</p>
+
+    <p>You also need your user name on the computer. Run <code>whoami</code> to see it.</p>
+    <p class="if-fails"><strong>If it fails:</strong> check that Tailscale is on in the iPhone's Tailscale app, and that the computer shows as connected there. If the name doesn't work, use the <code>100.</code> address.</p>
+  </section>
+
+  <section class="step" id="mosh">
+    <h2><span class="n">3</span> Install mosh and tmux</h2>
+    <p>mosh keeps your session alive when the phone changes networks or iOS suspends Term. tmux keeps your sessions running on the computer and lets Term list them. tmux is optional but recommended. On a Mac, install <a href="https://brew.sh">Homebrew</a> first if you don't have it.</p>
+    <pre><code># Mac
+brew install mosh tmux
+
+# Ubuntu or Debian
+sudo apt install mosh tmux
+
+# Fedora
+sudo dnf install mosh tmux</code></pre>
+    <p>Check the version with <code>mosh-server --version</code>. Term needs mosh 1.4.</p>
+    <p>mosh uses UDP ports 60000 to 61000. If the computer runs a firewall, allow them. On a Mac with the firewall on: System Settings › Network › Firewall › Options, add <code>mosh-server</code> and allow incoming connections. On Linux:</p>
+    <pre><code># ufw
+sudo ufw allow 60000:61000/udp
+
+# firewalld
+sudo firewall-cmd --permanent --add-port=60000-61000/udp
+sudo firewall-cmd --reload</code></pre>
+    <p class="if-fails"><strong>If it fails:</strong> if your system only offers a mosh older than 1.4, or UDP stays blocked, set the host's Transport to SSH in step 5. Everything works over SSH except surviving network changes and iOS suspends.</p>
+  </section>
+
+  <section class="step" id="host-kit">
+    <h2><span class="n">4</span> Run the host kit</h2>
+    <!-- CONFIRM: term-host is being built on the host-kit branch and nothing is there yet. Replace HOST_KIT_INSTALL_COMMAND with its real install one-liner, and check what `check`, `install` and `uninstall` actually do against the shipped script. -->
+    <p>The host kit, <code>term-host</code>, checks the computer and installs what lets Term show your agents' status. Install it with:</p>
+    <pre><code>HOST_KIT_INSTALL_COMMAND</code></pre>
+    <p>Then run:</p>
+    <pre><code>term-host check</code></pre>
+    <p>It checks that the SSH server answers, that mosh-server and tmux are installed and which versions, whether Tailscale is installed and signed in, and which agents (Claude Code, Codex, omp) it finds. For anything missing, it prints the command that installs it.</p>
+    <p>When the check passes, run:</p>
+    <pre><code>term-host install</code></pre>
+    <p>This sets up agent status for the agents it found (see step 6). It adds to your existing agent settings without overwriting them and keeps a backup. <code>term-host uninstall</code> removes exactly what it added.</p>
+    <p class="if-fails"><strong>If it fails:</strong> run each install command <code>term-host check</code> prints, then run the check again. If it still fails, send its output to <a href="support.html">support</a>.</p>
+  </section>
+
+  <section class="step" id="add-host">
+    <h2><span class="n">5</span> Add the computer in Term</h2>
+    <p>Open Term's Settings: tap the terminal with three fingers (or double-tap ⌘ on the key bar above the keyboard) and choose Settings.</p>
+
+    <h3>Add the host</h3>
+    <p>Go to Settings › Hosts, tap <strong>+</strong>, and fill in:</p>
+    <ul>
+      <li><strong>Alias</strong>: a short name you'll type, like <code>studio</code>.</li>
+      <li><strong>HostName</strong>: the address from step 2.</li>
+      <li><strong>Port</strong>: leave empty for 22.</li>
+      <li><strong>User</strong>: your user name from <code>whoami</code>.</li>
+      <li><strong>Key</strong>: leave as it is.</li>
+      <li><strong>Password</strong>: your computer password, for the first connection only.</li>
+      <li><strong>Transport</strong>: Mosh (or SSH, see step 3).</li>
+      <li><strong>Command</strong>: <code>tmux new -A -s main</code>, so every connection opens the same tmux session.</li>
+    </ul>
+    <p>Tap <strong>Save</strong>. In Term's terminal, type <code>mosh studio</code> (or <code>ssh studio</code>). The first time, Term saves the computer's identity and shows <code>Pinned studio's host key SHA256:…</code>.</p>
+
+    <h3>Switch to a key</h3>
+    <p>A key is safer than a password and lets you turn password login off later. The private key never leaves the iPhone's Keychain.</p>
+    <ol>
+      <li>Go to Settings › Keys, tap <strong>+</strong>, then <strong>Generate Ed25519 Key</strong>, then <strong>Generate</strong>. (<strong>Import Private Key</strong> takes a key you already have.)</li>
+      <li>Open the new key and tap <strong>Copy</strong> under its public key.</li>
+      <li>In the session you just opened, run these lines, pasting the public key between the quotes:
+<pre><code>mkdir -p ~/.ssh
+echo 'PUBLIC KEY' &gt;&gt; ~/.ssh/authorized_keys
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys</code></pre>
+        Or tap <strong>Share</strong> on the key to send it to the computer and run the lines there.</li>
+      <li>Open the host in Settings › Hosts, clear the Password field and tap Save.</li>
+      <li>Connect again. It connects with the key alone.</li>
+    </ol>
+    <p>Once a key exists, Term signs in with it and no longer tries the password; with more than one key, pick one in the host's Key field. Once connected, the tmux tab in the menu lists every tmux session on the computer.</p>
+    <p class="if-fails"><strong>If it fails:</strong> find the red message in the terminal in the <a href="#troubleshooting">troubleshooting table</a>. The most common is <code>authentication failed</code>: the User is wrong, or the key line didn't reach <code>~/.ssh/authorized_keys</code>.</p>
+  </section>
+
+  <section class="step" id="agents">
+    <h2><span class="n">6</span> See your agents</h2>
+    <p>Run your agents inside tmux on the computer. Term's tmux tab then shows, under each session's name, what its agent is doing, and the answer or question when it finishes, fails or asks you something. The tab's icon counts the sessions waiting on you. A long press shows the whole answer.</p>
+    <h3>Claude Code and Codex</h3>
+    <!-- CONFIRM: these hooks are planned in the host kit. Check what each agent reports once they ship; Codex may report less than Claude Code. -->
+    <p><code>term-host install</code> (step 4) adds hooks to Claude Code and Codex that report their state to Term. Start a new agent session afterwards.</p>
+    <h3>omp</h3>
+    <!-- CONFIRM: that term-host install copies integrations/omp/term-agent.ts into ~/.omp/agent/extensions. -->
+    <p><code>term-host install</code> also installs Term's omp extension. To install it by hand from a copy of the <a href="REPO_URL">source</a>, run in its folder:</p>
+    <pre><code>ln -s "$PWD/integrations/omp/term-agent.ts" ~/.omp/agent/extensions/term-agent.ts</code></pre>
+    <p>New omp sessions load it. Also set omp to repaint only the screen when the phone's keyboard rises or the phone rotates:</p>
+    <pre><code>omp config set tui.resizeScrollback preserve</code></pre>
+    <p class="if-fails"><strong>If it fails:</strong> make sure the agent runs inside tmux (outside tmux nothing is reported) and that you started it after installing. For omp without the extension, Term still shows working, asks you or idle from omp's terminal title.</p>
+  </section>
+
+  <section class="step" id="screen">
+    <h2><span class="n">7</span> Screen: see your Mac</h2>
+    <p>The Screen tab streams your Mac's displays to the phone and lets you drive them. It needs a small Mac app, Term Screen Host, which streams through your existing SSH connection and opens nothing new on the network.</p>
+    <!-- CONFIRM: the notarized .dmg is being built elsewhere. Replace SCREEN_HOST_DOWNLOAD_URL and check the install steps (drag to Applications? first-run guide?) against it. -->
+    <ol>
+      <li>Download Term Screen Host from <a href="SCREEN_HOST_DOWNLOAD_URL">SCREEN_HOST_DOWNLOAD_URL</a>, open it and install it.</li>
+      <li>In System Settings › Privacy &amp; Security, allow Term Screen Host under <strong>Screen &amp; System Audio Recording</strong> and under <strong>Accessibility</strong>.</li>
+      <li>So the clipboard can follow you: allow Term Screen Host's first paste on the Mac, and on the iPhone set Settings › Apps › Term › Paste from Other Apps to <strong>Allow</strong>.</li>
+      <li>To use a locked Mac: turn on System Settings › General › Sharing › <strong>Screen Sharing</strong>. Term asks once for the Mac account's password and keeps it in the iPhone's Keychain, behind Face ID.</li>
+      <li>In Term, open the menu, choose Screen, and pick your Mac.</li>
+    </ol>
+    <p class="if-fails"><strong>If it fails:</strong> <code>Install Term Screen Host on studio</code> means the Mac app is not running: open it, or install it again. <code>Term Screen Host needs access on studio</code> or <code>Allow Term Screen Host in Screen &amp; System Audio Recording and Accessibility</code> means one of the permissions above is still missing. <code>Can't reach studio</code> is a connection problem; see the table below.</p>
+  </section>
+
+  <section class="step" id="troubleshooting">
+    <h2><span class="n">8</span> Troubleshooting</h2>
+    <p>Connection errors show in red in the terminal; a silent mosh session shows a bar at the top. Find the message below.</p>
+    <table>
+      <thead><tr><th>Term shows</th><th>What to do</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>host key changed: expected ssh-ed25519 AAAA…, server presented ssh-ed25519 AAAA…</code></td>
+          <td>The computer at that address has a different identity than the first time. This is expected after reinstalling its system or if the address now points to another computer. If you know why, open the host in Settings › Hosts, tap <strong>Forget Host Key</strong>, and connect again. If you don't, stop and check the address.</td>
+        </tr>
+        <tr>
+          <td><code>authentication failed</code></td>
+          <td>The computer refused the sign-in (other SSH apps say <code>Permission denied (publickey)</code>). When Term has a key it signs in with the key, not the password. Check that User matches <code>whoami</code> on the computer, that your public key is one line in <code>~/.ssh/authorized_keys</code>, and run <code>chmod 700 ~/.ssh; chmod 600 ~/.ssh/authorized_keys</code>.</td>
+        </tr>
+        <tr>
+          <td><code>no key or password for this host</code></td>
+          <td>Make a key in Settings › Keys, or enter a password on the host.</td>
+        </tr>
+        <tr>
+          <td><code>mosh-server not found on the host (tried mosh-server, /opt/homebrew/bin/mosh-server, /usr/local/bin/mosh-server)</code></td>
+          <td>Install mosh (step 3). If it is installed somewhere else, run <code>which mosh-server</code> on the computer and put that path in the host's Mosh › Server field.</td>
+        </tr>
+        <tr>
+          <td><code>No contact for 8 s</code> or <code>Reconnecting…</code> at the top, over and over, right after connecting with mosh</td>
+          <td>SSH worked but mosh's UDP traffic is blocked. Allow UDP ports 60000 to 61000 in the computer's firewall (step 3), or set the host's Transport to SSH. If it appears later in a session, the network dropped: Term reconnects by itself, or tap <strong>Reconnect</strong>.</td>
+        </tr>
+        <tr>
+          <td><code>cannot connect to studio:22: Connection refused</code></td>
+          <td>The computer is reachable but its SSH server is off. Turn on Remote Login on a Mac, or start the SSH server on Linux (step 2).</td>
+        </tr>
+        <tr>
+          <td><code>cannot connect to studio:22: timed out</code> or <code>handshake timed out</code></td>
+          <td>The phone can't reach the computer. Check that Tailscale is on in the iPhone's Tailscale app, that the computer is awake and online, and that the address is right. On the same Wi-Fi, check the phone isn't on cellular.</td>
+        </tr>
+        <tr>
+          <td><code>cannot resolve studio</code></td>
+          <td>The name is unknown to the phone: Tailscale is off on the iPhone, or MagicDNS is off in Tailscale. Turn Tailscale on, or use the computer's <code>100.</code> address.</td>
+        </tr>
+        <tr>
+          <td><code>Can't reach studio</code> or <code>Install Term Screen Host on studio</code> in Screen</td>
+          <td>See step 7. Check that a terminal connects to the same host first.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>Still stuck? See <a href="support.html">Support</a> for what to send.</p>
+  </section>
+</main>
+
+<footer class="site-footer">
+  © 2026 Nathanael Griffin · <a href="REPO_URL/blob/main/LICENSE">MIT License</a> · <a href="privacy.html">Privacy</a>
+</footer>
+</body>
+</html>
