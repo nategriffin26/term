@@ -39,6 +39,7 @@ struct VoiceView: View {
               VStack(alignment: .leading, spacing: 2) {
                 Text(model.name)
                 Text(model.id).font(Chrome.mono(.secondary)).foregroundStyle(Chrome.muted)
+                  .lineLimit(1).minimumScaleFactor(0.75)
               }
               .frame(maxWidth: .infinity, alignment: .leading)
               ValueText(String(format: "$%.2f/h", model.dollarsPerHour))
