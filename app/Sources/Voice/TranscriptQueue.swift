@@ -54,8 +54,6 @@ struct TranscriptQueue<Target> {
     let target: Target
     /// Its recording's whole text goes through cleanup before it is typed.
     let cleansUp: Bool
-    /// What the transcriber is told the part is about (`DictationPrompt`).
-    let prompt: String
     /// The m4a file the part is spooled to.
     var audio: URL?
     var status = Status.encoding
@@ -69,7 +67,6 @@ struct TranscriptQueue<Target> {
   struct Request {
     let id: Int
     let audio: URL
-    let prompt: String
   }
 
   /// A recording's text, ready to type.
@@ -145,11 +142,11 @@ struct TranscriptQueue<Target> {
   }
 
   /// Holds a recording's place in order before its parts' audio is ready; returns the parts' ids.
-  mutating func reserve(parts: Int, target: Target, prompt: String, cleansUp: Bool = false) -> [Int] {
+  mutating func reserve(parts: Int, target: Target, cleansUp: Bool = false) -> [Int] {
     defer { nextRecording += 1 }
     return (0..<parts).map { _ in
       defer { nextID += 1 }
-      entries.append(Entry(id: nextID, recording: nextRecording, target: target, cleansUp: cleansUp, prompt: prompt))
+      entries.append(Entry(id: nextID, recording: nextRecording, target: target, cleansUp: cleansUp))
       return nextID
     }
   }
@@ -171,7 +168,7 @@ struct TranscriptQueue<Target> {
     for i in entries.indices where free > 0 && entries[i].status == .ready {
       guard let audio = entries[i].audio else { continue }
       entries[i].status = .sending
-      requests.append(Request(id: entries[i].id, audio: audio, prompt: entries[i].prompt))
+      requests.append(Request(id: entries[i].id, audio: audio))
       free -= 1
     }
     return requests

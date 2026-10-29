@@ -12,8 +12,6 @@ extension Notification.Name {
 protocol DictationTarget: AnyObject {
   /// Where input typed here goes now; nil at the local prompt.
   var dictationDestination: DictationDestination? { get }
-  /// The prompt for what is said here (`DictationPrompt`): the end of the screen and the text last dictated.
-  var dictationPrompt: String { get }
   /// Types a recording's text at the cursor.
   func typeDictation(_ text: String)
   /// Says what went wrong (the microphone refused, the key rejected).
@@ -75,7 +73,7 @@ final class Dictation {
   private let transcriber: @MainActor () -> Transcriber?
   /// Cleanup as Settings › Voice has it now; nil when it is off.
   private let cleanup: @MainActor () -> DictationCleanup?
-  /// The words to get right, for the transcription prompt and cleanup.
+  /// The words to get right, for transcription and cleanup.
   private let words: @MainActor () -> [String]
   private let microphone: MicrophoneFactory
   private let startDeadline: Duration
@@ -225,7 +223,7 @@ final class Dictation {
     DiagnosticLog.record(.voice, "stopped", "run=\(run) seconds=\(DiagnosticLog.seconds(Double(recording.samples.count) / Double(Recording.sampleRate)))")
     startTimer?.cancel()
     startTimer = nil
-    transcribe(recording, into: destination, prompt: target?.dictationPrompt ?? "")
+    transcribe(recording, into: destination)
     recording = Recording()
     gate.release()
     target = nil
@@ -245,7 +243,8 @@ final class Dictation {
 
   /// Turns the microphone on into `target`. Listening shows at once; a
   /// microphone that fails, or has not started by `startDeadline`, ends it
-  /// in the strip's failed state.
+  /// in the strip's failed state. The transcription connection opens
+  /// meanwhile, once per listening, without holding up the microphone.
   func listen(into target: DictationTarget) {
     guard !isListening else { return }
     run += 1
@@ -279,6 +278,7 @@ final class Dictation {
       startTimer = nil
       if error != nil { microphoneStopped(run: run) }
     }
+    transcriber()?.prewarm()
     retry(all: true)
   }
 
@@ -303,7 +303,7 @@ final class Dictation {
   /// classifier; with speech, its parts are queued for transcription, and
   /// without, the strip says there was no speech, at once when the
   /// recording is empty.
-  private func transcribe(_ recording: Recording, into destination: Destination, prompt: String) {
+  private func transcribe(_ recording: Recording, into destination: Destination) {
     guard !recording.loudness.isEmpty else {
       DiagnosticLog.record(.voice, "no-speech", "reason=empty")
       return show(.noSpeech)
@@ -316,7 +316,7 @@ final class Dictation {
       if parts.isEmpty {
         show(.noSpeech)
       } else {
-        let ids = reserve(parts: parts.count, destination, prompt: prompt)
+        let ids = reserve(parts: parts.count, destination)
         for (id, part) in zip(ids, parts) {
           Task.detached(priority: .userInitiated) { [weak self] in
             let audio = try? SpeechAudio.m4a(part[...])
@@ -334,12 +334,12 @@ final class Dictation {
 
   /// Holds a place in order for a recording of `parts` parts said into `target` now; returns the parts' ids.
   func reserve(parts: Int, for target: DictationTarget) -> [Int] {
-    reserve(parts: parts, Destination(view: target, place: target.dictationDestination), prompt: target.dictationPrompt)
+    reserve(parts: parts, Destination(view: target, place: target.dictationDestination))
   }
 
-  private func reserve(parts: Int, _ destination: Destination, prompt: String) -> [Int] {
+  private func reserve(parts: Int, _ destination: Destination) -> [Int] {
     watchNetwork()
-    let ids = queue.reserve(parts: parts, target: destination, prompt: prompt, cleansUp: true)
+    let ids = queue.reserve(parts: parts, target: destination, cleansUp: true)
     update()
     return ids
   }
@@ -370,7 +370,7 @@ final class Dictation {
     let files = spool.leftovers()
     guard !files.isEmpty else { return }
     for file in files {
-      for id in reserve(parts: 1, Destination(view: nil, place: nil), prompt: "") { queue.setAudio(file, for: id) }
+      for id in reserve(parts: 1, Destination(view: nil, place: nil)) { queue.setAudio(file, for: id) }
     }
     resend()
   }
@@ -385,17 +385,20 @@ final class Dictation {
       }
       return
     }
+    let vocabulary = DictationWords.bounded(words())
     for request in queue.send() {
-      let prompt = DictationPrompt.adding(DictationWords.bounded(words()), to: request.prompt)
       Task { [weak self] in
         let start = ProcessInfo.processInfo.systemUptime
         do throws(TranscriptionFailure) {
-          let text = try await transcriber.transcribe(request.audio, prompt: prompt) { [weak self] in
+          let transcript = try await transcriber.transcribe(request.audio, words: vocabulary) { [weak self] in
             Task { @MainActor in self?.waiting(request.id) }
           }
           DiagnosticLog.record(.voice, "transcribed",
-            "part=\(request.id) seconds=\(DiagnosticLog.seconds(ProcessInfo.processInfo.systemUptime - start)) characters=\(text.count)")
-          self?.finished(request.id, text)
+            "part=\(request.id) seconds=\(DiagnosticLog.seconds(ProcessInfo.processInfo.systemUptime - start)) "
+              + "characters=\(transcript.text.count) model=\(transcript.model) bytes=\(transcript.bytes) "
+              + "ms=\(transcript.milliseconds) status=\(transcript.status)"
+              + (transcript.provider.map { " provider=\(DiagnosticLog.name($0))" } ?? ""))
+          self?.finished(request.id, transcript.text)
         } catch {
           self?.failed(request.id, error)
         }

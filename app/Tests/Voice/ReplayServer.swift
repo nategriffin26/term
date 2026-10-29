@@ -4,7 +4,7 @@ import XCTest
 
 /// An HTTP/1.1 server on 127.0.0.1 that answers each request with a reply
 /// recorded from OpenRouter, after a delay, or never (`answer` returns nil).
-/// It keeps every request body it received.
+/// It keeps every request line and body it received.
 final class ReplayServer: @unchecked Sendable {
   struct Reply {
     let status: Int
@@ -17,11 +17,17 @@ final class ReplayServer: @unchecked Sendable {
   private let queue = DispatchQueue(label: "ReplayServer")
   private let lock = NSLock()
   private var bodies: [Data] = []
+  private var lines: [String] = []
   private let answer: @Sendable (_ request: [String: Any]) -> Reply?
 
   /// The JSON bodies received so far, in order.
   var requests: [[String: Any]] {
     lock.withLock { bodies }.map { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] ?? [:] }
+  }
+
+  /// Each request's method and path ("GET /api/v1/key"), in order.
+  var requestLines: [String] {
+    lock.withLock { lines }
   }
 
   init(answer: @escaping @Sendable (_ request: [String: Any]) -> Reply?) async throws {
@@ -70,12 +76,16 @@ final class ReplayServer: @unchecked Sendable {
         .flatMap { Int($0.split(separator: ":")[1].trimmingCharacters(in: .whitespaces)) } ?? 0
       let body = buffer[split.upperBound...]
       guard body.count >= length else { return done ? connection.cancel() : read(connection, buffer) }
-      respond(connection, Data(body.prefix(length)))
+      let line = head.split(separator: "\r\n").first.map { $0.split(separator: " ").prefix(2).joined(separator: " ") } ?? ""
+      respond(connection, line, Data(body.prefix(length)))
     }
   }
 
-  private func respond(_ connection: NWConnection, _ body: Data) {
-    lock.withLock { bodies.append(body) }
+  private func respond(_ connection: NWConnection, _ line: String, _ body: Data) {
+    lock.withLock {
+      lines.append(line)
+      bodies.append(body)
+    }
     let request = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
     // Never answered: the connection stays open until the client gives up.
     guard let reply = answer(request) else { return }
@@ -113,4 +123,11 @@ enum RecordedCleanup {
       + content
       + #"","refusal":null,"reasoning":null}}],"usage":{"prompt_tokens":1514,"completion_tokens":26,"total_tokens":1540,"cost":3.372e-05,"is_byok":false,"prompt_tokens_details":{"cached_tokens":1452,"cache_write_tokens":0}}}"#
   }
+}
+
+/// Replies OpenRouter sent to the transcription request (recorded 2026-10-28
+/// by the dictation bench, clip t01 with its word list in the model's field).
+enum RecordedTranscription {
+  static let gptTranscribe = ReplayServer.Reply(status: 200, body: #"{"text":"Okay, so in omp, open app slash Sources slash Voice slash Dictation.swift, and tell me what the stop function does.","usage":{"seconds":9,"cost":0.000675}}"#)
+  static let universal = ReplayServer.Reply(status: 200, body: #"{"text":"Okay, so in ompa, open app/sources/voice/dictation.swift and tell me what the stop function does.","usage":{"seconds":8.362,"cost":0.0006968330546}}"#)
 }
