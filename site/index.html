@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Term: a terminal for iPhone</title>
+<meta name="description" content="A terminal for iPhone for keeping watch on the coding agents running on your own computers. mosh, tmux, agent status, files and your Mac's screen.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#15121c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f4fa" media="(prefers-color-scheme: light)">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><img src="icon.png" alt="">Term</a>
+  <nav aria-label="Site">
+    <a href="setup.html">Setup</a>
+    <a href="faq.html">FAQ</a>
+    <a href="support.html">Support</a>
+    <a href="privacy.html">Privacy</a>
+  </nav>
+</header>
+
+<main>
+  <h1>A terminal for iPhone, for keeping watch on the coding agents that run on your own computers.</h1>
+
+  <div class="actions">
+    <a class="button primary" href="APP_STORE_URL">Get it on the App Store</a>
+    <a class="button" href="setup.html">Setup guide</a>
+  </div>
+  <p class="muted">iPhone only, iOS 27 or later.</p>
+
+  <h2>Who it is for</h2>
+  <p>You run agents like Claude Code, Codex or omp on a Mac or Linux computer, and your day often keeps you away from a laptop. Term lets you check on them from your phone: see which one is working, read what it finished, answer its question and let it continue. It is made for supervising work, not for writing code on a phone.</p>
+
+  <h2>What it does</h2>
+  <ul class="features">
+    <li><strong>Sessions that survive iOS</strong> Term speaks mosh and SSH. A mosh session moves between Wi-Fi and cellular and comes back after iOS suspends or closes the app.</li>
+    <li><strong>tmux, one line per session</strong> Every tmux session on your computers in one list. Tap to open, swipe between them. The same sessions stay open on your computer.</li>
+    <li><strong>Agent status</strong> Each session shows whether its agent is working, done, failed or asking you something, with the answer or question under its name.</li>
+    <!-- CONFIRM: Claude Code and Codex status comes from the term-host hooks (host-kit branch). Keep "Claude Code, Codex" on this page only if those hooks ship. -->
+    <li><strong>Files</strong> Browse, search, view and edit files on the computer over SFTP.</li>
+    <li><strong>Dictation</strong> Speak a reply instead of typing it, with your own OpenRouter API key.</li>
+    <li><strong>Your Mac's screen</strong> Stream the Mac's displays and control them, over your own SSH connection.</li>
+  </ul>
+
+  <h2>What you need</h2>
+  <p>A Mac or Linux computer that stays on and that your phone can reach over SSH: on the same network at home, or from anywhere through <a href="https://tailscale.com">Tailscale</a>. There is no account to make. Term connects only to your computers; the developer runs no server that sees your sessions. The <a href="setup.html">setup guide</a> walks through each step.</p>
+
+  <h2>Open source, MIT</h2>
+  <p>Term's source code is on GitHub at <a href="REPO_URL">REPO_URL</a> under the MIT license. Anyone can read it or build the app themselves for free. Buying it on the App Store supports the work.</p>
+</main>
+
+<footer class="site-footer">
+  © 2026 Nathanael Griffin · <a href="REPO_URL/blob/main/LICENSE">MIT License</a> · <a href="privacy.html">Privacy</a>
+</footer>
+</body>
+</html>

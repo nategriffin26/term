@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy · Term</title>
+<meta name="description" content="What the Term iPhone app sends, to whom, and what stays on your phone.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#15121c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f4fa" media="(prefers-color-scheme: light)">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><img src="icon.png" alt="">Term</a>
+  <nav aria-label="Site">
+    <a href="setup.html">Setup</a>
+    <a href="faq.html">FAQ</a>
+    <a href="support.html">Support</a>
+    <a href="privacy.html" aria-current="page">Privacy</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Privacy Policy</h1>
+  <p class="muted">Effective EFFECTIVE_DATE</p>
+
+  <p>Term is an iPhone app made by Nathanael Griffin, an individual developer, who is responsible for the data described here. Questions go to <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a>.</p>
+
+  <h2>In short</h2>
+  <ul>
+    <li>There is no account and no sign-in.</li>
+    <li>There are no ads, no tracking, and no third-party analytics or crash-reporting code in the app.</li>
+    <li>Your hosts, keys, passwords, terminal content and files stay on your iPhone and go only to the computers you connect to.</li>
+    <li>If you turn on dictation with your own OpenRouter API key, your recordings and some terminal text go to OpenRouter under your account.</li>
+    <li>The developer runs one small service, used for push notifications and an optional daily usage count. Neither carries session names or terminal content, and the count is off until you agree to it.</li>
+  </ul>
+  <p>Term is open source. You can check all of this in the code at <a href="REPO_URL">REPO_URL</a>.</p>
+
+  <h2>What stays on your iPhone</h2>
+  <p>Term keeps these on your iPhone:</p>
+  <ul>
+    <li>Your hosts: their names, addresses, user names and settings, and the host keys Term pinned for them.</li>
+    <li>SSH keys made or imported in the app, and host passwords, in the iOS Keychain.</li>
+    <li>The Mac password for Screen Sharing, if you enter one, in the Keychain behind Face ID.</li>
+    <li>Your OpenRouter API key, if you add one, in the Keychain.</li>
+    <li>Terminal content and history, files you open, and your settings.</li>
+    <li>A diagnostic log of the app's own decisions (connections, gestures, menu actions) used to fix bugs. It never records what you type or what the terminal shows. It stays in the app's storage on your iPhone and is not sent anywhere.</li>
+  </ul>
+  <p>Term sends your sessions, keystrokes and files only to the computers you add, directly from your iPhone over SSH, mosh and SFTP. The developer runs no server that sees them and has no access to your computers.</p>
+
+  <h3>Screen</h3>
+  <p>Term Screen Host is a small app you install on your Mac. It sends the Mac's screen and clipboard only to your iPhone, through your own SSH connection to the Mac. It opens nothing new on the network.</p>
+
+  <h2>Dictation</h2>
+  <p>Dictation is optional and off until you add your own OpenRouter API key in Settings › Voice. When you dictate, Term sends these directly from your iPhone to <a href="https://openrouter.ai">OpenRouter</a>, under your OpenRouter account:</p>
+  <ul>
+    <li>the audio you recorded;</li>
+    <li>a context prompt that helps the transcription: the last lines visible in that terminal, the text you last dictated into it, and your list of words to get right.</li>
+  </ul>
+  <p>If Clean Up Dictation is on (Settings › Voice), Term also sends the transcript and your list of words to get right to a small text model, also through OpenRouter.</p>
+  <p>This means some terminal text leaves your iPhone when you dictate. OpenRouter's handling of it is covered by <a href="https://openrouter.ai/privacy">OpenRouter's privacy policy</a>. The developer never receives any of it. Without a key, nothing goes to OpenRouter. Remove the key in Settings › Voice to stop.</p>
+
+  <h2>Push notifications</h2>
+  <!-- CONFIRM: matches the push-relay branch (relay/src/contract.ts, relay/src/index.ts, integrations/notify) as of 36b4f48; nothing has shipped. Recheck against the shipped Worker, term-notify and app: fields, alert texts, 90-day expiry. -->
+  <p>Notifications are optional. If you turn them on, Term registers your iPhone with a relay service the developer runs on Cloudflare Workers. The relay stores:</p>
+  <ul>
+    <li>your iPhone's push token (an address Apple issues so notifications reach this app on this iPhone);</li>
+    <li>a random device id made by the app, unrelated to the daily count's id;</li>
+    <li>for each computer you pair, a coded pairing id that links it to your device id.</li>
+  </ul>
+  <p>When an agent stops, the notifier on your computer sends the relay a pairing secret, a coded session reference and the kind of stop (asks, needs approval, done, or error). The session reference is a keyed hash that only your iPhone can match to a tmux session; the relay never receives session names, pane names, questions, answers, file paths, host names or terminal content.</p>
+  <p>The relay passes Apple's push notification service a fixed alert, "An agent needs you" or "An agent finished", with the pairing id, the coded reference and the kind of stop, so that tapping it opens the right session.</p>
+
+  <h2>Daily count</h2>
+  <!-- CONFIRM: the Worker side matches the push-relay branch as of 36b4f48. The app side (asking before the first ping, the switch's place in Settings, monthly id rotation) is not built; confirm against the shipped app and set COUNTER_SWITCH. Also confirm Cloudflare logs and analytics keep no IP addresses. -->
+  <p>Term asks before it sends any usage count. If you agree, it sends the same service one request a day so the developer can count how many people use the app and which parts. The request contains:</p>
+  <ul>
+    <li>a random install id, made on your iPhone and replaced every month;</li>
+    <li>four yes-or-no flags: whether a host connected, whether Screen was opened, whether you answered an agent's question, and whether you have Pro.</li>
+  </ul>
+  <p>It contains no hostnames, no terminal content and nothing that names you. The service stores one record per install per day, filed under a hash of the month and the install id rather than the id itself. It does not store IP addresses.</p>
+  <p>To stop it later, turn off the switch in Settings › COUNTER_SWITCH. Nothing is sent while it is off.</p>
+
+  <h2>Purchases</h2>
+  <p>Purchases and subscriptions go through Apple. The developer sees only Apple's aggregate sales and subscription reports, never your name, Apple Account or payment details.</p>
+
+  <h2>How long data is kept</h2>
+  <p>Data on your iPhone stays until you delete it. Remove hosts and keys in Settings › Hosts and Settings › Keys, or delete the app.</p>
+  <!-- CONFIRM: values from relay/src/index.ts on the push-relay branch (REGISTRATION_TTL 90 days, RAW_COUNTER_DAYS 14, ROLLUP_DAYS 90). Recheck against the shipped Worker. -->
+  <p>The relay deletes a device registration 90 days after the app last renewed it, and a pairing 90 days after it was last used or when its device registration goes. Daily count records are deleted after 14 days; the daily totals made from them (counts only) are kept for 90 days.</p>
+
+  <h2>Your questions and requests</h2>
+  <p>Nothing the service stores identifies you: the ids are random, the daily count is filed under a hash that changes every month, and there is no account. So the developer cannot look up or hand over data about a particular person. To stop the daily count, turn it off in Settings. To stop notifications, turn them off for Term in the iPhone's Settings; a registration the app stops renewing is deleted after 90 days. For any question, write to <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a>.</p>
+
+  <h2>Children</h2>
+  <p>Term is not directed at children under 13, and the developer does not knowingly collect data from them.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the new version will be posted on this page with a new effective date.</p>
+</main>
+
+<footer class="site-footer">
+  © 2026 Nathanael Griffin · <a href="REPO_URL/blob/main/LICENSE">MIT License</a> · <a href="privacy.html">Privacy</a>
+</footer>
+</body>
+</html>
