@@ -50,9 +50,13 @@ final class MessageRail {
   private(set) var messages: [Message] = []
   /// Oldest first.
   private(set) var marks: [Mark] = []
-  /// Ids the host's `@read` holds, and those read here since it was last read.
+  /// Ids the host's `@read` holds.
   private var hostRead: Set<String> = []
+  /// Ids read here that the host's `@read` did not hold when last read:
+  /// written again after every read of the pane until it does.
   private var readHere: Set<String> = []
+  /// Of those, the ones being written now.
+  private var sending: Set<String> = []
   /// The agent stopped for the user: its newest message is the one it waits on.
   private(set) var agentStopped = false
   private var agentMessages: Int?
@@ -157,9 +161,12 @@ final class MessageRail {
     messages = read.messages
     hostRead = read.read
     readHere.subtract(hostRead)
+    // A message no longer listed needs no write.
+    readHere.formIntersection(read.messages.map(\.id))
     marks = read.pane == nil ? [] : Self.locate(read.messages, in: read.lines)
     logLocated()
     onChange?()
+    sendReads(readHere.sorted())
   }
 
   /// One device log line whenever what the rail found changes.
@@ -216,15 +223,26 @@ final class MessageRail {
   /// How long a message's first line stays on screen before it counts as read.
   static let viewedAfter: TimeInterval = 1
 
-  /// Read here and on the host, for every device.
+  /// Read here at once, and on the host for every device (written again
+  /// after each read of the pane until the host holds it).
   func markRead(_ ids: [String]) {
     let ids = ids.filter { !isRead($0) }
-    guard !ids.isEmpty, let pane else { return }
+    guard !ids.isEmpty, pane != nil else { return }
     readHere.formUnion(ids)
     for id in ids { sightings[id] = nil }
     onChange?()
+    sendReads(ids)
+  }
+
+  private func sendReads(_ ids: [String]) {
+    let ids = ids.filter { !sending.contains($0) }
+    guard !ids.isEmpty, let pane else { return }
+    sending.formUnion(ids)
     let command = Self.readCommand(pane: pane.id, ids: ids)
-    Task { _ = await exec(command) }
+    Task {
+      _ = await exec(command)
+      sending.subtract(ids)
+    }
   }
 
   // MARK: - Jumping

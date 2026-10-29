@@ -19,19 +19,28 @@ final class MessageRailTests: XCTestCase {
 
   private let twoMessages = #"{"v":1,"m":[{"i":"a","t":1792987200,"h":"First answer."},{"i":"b","t":1792987260,"h":"The fix is in."}]}"#
 
-  /// A host that answers refreshes with `refresh` (by call), jumps with `jump`, and records every command.
+  /// A host that answers refreshes with `refresh` (by call), jumps with `jump`, and records every command;
+  /// the first `failedWrites` writes to `@read` fail.
   private final class FakeHost {
     var commands: [String] = []
     var refreshes: [Data?] = []
     var jumps: [Data?] = []
     var fallbackRefresh: Data?
+    var failedWrites = 0
 
     func exec(_ command: String) -> Data? {
       commands.append(command)
       if command.contains("show-options -pqv") { return refreshes.isEmpty ? fallbackRefresh : refreshes.removeFirst() }
       if command.contains("goto-line") { return jumps.isEmpty ? nil : jumps.removeFirst() }
+      if command.contains("@read '"), failedWrites > 0 {
+        failedWrites -= 1
+        return nil
+      }
       return Data()
     }
+
+    /// Writes of `id` to `@read`.
+    func writes(of id: String) -> Int { commands.count { $0.contains("@read '#{@read} \(id)'") } }
   }
 
   private func rail(_ host: FakeHost) -> MessageRail {
@@ -194,6 +203,30 @@ final class MessageRailTests: XCTestCase {
     XCTAssertTrue(rail.isRead("b"))
     try await Task.sleep(for: .milliseconds(50))
     XCTAssertTrue(host.commands.contains(Tmux.path + #"; tmux set-option -p -F -t %5 @read '#{@read} b'"#), host.commands.joined(separator: "\n---\n"))
+  }
+
+  // Bug: a read the host never received (the write failed) stayed read on this phone only, never sent again.
+  func testAReadTheHostMissedIsSentAgainUntilTheHostHoldsIt() async throws {
+    let host = FakeHost()
+    let lines = ["100:First answer.", "1150:The fix is in."]
+    // The first refresh reads twice (its heads are new); the next once, still without b.
+    host.refreshes = Array(repeating: refreshOutput(messages: twoMessages, lines: lines), count: 3)
+    host.fallbackRefresh = refreshOutput(messages: twoMessages, read: "b", lines: lines)
+    host.failedWrites = 1
+    let rail = rail(host)
+    await rail.refreshed()
+    rail.markRead(["b"])
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(host.writes(of: "b"), 1)
+    XCTAssertTrue(rail.isRead("b"), "read here at once")
+    await rail.refreshed()
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(host.writes(of: "b"), 2, "sent again once the host answered")
+    await rail.refreshed()
+    await rail.refreshed()
+    try await Task.sleep(for: .milliseconds(50))
+    XCTAssertEqual(host.writes(of: "b"), 2, "not again once the host holds it")
+    XCTAssertTrue(rail.isRead("b"))
   }
 
   // MARK: - Reading
