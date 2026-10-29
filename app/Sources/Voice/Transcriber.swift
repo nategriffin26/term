@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Synchronization
 
 /// Turns one part of a recording into text.
 protocol Transcriber: Sendable {
@@ -36,11 +37,9 @@ struct VoiceModel: Identifiable, Sendable {
   /// US dollars per hour of audio, as the bench was billed.
   let dollarsPerHour: Double
   let words: WordsField
-  /// What the request sends; the spool always holds m4a.
-  var format = SpeechAudio.Format.m4a
 
   enum WordsField: Sendable {
-    case openAIKeywords, assemblyAIKeyterms, elevenLabsKeyterms, azurePhraseList
+    case openAIKeywords, assemblyAIKeyterms, elevenLabsKeyterms
   }
 
   /// Most accurate on terminal dictation with the words (0.39% WER, every listed word right).
@@ -51,19 +50,17 @@ struct VoiceModel: Identifiable, Sendable {
     VoiceModel(id: "assemblyai/universal-3-6-pro", name: "Universal-3.6 Pro", dollarsPerHour: 0.30,
                words: .assemblyAIKeyterms),
     VoiceModel(id: "elevenlabs/scribe-v2", name: "Scribe v2", dollarsPerHour: 0.22, words: .elevenLabsKeyterms),
-    VoiceModel(id: "microsoft/mai-transcribe-2", name: "MAI-Transcribe 2", dollarsPerHour: 0.11,
-               words: .azurePhraseList, format: .flac),
   ]
 
   static func named(_ id: String) -> VoiceModel? {
     menu.first { $0.id == id }
   }
 
-  /// Whisper and the GPT-4o family: a stored one moves to `recommended` at
-  /// launch. Whisper dropped words from long recordings, and GPT-4o writes
-  /// foreign text for silence.
+  /// Whisper, the GPT-4o family and MAI-Transcribe 2: a stored one moves to
+  /// `recommended` at launch. Whisper dropped words from long recordings,
+  /// GPT-4o writes foreign text for silence, and MAI refuses m4a.
   static func isRetired(_ id: String) -> Bool {
-    id.hasPrefix("openai/whisper-") || id.hasPrefix("openai/gpt-4o")
+    id.hasPrefix("openai/whisper-") || id.hasPrefix("openai/gpt-4o") || id == "microsoft/mai-transcribe-2"
   }
 
   /// `provider.options` carrying `words` in this model's field.
@@ -72,7 +69,6 @@ struct VoiceModel: Identifiable, Sendable {
     case .openAIKeywords: ["openai": ["keywords": words]]
     case .assemblyAIKeyterms: ["assemblyai": ["keyterms_prompt": words]]
     case .elevenLabsKeyterms: ["elevenlabs": ["keyterms": words]]
-    case .azurePhraseList: ["azure": ["phraseList": ["phrases": words]]]
     }
   }
 }
@@ -96,25 +92,32 @@ struct OpenRouterTranscriber: Transcriber {
     return URLSession(configuration: config)
   }()
 
+  /// A pre-warm is out on `session`: at most one at a time, so starts and
+  /// stops against a stalled endpoint never pile requests up.
+  private static let prewarming = Atomic<Bool>(false)
+
   /// A tiny authenticated request (the key's own record) on the session the
-  /// transcription uses, so DNS, TCP and TLS are done by the stop. Without
-  /// a network it is dropped rather than waiting for one.
+  /// transcription uses, so DNS, TCP and TLS are done by the stop. It gives
+  /// up after 5 s without a byte, and without a network it is dropped
+  /// rather than waiting for one.
   func prewarm() {
+    guard Self.prewarming.compareExchange(expected: false, desired: true, ordering: .acquiringAndReleasing).exchanged else {
+      return
+    }
     var request = URLRequest(url: baseURL.appending(path: "key"))
     request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-    let task = Self.session.dataTask(with: request)
+    let task = Self.session.dataTask(with: request) { _, _, _ in
+      Self.prewarming.store(false, ordering: .releasing)
+    }
     task.delegate = PrewarmDelegate()
     task.resume()
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { task.cancel() }
   }
 
   func transcribe(_ audio: URL, words: [String],
                   waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> Transcript {
-    let format = Self.format(of: model)
-    guard FileManager.default.fileExists(atPath: audio.path) else {
+    guard let sent = try? Data(contentsOf: audio) else {
       throw TranscriptionFailure(problem: .other("The recording is gone"), retriesByItself: false)
-    }
-    guard let sent = try? (format == .flac ? SpeechAudio.flac(fromM4A: audio) : Data(contentsOf: audio)) else {
-      throw TranscriptionFailure(problem: .other("The recording could not be read as \(format.rawValue)"), retriesByItself: false)
     }
     let request = Self.request(audio: sent, words: words, model: model, key: key, baseURL: baseURL)
     let start = ContinuousClock.now
@@ -133,12 +136,7 @@ struct OpenRouterTranscriber: Transcriber {
                       milliseconds: milliseconds, status: status, provider: http?.value(forHTTPHeaderField: "X-Provider-Name"))
   }
 
-  /// The audio format `model` is sent in: m4a unless the menu says otherwise.
-  static func format(of model: String) -> SpeechAudio.Format {
-    VoiceModel.named(model)?.format ?? .m4a
-  }
-
-  /// The request: the audio as base64, English, and the words in the
+  /// The request: the audio as base64 m4a, English, and the words in the
   /// model's own field (`VoiceModel.options`); a model off the menu gets none.
   static func request(audio: Data, words: [String], model: String, key: String, baseURL: URL) -> URLRequest {
     var request = URLRequest(url: baseURL.appending(path: "audio/transcriptions"))
@@ -147,7 +145,7 @@ struct OpenRouterTranscriber: Transcriber {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     var body: [String: Any] = [
       "model": model,
-      "input_audio": ["data": audio.base64EncodedString(), "format": format(of: model).rawValue],
+      "input_audio": ["data": audio.base64EncodedString(), "format": "m4a"],
       "language": "en",
     ]
     if !words.isEmpty, let options = VoiceModel.named(model)?.options(words) {
@@ -223,13 +221,8 @@ enum DictationWords {
   }
 }
 
-/// Speech as OpenRouter takes it: AAC in an m4a, 16 kHz mono, 32 kbps (about
-/// 4 KB a second); FLAC, made from that m4a, for a model that refuses AAC.
+/// Speech as OpenRouter takes it: AAC in an m4a, 16 kHz mono, 32 kbps (about 4 KB a second).
 enum SpeechAudio {
-  enum Format: String, Sendable {
-    case m4a, flac
-  }
-
   static func m4a(_ samples: ArraySlice<Float>) throws -> Data {
     guard !samples.isEmpty else { throw CocoaError(.fileWriteUnknown) }
     let rate = Double(Recording.sampleRate)
@@ -248,27 +241,6 @@ enum SpeechAudio {
     try file.write(from: buffer)
     file.close()
     return compact(try Data(contentsOf: url))
-  }
-
-  /// A spooled m4a as 16-bit FLAC at its own rate (about 12 KB a second).
-  static func flac(fromM4A m4a: URL) throws -> Data {
-    let input = try AVAudioFile(forReading: m4a)
-    let format = input.processingFormat
-    guard input.length > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(input.length)) else {
-      throw CocoaError(.fileReadCorruptFile)
-    }
-    try input.read(into: buffer)
-    let url = FileManager.default.temporaryDirectory.appending(path: "speech-\(UUID().uuidString).flac")
-    defer { try? FileManager.default.removeItem(at: url) }
-    let settings: [String: Any] = [
-      AVFormatIDKey: kAudioFormatFLAC, AVSampleRateKey: format.sampleRate, AVNumberOfChannelsKey: format.channelCount,
-      AVLinearPCMBitDepthKey: 16,
-    ]
-    let output = try AVAudioFile(forWriting: url, settings: settings, commonFormat: format.commonFormat,
-                                 interleaved: format.isInterleaved)
-    try output.write(from: buffer)
-    output.close()
-    return try Data(contentsOf: url)
   }
 
   /// Drops the ~24 KB 'free' atom AVAudioFile pads an m4a with (more than

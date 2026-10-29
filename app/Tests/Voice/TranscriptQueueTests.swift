@@ -300,24 +300,22 @@ final class OpenRouterTranscriberTests: XCTestCase {
 
   /// Catches the words sent where a model ignores them: top-level (OpenRouter
   /// drops it, or answers 400), or under another provider. Each model's
-  /// field as measured on 2026-10-28, and MAI's audio as FLAC (it refuses m4a).
+  /// field as measured on 2026-10-28.
   func testWordsGoInEachModelsOwnField() {
     let words = ["nstack", "omp"]
-    let expected: [String: (options: NSDictionary, format: String)] = [
-      "openai/gpt-transcribe": (["openai": ["keywords": words]], "m4a"),
-      "assemblyai/universal-3-6-pro": (["assemblyai": ["keyterms_prompt": words]], "m4a"),
-      "elevenlabs/scribe-v2": (["elevenlabs": ["keyterms": words]], "m4a"),
-      "microsoft/mai-transcribe-2": (["azure": ["phraseList": ["phrases": words]]], "flac"),
+    let expected: [String: NSDictionary] = [
+      "openai/gpt-transcribe": ["openai": ["keywords": words]],
+      "assemblyai/universal-3-6-pro": ["assemblyai": ["keyterms_prompt": words]],
+      "elevenlabs/scribe-v2": ["elevenlabs": ["keyterms": words]],
     ]
     XCTAssertEqual(Set(VoiceModel.menu.map(\.id)), Set(expected.keys))
-    for (model, want) in expected {
+    for (model, options) in expected {
       let json = body(OpenRouterTranscriber.request(audio: Data([1]), words: words, model: model, key: "k",
                                                     baseURL: OpenRouterTranscriber.defaultBaseURL))
       XCTAssertEqual(Set(json.keys), ["model", "input_audio", "language", "provider"], model)
       let provider = json["provider"] as? [String: Any]
       XCTAssertEqual(provider.map { Set($0.keys) }, ["options"], model)
-      XCTAssertEqual(provider?["options"] as? NSDictionary, want.options, model)
-      XCTAssertEqual((json["input_audio"] as? [String: Any])?["format"] as? String, want.format, model)
+      XCTAssertEqual(provider?["options"] as? NSDictionary, options, model)
     }
   }
 
@@ -375,30 +373,6 @@ final class OpenRouterTranscriberTests: XCTestCase {
     let peak = (0..<Int(buffer.frameLength)).map { abs(buffer.floatChannelData![0][$0]) }.max() ?? 0
     XCTAssertEqual(peak, 0.3, accuracy: 0.1, "the samples survive, not just the header")
     XCTAssertThrowsError(try SpeechAudio.m4a([]))
-  }
-
-  /// Catches MAI-Transcribe 2 (which refuses m4a) sent audio it cannot read:
-  /// a spooled m4a becomes real FLAC that still decodes to its second of audio.
-  func testSpooledSpeechConvertsToFLAC() throws {
-    let second = (0..<16_000).map { sinf(Float($0) * 0.1) * 0.3 }
-    let m4a = FileManager.default.temporaryDirectory.appending(path: "spooled-\(UUID().uuidString).m4a")
-    let flac = FileManager.default.temporaryDirectory.appending(path: "decoded-\(UUID().uuidString).flac")
-    defer {
-      try? FileManager.default.removeItem(at: m4a)
-      try? FileManager.default.removeItem(at: flac)
-    }
-    try SpeechAudio.m4a(second[...]).write(to: m4a)
-    let data = try SpeechAudio.flac(fromM4A: m4a)
-    XCTAssertEqual(String(decoding: data[0..<4], as: UTF8.self), "fLaC")
-    try data.write(to: flac)
-    let file = try AVAudioFile(forReading: flac)
-    XCTAssertEqual(file.fileFormat.sampleRate, 16_000)
-    let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 20_000))
-    try file.read(into: buffer)
-    XCTAssertEqual(Double(buffer.frameLength), 16_000, accuracy: 1_100)
-    let channel = try XCTUnwrap(buffer.floatChannelData)[0]
-    let peak = (0..<Int(buffer.frameLength)).map { abs(channel[$0]) }.max() ?? 0
-    XCTAssertEqual(peak, 0.3, accuracy: 0.1, "the samples survive, not just the header")
   }
 }
 
@@ -645,29 +619,35 @@ final class DictationTests: XCTestCase {
     XCTAssertEqual(Set(keys(request)), ["model", "input_audio", "data", "format", "language", "provider", "options", "openai", "keywords"])
   }
 
-  /// Catches a pre-warm that holds up the microphone, goes more than once a
-  /// recording, or never goes: with the pre-warm never answered, listening
-  /// and the microphone start at once, one GET of the key goes per
-  /// recording, and the recording still transcribes and types.
-  func testPrewarmGoesOncePerRecordingWithoutHoldingTheStart() async throws {
+  /// Catches pre-warms piling up against a stalled endpoint, holding up the
+  /// microphone, or never going again: with the key's GET never answered,
+  /// listening and the microphone start at once and the recording still
+  /// types; four quick start/stops add no GET while one is outstanding; once
+  /// it times out (about 5 s), the next recording pre-warms again.
+  func testPrewarmsAgainstAStalledEndpointDoNotPileUp() async throws {
     // The pre-warm's GET has no body; it is never answered.
     let server = try await server { request in request.isEmpty ? nil : RecordedTranscription.gptTranscribe }
     let microphone = TestMicrophone()
     let dictation = make(model: "openai/gpt-transcribe", server: server, microphone: microphone)
     let terminal = Terminal()
     let said = try await TestAudio.speech("Open the config.")
-    for recording in 1...2 {
+    func gets() -> Int { server.requestLines.filter { $0 == "GET /api/v1/key" }.count }
+    dictation.listen(into: terminal)
+    XCTAssertTrue(microphone.started, "the microphone started without waiting")
+    XCTAssertTrue(dictation.isListening)
+    await speak(TestAudio.room(seconds: 1) + said + TestAudio.room(seconds: 1), into: microphone, of: dictation)
+    dictation.stop()
+    await until("typed") { terminal.typed.count == 1 }
+    for _ in 0..<4 {
       dictation.listen(into: terminal)
-      XCTAssertTrue(microphone.started, "the microphone started without waiting")
-      XCTAssertTrue(dictation.isListening)
-      await speak(TestAudio.room(seconds: 1) + said + TestAudio.room(seconds: 1), into: microphone, of: dictation)
       dictation.stop()
-      await until("typed") { terminal.typed.count == recording }
-      try await Task.sleep(for: .milliseconds(300))
-      let lines = server.requestLines
-      XCTAssertEqual(lines.filter { $0 == "GET /api/v1/key" }.count, recording, "one pre-warm per recording")
-      XCTAssertEqual(lines.filter { $0 == "POST /api/v1/audio/transcriptions" }.count, recording)
     }
+    try await Task.sleep(for: .milliseconds(500))
+    XCTAssertEqual(gets(), 1, "one pre-warm outstanding at a time")
+    try await Task.sleep(for: .seconds(5))
+    dictation.listen(into: terminal)
+    dictation.stop()
+    await until("pre-warmed again after the stalled one timed out") { gets() == 2 }
   }
 
   /// Catches a one-word answer trimmed away as room or dropped before the

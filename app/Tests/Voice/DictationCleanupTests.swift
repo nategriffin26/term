@@ -143,7 +143,7 @@ final class DictationSettingsTests: XCTestCase {
     XCTAssertFalse(relaunched.cleansUpDictation)
   }
 
-  /// Catches a stored Whisper or GPT-4o model (the user's was
+  /// Catches a stored Whisper, GPT-4o or MAI-Transcribe 2 model (the user's was
   /// openai/whisper-large-v3) kept after the update: it becomes GPT
   /// Transcribe at launch and stays so; a model the user typed into Other
   /// that is still offered stays, and a fresh install starts on GPT Transcribe.
@@ -153,7 +153,7 @@ final class DictationSettingsTests: XCTestCase {
     addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
     XCTAssertEqual(AppSettings(defaults: defaults).voiceModel, "openai/gpt-transcribe")
     for retired in ["openai/whisper-large-v3", "openai/whisper-large-v3-turbo", "openai/gpt-4o-transcribe",
-                    "openai/gpt-4o-mini-transcribe"] {
+                    "openai/gpt-4o-mini-transcribe", "microsoft/mai-transcribe-2"] {
       defaults.set(retired, forKey: "voiceModel")
       XCTAssertEqual(AppSettings(defaults: defaults).voiceModel, "openai/gpt-transcribe", retired)
       XCTAssertEqual(defaults.string(forKey: "voiceModel"), "openai/gpt-transcribe", "\(retired) moved for good")
