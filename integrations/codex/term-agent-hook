@@ -1,0 +1,70 @@
+#!/bin/sh
+# Term's Codex hook: keeps this Codex session's state in its tmux pane as the user option `@agent`
+# (payload v1, documented at the top of integrations/omp/term-agent.ts), so Term shows it like an omp agent.
+# One command serves every event; Codex passes the event as JSON on stdin. Outside tmux it does nothing.
+# Events: https://developers.openai.com/codex/hooks
+here=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$here/term-agent-lib.sh" ]; then . "$here/term-agent-lib.sh"; elif [ -f "$here/../term-agent-lib.sh" ]; then . "$here/../term-agent-lib.sh"; else exit 0; fi
+
+main() {
+ta_init
+event=$(ta_field .hook_event_name hook_event_name)
+cwd=$(ta_field .cwd cwd)
+[ -n "$cwd" ] && TA_CWD=$cwd
+model=$(ta_field .model model)
+[ -n "$model" ] && TA_MODEL=$(printf '%s' "$model" | ta_cut 40)
+
+case $event in
+SessionStart)
+  TA_CUR=
+  TA_BRANCH=$(ta_git_branch "$PWD")
+  ta_write idle
+  ;;
+UserPromptSubmit)
+  ta_seen
+  ta_turn_start
+  [ -n "$(ta_cur_str title)" ] || TA_TITLE=$(ta_field .prompt prompt | ta_cut 80)
+  TA_BRANCH=$(ta_git_branch "$PWD")
+  ta_write working
+  ;;
+PreToolUse)
+  name=$(ta_field .tool_name tool_name)
+  case $name in
+  Bash) arg=$(ta_field .tool_input.command command) ;;
+  *) arg= ;;
+  esac
+  TA_DOING=$(ta_step "$name" "$arg")
+  ta_write working
+  ;;
+PermissionRequest)
+  name=$(ta_field .tool_name tool_name)
+  case $name in
+  Bash) arg=$(ta_field .tool_input.command command) ;;
+  *) arg=$(ta_field .tool_input.description description) ;;
+  esac
+  TA_Q=$(ta_step "$name" "$arg")
+  TA_STOP=1 ta_write approval
+  ;;
+PostToolUse)
+  TA_DOING=$(ta_cur_str doing)
+  ta_write working
+  ;;
+Stop)
+  TA_LAST=$(ta_field .last_assistant_message last_assistant_message | ta_cut 280)
+  TA_BRANCH=$(ta_git_branch "$PWD")
+  TA_TOOK=1 TA_STOP=1 ta_write done
+  ;;
+Interrupt)
+  TA_TOOK=1 TA_STOP=1 ta_write aborted
+  ;;
+SessionEnd)
+  ta_clear
+  ;;
+esac
+}
+
+# Codex requires JSON on stdout from a Stop hook; `{}` lets the turn end, in tmux or not. The subshell keeps
+# ta_init's early exit outside tmux from skipping it.
+(main)
+printf '{}\n'
+exit 0

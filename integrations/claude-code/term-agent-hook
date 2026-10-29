@@ -1,0 +1,94 @@
+#!/bin/sh
+# Term's Claude Code hook: keeps this Claude Code session's state in its tmux pane as the user option `@agent`
+# (payload v1, documented at the top of integrations/omp/term-agent.ts), so Term shows it like an omp agent.
+# One command serves every event; Claude Code passes the event as JSON on stdin. Outside tmux it does nothing.
+# Events: https://code.claude.com/docs/en/hooks
+here=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$here/term-agent-lib.sh" ]; then . "$here/term-agent-lib.sh"; elif [ -f "$here/../term-agent-lib.sh" ]; then . "$here/../term-agent-lib.sh"; else exit 0; fi
+
+ta_init
+event=$(ta_field .hook_event_name hook_event_name)
+cwd=$(ta_field .cwd cwd)
+[ -n "$cwd" ] && TA_CWD=$cwd
+model=$(ta_field .model model)
+[ -n "$model" ] && TA_MODEL=$(printf '%s' "$model" | ta_cut 40)
+
+case $event in
+SessionStart)
+  TA_TITLE= TA_BRANCH=$(ta_git_branch "$PWD")
+  # A new session starts with nothing carried but its facts.
+  TA_CUR=
+  ta_write idle
+  ;;
+UserPromptSubmit)
+  ta_seen
+  ta_turn_start
+  [ -n "$(ta_cur_str title)" ] || TA_TITLE=$(ta_field .prompt prompt | ta_cut 80)
+  TA_BRANCH=$(ta_git_branch "$PWD")
+  ta_write working
+  ;;
+PreToolUse)
+  name=$(ta_field .tool_name tool_name)
+  if [ "$name" = AskUserQuestion ]; then
+    TA_Q=$(ta_field '.tool_input.questions[0].question' question | ta_cut 120)
+    TA_OPTS=$(printf '%s' "$TA_INPUT" | ta_options)
+    TA_STOP=1 ta_write ask
+  else
+    case $name in
+    Bash) arg=$(ta_field .tool_input.command command) ;;
+    Read | Edit | Write | MultiEdit | NotebookEdit) arg=$(ta_field .tool_input.file_path file_path) ;;
+    Grep | Glob) arg=$(ta_field .tool_input.pattern pattern) ;;
+    WebFetch) arg=$(ta_field .tool_input.url url) ;;
+    Task | Agent) arg=$(ta_field .tool_input.description description) ;;
+    *) arg= ;;
+    esac
+    TA_DOING=$(ta_step "$name" "$arg")
+    ta_write working
+  fi
+  ;;
+PermissionRequest)
+  name=$(ta_field .tool_name tool_name)
+  case $name in
+  Bash) arg=$(ta_field .tool_input.command command) ;;
+  Read | Edit | Write | MultiEdit | NotebookEdit) arg=$(ta_field .tool_input.file_path file_path) ;;
+  *) arg= ;;
+  esac
+  TA_Q=$(ta_step "$name" "$arg")
+  TA_STOP=1 ta_write approval
+  ;;
+PostToolUse | PostToolUseFailure)
+  # The tool ran: whatever it waited for was answered. Keep the step on screen.
+  TA_DOING=$(ta_cur_str doing)
+  ta_write working
+  ;;
+Notification)
+  type=$(ta_field .notification_type notification_type)
+  message=$(ta_field .message message | ta_cut 120)
+  case $type in
+  permission_prompt)
+    # PermissionRequest already said what; this covers prompts it does not fire for (a sandboxed network request).
+    if [ "$(ta_cur_str state)" != approval ]; then
+      TA_Q=$message
+      TA_STOP=1 ta_write approval
+    fi
+    ;;
+  elicitation_dialog | elicitation_url_dialog | agent_needs_input)
+    TA_Q=$message
+    TA_STOP=1 ta_write ask
+    ;;
+  esac
+  ;;
+Stop)
+  TA_LAST=$(ta_field .last_assistant_message last_assistant_message | ta_cut 280)
+  TA_BRANCH=$(ta_git_branch "$PWD")
+  TA_TOOK=1 TA_STOP=1 ta_write done
+  ;;
+StopFailure)
+  TA_LAST=$(ta_field .last_assistant_message last_assistant_message | ta_cut 280)
+  TA_TOOK=1 TA_STOP=1 ta_write error
+  ;;
+SessionEnd)
+  ta_clear
+  ;;
+esac
+exit 0

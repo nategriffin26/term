@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FAQ · Term</title>
+<meta name="description" content="Common questions about Term: what leaves your machine, Pro, open source, mosh, agents and Screen.">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#15121c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f4fa" media="(prefers-color-scheme: light)">
+<link rel="icon" href="icon.png">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="site-header">
+  <a class="brand" href="index.html"><img src="icon.png" alt="">Term</a>
+  <nav aria-label="Site">
+    <a href="setup.html">Setup</a>
+    <a href="faq.html" aria-current="page">FAQ</a>
+    <a href="support.html">Support</a>
+    <a href="privacy.html">Privacy</a>
+  </nav>
+</header>
+
+<main>
+  <h1>FAQ</h1>
+
+  <h2 id="data">Does my terminal leave my machine?</h2>
+  <p>No. Your sessions, keys and files travel only between your iPhone and your own computers, over SSH and mosh. The developer runs no server that sees them. The one exception is dictation: if you turn it on with your own OpenRouter API key, your recording, the last lines visible in that terminal and the text you last dictated go to OpenRouter to help the transcription.</p>
+  <p>Notifications, if you turn them on, pass through the developer's relay as a fixed alert ("An agent needs you") with a coded reference only your iPhone can read, never a session name or terminal text. The <a href="privacy.html">privacy policy</a> has the details.</p>
+  <!-- CONFIRM: the push relay is on the push-relay branch, not shipped. Keep the notifications paragraph only if it ships as described. -->
+
+  <h2 id="pro">What does Pro add?</h2>
+  <!-- CONFIRM: the Free/Pro split is not decided. Candidate: Pro = unlimited hosts and Screen, one host free. Alternative: mosh resume is Pro too. Replace PRO_FEATURES and the prices once the paywall is built. -->
+  <p class="placeholder">PRO_FEATURES</p>
+  <p>Pro is PRICE_MONTHLY a month, PRICE_YEARLY a year, or PRICE_LIFETIME once.</p>
+
+  <h2 id="open-source">Is it open source?</h2>
+  <p>Yes, under the MIT license. The code is at <a href="REPO_URL">REPO_URL</a>, and you can build the app yourself for free. Buying it on the App Store saves you the build and supports the work.</p>
+
+  <h2 id="server">Do I need a server?</h2>
+  <p>You need a computer of your own that stays on: a Mac or a Linux machine at home or work, or a server you rent. There is no Term service to sign up for. See the <a href="setup.html">setup guide</a>.</p>
+
+  <h2 id="mosh">Why mosh?</h2>
+  <p>iOS suspends apps in the background and closes them when it needs memory, and phones switch between Wi-Fi and cellular all the time. A plain SSH connection drops when either happens. mosh doesn't: Term saves the session when it goes to the background and picks it up again when you come back, even after iOS closed the app or your network changed. Typing also feels immediate on a slow connection, because Term shows your keystrokes before the computer answers.</p>
+
+  <h2 id="agents">Does it work with Claude Code and Codex?</h2>
+  <!-- CONFIRM: the Claude Code and Codex hooks are planned in the host kit; check what each reports once they ship. -->
+  <p>Yes. Any agent runs in Term's terminal. For the tmux tab to show an agent's status (working, done, or asking you something), run the agent inside tmux and install the hooks with <code>term-host install</code>, as in <a href="setup.html#agents">setup step 6</a>. omp is supported through Term's omp extension.</p>
+
+  <h2 id="platforms">Is there an Android or iPad version?</h2>
+  <p>No. Term is for iPhone only.</p>
+
+  <h2 id="screen">Why does Screen need a Mac app?</h2>
+  <p>Term Screen Host captures the Mac's displays and encodes them as hardware video, so the picture stays sharp and fast over a phone connection. It also moves the pointer, types, and shares the clipboard both ways. It streams through your existing SSH connection, so nothing new is open on the network. When the Mac is locked, macOS stops screen capture, so Term switches to the Mac's own Screen Sharing until you unlock it.</p>
+</main>
+
+<footer class="site-footer">
+  © 2026 Nathanael Griffin · <a href="REPO_URL/blob/main/LICENSE">MIT License</a> · <a href="privacy.html">Privacy</a>
+</footer>
+</body>
+</html>

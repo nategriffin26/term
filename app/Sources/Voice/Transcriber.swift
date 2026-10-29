@@ -1,13 +1,76 @@
 import AVFoundation
 import Foundation
+import Synchronization
 
 /// Turns one part of a recording into text.
 protocol Transcriber: Sendable {
-  /// `audio` is an m4a file; `prompt` is the terminal it was said into
-  /// (`DictationPrompt`), for spelling and context. `waiting` runs if the
-  /// request is held until the network returns.
-  func transcribe(_ audio: URL, prompt: String,
-                  waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> String
+  /// Opens the connection the next request will use, without waiting for
+  /// it: called as listening starts, so the request after the stop finds it open.
+  func prewarm()
+  /// `audio` is an m4a file; `words` are the words to get right. `waiting`
+  /// runs if the request is held until the network returns.
+  func transcribe(_ audio: URL, words: [String],
+                  waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> Transcript
+}
+
+/// A part's text, and what the device log says of its request (never the text).
+struct Transcript: Sendable, Equatable {
+  let text: String
+  let model: String
+  /// The audio sent, before base64.
+  let bytes: Int
+  /// From sending the request to the whole reply.
+  let milliseconds: Int
+  let status: Int
+  /// The provider that served it, when OpenRouter names one (`X-Provider-Name`).
+  let provider: String?
+}
+
+/// A model Settings › Voice offers, with where its request carries the
+/// words to get right. OpenRouter ignores a list sent top-level and passes
+/// on only the serving provider's `provider.options` (measured 2026-10-28,
+/// local research bench: each field below recalled more listed words, with
+/// no false insertions).
+struct VoiceModel: Identifiable, Sendable {
+  let id: String
+  let name: String
+  /// US dollars per hour of audio, as the bench was billed.
+  let dollarsPerHour: Double
+  let words: WordsField
+
+  enum WordsField: Sendable {
+    case openAIKeywords, assemblyAIKeyterms, elevenLabsKeyterms
+  }
+
+  /// Most accurate on terminal dictation with the words (0.39% WER, every listed word right).
+  static let recommended = menu[0]
+
+  static let menu = [
+    VoiceModel(id: "openai/gpt-transcribe", name: "GPT Transcribe", dollarsPerHour: 0.28, words: .openAIKeywords),
+    VoiceModel(id: "assemblyai/universal-3-6-pro", name: "Universal-3.6 Pro", dollarsPerHour: 0.30,
+               words: .assemblyAIKeyterms),
+    VoiceModel(id: "elevenlabs/scribe-v2", name: "Scribe v2", dollarsPerHour: 0.22, words: .elevenLabsKeyterms),
+  ]
+
+  static func named(_ id: String) -> VoiceModel? {
+    menu.first { $0.id == id }
+  }
+
+  /// Whisper, the GPT-4o family and MAI-Transcribe 2: a stored one moves to
+  /// `recommended` at launch. Whisper dropped words from long recordings,
+  /// GPT-4o writes foreign text for silence, and MAI refuses m4a.
+  static func isRetired(_ id: String) -> Bool {
+    id.hasPrefix("openai/whisper-") || id.hasPrefix("openai/gpt-4o") || id == "microsoft/mai-transcribe-2"
+  }
+
+  /// `provider.options` carrying `words` in this model's field.
+  func options(_ words: [String]) -> [String: Any] {
+    switch self.words {
+    case .openAIKeywords: ["openai": ["keywords": words]]
+    case .assemblyAIKeyterms: ["assemblyai": ["keyterms_prompt": words]]
+    case .elevenLabsKeyterms: ["elevenlabs": ["keyterms": words]]
+    }
+  }
 }
 
 /// OpenRouter's speech-to-text endpoint (POST /audio/transcriptions, JSON).
@@ -29,12 +92,35 @@ struct OpenRouterTranscriber: Transcriber {
     return URLSession(configuration: config)
   }()
 
-  func transcribe(_ audio: URL, prompt: String,
-                  waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> String {
-    guard let audio = try? Data(contentsOf: audio) else {
+  /// A pre-warm is out on `session`: at most one at a time, so starts and
+  /// stops against a stalled endpoint never pile requests up.
+  private static let prewarming = Atomic<Bool>(false)
+
+  /// A tiny authenticated request (the key's own record) on the session the
+  /// transcription uses, so DNS, TCP and TLS are done by the stop. It gives
+  /// up after 5 s without a byte, and without a network it is dropped
+  /// rather than waiting for one.
+  func prewarm() {
+    guard Self.prewarming.compareExchange(expected: false, desired: true, ordering: .acquiringAndReleasing).exchanged else {
+      return
+    }
+    var request = URLRequest(url: baseURL.appending(path: "key"))
+    request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+    let task = Self.session.dataTask(with: request) { _, _, _ in
+      Self.prewarming.store(false, ordering: .releasing)
+    }
+    task.delegate = PrewarmDelegate()
+    task.resume()
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) { task.cancel() }
+  }
+
+  func transcribe(_ audio: URL, words: [String],
+                  waiting: @escaping @Sendable () -> Void) async throws(TranscriptionFailure) -> Transcript {
+    guard let sent = try? Data(contentsOf: audio) else {
       throw TranscriptionFailure(problem: .other("The recording is gone"), retriesByItself: false)
     }
-    let request = Self.request(audio: audio, prompt: prompt, model: model, key: key, baseURL: baseURL)
+    let request = Self.request(audio: sent, words: words, model: model, key: key, baseURL: baseURL)
+    let start = ContinuousClock.now
     let data: Data, response: URLResponse
     do {
       (data, response) = try await Self.session.data(for: request, delegate: WaitingDelegate(waiting: waiting))
@@ -43,17 +129,16 @@ struct OpenRouterTranscriber: Transcriber {
     } catch {
       throw TranscriptionFailure(problem: .other(error.localizedDescription), retriesByItself: false)
     }
-    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-    return try Self.text(status: status, body: data)
+    let milliseconds = Int((ContinuousClock.now - start) / .milliseconds(1))
+    let http = response as? HTTPURLResponse
+    let status = http?.statusCode ?? 0
+    return Transcript(text: try Self.text(status: status, body: data), model: model, bytes: sent.count,
+                      milliseconds: milliseconds, status: status, provider: http?.value(forHTTPHeaderField: "X-Provider-Name"))
   }
 
-  /// The request: the audio as base64 m4a, English, and the prompt for the
-  /// providers that read one: OpenAI (gpt-4o-transcribe) and DeepInfra, which
-  /// serves most whisper-large-v3 requests (measured 2026-10-28; OpenRouter
-  /// ignores a top-level prompt and forwards only the serving provider's
-  /// options). Together and Groq, which serve the rest, get none: a long
-  /// prompt there failed one request in ten with a 400.
-  static func request(audio: Data, prompt: String, model: String, key: String, baseURL: URL) -> URLRequest {
+  /// The request: the audio as base64 m4a, English, and the words in the
+  /// model's own field (`VoiceModel.options`); a model off the menu gets none.
+  static func request(audio: Data, words: [String], model: String, key: String, baseURL: URL) -> URLRequest {
     var request = URLRequest(url: baseURL.appending(path: "audio/transcriptions"))
     request.httpMethod = "POST"
     request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -63,8 +148,8 @@ struct OpenRouterTranscriber: Transcriber {
       "input_audio": ["data": audio.base64EncodedString(), "format": "m4a"],
       "language": "en",
     ]
-    if !prompt.isEmpty {
-      body["provider"] = ["options": ["openai": ["prompt": prompt], "deepinfra": ["prompt": prompt]]]
+    if !words.isEmpty, let options = VoiceModel.named(model)?.options(words) {
+      body["provider"] = ["options": options]
     }
     request.httpBody = try? JSONSerialization.data(withJSONObject: body)
     return request
@@ -102,71 +187,20 @@ struct OpenRouterTranscriber: Transcriber {
     init(waiting: @escaping @Sendable () -> Void) { self.waiting = waiting }
     func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) { waiting() }
   }
-}
 
-/// What the transcriber is told a recording is about: the end of what its
-/// terminal shows, then the text last dictated into it, then the words to
-/// get right. Paths, flags and names on the screen are then spelled the way
-/// they are written (measured: 2 of 6 invented names right without it, 5 to
-/// 6 with it, at the same speed).
-enum DictationPrompt {
-  /// 8,000 characters of screen: a full phone screen and then some (4,000
-  /// and 16,000 character prompts were measured to cost no time).
-  static let screenLength = 8_000
-  static let typedLength = 200
-  /// The longest prompt with its words: as long as screen and typed text.
-  static var length: Int { screenLength + 1 + typedLength }
-
-  /// The screen's last lines that fit in `screenLength`, without trailing
-  /// spaces or blank lines at the end, then `typed`'s last `typedLength` characters.
-  static func text(screen: String, typed: String) -> String {
-    var lines = screen.split(separator: "\n", omittingEmptySubsequences: false).map { line -> Substring in
-      guard let end = line.lastIndex(where: { !$0.isWhitespace }) else { return "" }
-      return line[...end]
-    }
-    while lines.last?.isEmpty == true { lines.removeLast() }
-    var kept: [String] = []
-    var length = 0
-    for line in lines.reversed() {
-      let added = line.count + (kept.isEmpty ? 0 : 1)
-      guard length + added <= screenLength else {
-        // A last line longer than all of it keeps its end.
-        if kept.isEmpty { kept.append(String(line.suffix(screenLength))) }
-        break
-      }
-      kept.append(String(line))
-      length += added
-    }
-    let shown = kept.reversed().joined(separator: "\n")
-    return [shown, String(typed.suffix(typedLength))].filter { !$0.isEmpty }.joined(separator: "\n")
-  }
-
-  /// `prompt` with `words` after it on a line of their own: last, because
-  /// Whisper reads only a prompt's final 224 tokens. The prompt's earliest
-  /// lines give way so the whole stays within `length`; the words never do.
-  static func adding(_ words: [String], to prompt: String) -> String {
-    let line = words.joined(separator: ", ")
-    guard !line.isEmpty else { return prompt }
-    let room = max(length - line.count - 1, 0)
-    var kept = Substring(prompt)
-    if kept.count > room {
-      kept = kept.suffix(room)
-      // From the first whole line, unless the end is all one line.
-      let cutMidLine = prompt[..<kept.startIndex].last != "\n"
-      if cutMidLine, let newline = kept.firstIndex(of: "\n") { kept = kept[kept.index(after: newline)...] }
-    }
-    return kept.isEmpty ? line : String(kept) + "\n" + line
+  private final class PrewarmDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) { task.cancel() }
   }
 }
 
 /// The words to get right as both requests carry them.
 enum DictationWords {
-  /// 400 characters joined with ", " (about 60 short terms, roughly 170 tokens):
-  /// Whisper reads only a prompt's last 224 tokens, so a longer list would
-  /// push the screen and the text last dictated out of it.
+  /// 400 characters joined with ", " (about 50 short terms): the bench's list
+  /// was 32 terms in 323 characters, with no listed word written where a
+  /// sound-alike was said on any model. Longer lists are unmeasured.
   static let length = 400
 
-  /// Whether `words` fit, joined as the prompt joins them.
+  /// Whether `words` fit, joined with ", ".
   static func fit(_ words: [String]) -> Bool {
     words.joined(separator: ", ").count <= length
   }

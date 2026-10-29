@@ -196,13 +196,6 @@ extension TerminalView: DictationTarget {
         delegate?.terminalViewDictationDestination(self)
     }
 
-    /// What the screen shows now (scrolled back, the part in view) and what was last dictated here.
-    var dictationPrompt: String {
-        let top = snapshot.historyRows - snapshot.viewportOffset
-        let screen = session.text(fromCol: 0, row: top, toCol: session.cols - 1, row: top + session.rows - 1)
-        return DictationPrompt.text(screen: screen, typed: lastDictation)
-    }
-
     /// Typed as a paste (bracketed when the program asked), so a transcript
     /// is never run line by line; a space joins it to text dictated just before.
     func typeDictation(_ text: String) {
@@ -212,7 +205,6 @@ extension TerminalView: DictationTarget {
         session.paste(typed)
         didSendInput()
         continuesDictation = true
-        lastDictation = text
     }
 
     func dictationNotice(_ text: String) {

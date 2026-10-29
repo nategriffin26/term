@@ -29,7 +29,6 @@ final class MicrophoneStartTests: XCTestCase {
 
   private final class Terminal: DictationTarget {
     var dictationDestination: DictationDestination? { nil }
-    var dictationPrompt: String { "" }
     func typeDictation(_ text: String) {}
     func dictationNotice(_ text: String) {}
     func dictationNeedsSettings() {}
@@ -188,7 +187,6 @@ final class MicrophoneCaptureTests: XCTestCase {
 
   private final class Terminal: DictationTarget {
     var dictationDestination: DictationDestination? { nil }
-    var dictationPrompt: String { "" }
     func typeDictation(_ text: String) {}
     func dictationNotice(_ text: String) {}
     func dictationNeedsSettings() {}
