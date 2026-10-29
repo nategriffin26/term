@@ -66,6 +66,8 @@ struct AgentInfo: Equatable, Sendable {
   var subagents = 0
   var path: String?
   var branch: String?
+  /// Messages its extension has listed in the pane's `@messages` (MessageRail).
+  var messages: Int?
   /// When it last stopped for him.
   var stoppedAt: Date?
   /// It stopped for him after he last saw the session (entered it in Term,
@@ -200,6 +202,7 @@ extension Tmux {
     agent.subagents = p["subs"] as? Int ?? 0
     agent.path = p["cwd"] as? String
     agent.branch = p["branch"] as? String
+    agent.messages = p["n"] as? Int
     var stoppedAt = (p["stop"] as? [String: Any])?["at"] as? TimeInterval
     // Mid-turn, silent past its heartbeat, and its pane is back at a shell: omp died there.
     if [.working, .ask, .approval].contains(state), let written = date("t", p),

@@ -11,7 +11,7 @@ import os
 /// Callers log decisions and transitions, never per frame or per byte.
 final class DiagnosticLog: @unchecked Sendable {
   enum Category: String, Sendable {
-    case app, scene, tap, scroll, pager, keyboard, grid, menu, connection, voice, screen, notification
+    case app, scene, tap, scroll, pager, keyboard, grid, menu, connection, voice, screen, notification, rail
   }
 
   /// Records `event` with its `fields` (`key=value` pairs, space-separated),

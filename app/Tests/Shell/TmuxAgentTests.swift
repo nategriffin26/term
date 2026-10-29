@@ -63,6 +63,12 @@ final class TmuxAgentTests: XCTestCase {
     XCTAssertEqual(a?.unread, false)
   }
 
+  // Bug: a mid-turn message (no state change) never reached the rail until the agent stopped.
+  func testTheMessageCountIsReadAndAnOlderExtensionHasNone() {
+    XCTAssertEqual(agents(line(payload: payload(state: "working", extra: #","n":7"#)))["$0"]?.messages, 7)
+    XCTAssertNil(agents(line(payload: payload(state: "working")))["$0"]?.messages)
+  }
+
   func testTodoWithoutCurrentTask() {
     let a = agents(line(payload: payload(state: "working", extra: #","todo":[7,7,null]"#)))["$0"]
     XCTAssertEqual(a?.todo, AgentInfo.Todo(done: 7, total: 7, current: nil))
