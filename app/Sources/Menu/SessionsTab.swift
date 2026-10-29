@@ -601,7 +601,8 @@ private struct TileWindow: View {
   }
 }
 
-/// Name, host and state. When narrow, the host goes first, then the needs-you pill shrinks to a dot.
+/// Name, host and state, the state over its wash. When narrow, the host goes
+/// first, then the needs-you pill shrinks to a dot.
 private struct TileTitleBar: View {
   let entry: OverviewEntry
 
@@ -613,7 +614,11 @@ private struct TileTitleBar: View {
     }
     .padding(.horizontal, Chrome.Space.s)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Chrome.fill2)
+    .background {
+      Chrome.fill2.overlay {
+        if let tone = TmuxList.wash(entry.agent) { StateWash(tone: tone, place: .bar) }
+      }
+    }
     .overlay(alignment: .bottom) { Rectangle().fill(Chrome.line).frame(height: 1) }
   }
 
@@ -679,7 +684,7 @@ private struct TileState: View {
     case .working:
       WorkingMark()
     case .done where agent.unread:
-      Image(systemName: "checkmark").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.done)
+      Image(systemName: "checkmark").font(Chrome.doneCheck).foregroundStyle(Chrome.done)
     case .error where agent.unread, .exited where agent.unread:
       Image(systemName: "exclamationmark.circle.fill").font(Chrome.symbol(.inline)).foregroundStyle(Chrome.failed)
     case .aborted where agent.unread:
@@ -724,7 +729,11 @@ private struct TileChip: View {
     }
     .padding(.horizontal, Chrome.Space.m)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Capsule().fill(Chrome.fill2))
+    .background {
+      Capsule().fill(Chrome.fill2).overlay {
+        if let tone = TmuxList.wash(entry.agent) { StateWash(tone: tone, place: .bar, from: .leading).clipShape(Capsule()) }
+      }
+    }
     .overlay {
       if entry.needsYou { Capsule().strokeBorder(Chrome.needsYou, lineWidth: 1.5) }
     }

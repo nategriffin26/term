@@ -267,6 +267,20 @@ final class TmuxListTests: XCTestCase {
     XCTAssertEqual(TmuxList.status(agent(.approval), quiet, now: now), .waits("Approve"))
   }
 
+  /// Bug it catches: the wash outlives the finish he has now seen, or lands
+  /// behind needs you, a failure or a shell, so finished and working stop
+  /// standing out from everything else.
+  func testOnlyAnUnseenFinishAndWorkUnderWayAreWashed() {
+    XCTAssertEqual(TmuxList.wash(agent(.done, unread: true)), .finished)
+    XCTAssertEqual(TmuxList.wash(agent(.working)), .working)
+    XCTAssertEqual(TmuxList.wash(agent(.working, unread: true)), .working)
+    XCTAssertNil(TmuxList.wash(agent(.done)), "a finish once seen")
+    for state in [AgentInfo.State.ask, .approval, .error, .exited, .aborted, .idle] {
+      XCTAssertNil(TmuxList.wash(agent(state, unread: true)), "\(state)")
+    }
+    XCTAssertNil(TmuxList.wash(nil), "a shell")
+  }
+
   /// Bug it catches: a working agent's time counted from the session's last
   /// output (seconds ago while it prints) instead of when the turn began.
   func testWorkingShowsTimeSinceItBegan() {
