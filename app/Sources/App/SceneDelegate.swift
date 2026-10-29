@@ -34,6 +34,15 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
       window.layoutIfNeeded()
       open(url)
     }
+    // A notification tapped to open this window, or one tapped before it existed.
+    if let response = connectionOptions.notificationResponse {
+      window.layoutIfNeeded()
+      PushNotifications.shared.launched(by: response, in: space)
+    }
+    if let route = PushNotifications.shared.takePending() {
+      window.layoutIfNeeded()
+      Task { await space.open(route) }
+    }
   }
 
   func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {

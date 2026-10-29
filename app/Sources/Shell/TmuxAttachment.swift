@@ -18,38 +18,60 @@ enum TmuxAttachment: Equatable {
     n=split(roots,r," "); for(i=1;i<=n;i++) { root=r[i]; \
     if(root in p) { print root,p[root]; printf "R\\t%s\\t%s\\n",root,c[root] } } \
     n=split(ids,a," "); for(i=1;i<=n;i++) { id=a[i]; \
-    while(id>1 && id in p && !seen[id]++) { print id,p[id]; id=p[id] } } }'
+    while(id>1 && id in p && !seen[id]++) { print id,p[id]; id=p[id] } } }'; \
+    printf '\\035\\n'; tmux list-clients -F '#{client_pid}\t#{pane_id}\t#{@agent}' 2>/dev/null; true
     """
   }
 
   static func parse(_ output: String, root: UInt32) -> TmuxAttachment {
+    resolve(output, root: root).attachment
+  }
+
+  /// The agent in the pane the tab's own tmux client shows, from the probe's
+  /// last section (client pid, pane id, `@agent`); nil when the tab is not
+  /// attached or the host's probe predates the section.
+  static func shownAgent(_ output: String, root: UInt32) -> ShownAgent? {
+    guard let client = resolve(output, root: root).client,
+          let mark = output.firstIndex(of: "\u{1d}") else { return nil }
+    for row in output[output.index(after: mark)...].split(whereSeparator: \.isNewline) {
+      let fields = row.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+      guard fields.count >= 2, UInt32(fields[0]) == client, fields[1].hasPrefix("%") else { continue }
+      return ShownAgent(pane: String(fields[1]), payload: fields.count > 2 ? fields[2] : "")
+    }
+    return nil
+  }
+
+  /// The attachment, and the pid of the tmux client that makes it.
+  private static func resolve(_ output: String, root: UInt32) -> (attachment: TmuxAttachment, client: UInt32?) {
     let sections = output.split(separator: "\u{1e}", maxSplits: 1, omittingEmptySubsequences: false)
-    guard root > 1, sections.count == 2 else { return .unavailable }
+    guard root > 1, sections.count == 2 else { return (.unavailable, nil) }
+    let processes = sections[1].split(separator: "\u{1d}", maxSplits: 1, omittingEmptySubsequences: false)[0]
     var parents: [UInt32: UInt32] = [:]
     var processName: Substring?
-    for row in sections[1].split(whereSeparator: \.isNewline) {
+    for row in processes.split(whereSeparator: \.isNewline) {
       let fields = row.split(whereSeparator: \.isWhitespace)
       if fields.count == 3, fields[0] == "R", UInt32(fields[1]) == root { processName = fields[2] }
       if fields.count == 2, let pid = UInt32(fields[0]), let parent = UInt32(fields[1]) {
         parents[pid] = parent
       }
     }
-    guard parents[root] != nil, let processName else { return .unavailable }
+    guard parents[root] != nil, let processName else { return (.unavailable, nil) }
     var executable = (String(processName) as NSString).lastPathComponent
     if executable.hasSuffix(":") { executable.removeLast() }
-    guard executable == "mosh-server" || executable == "sshd" || executable == "sshd-session" else { return .unavailable }
+    guard executable == "mosh-server" || executable == "sshd" || executable == "sshd-session" else { return (.unavailable, nil) }
     for row in sections[0].split(separator: "\n") {
       let fields = row.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-      guard fields.count == 2, var pid = UInt32(fields[0]), !fields[1].isEmpty else { continue }
+      guard fields.count == 2, let client = UInt32(fields[0]), !fields[1].isEmpty else { continue }
+      var pid = client
       var remaining = parents.count + 1
       while pid > 1, remaining > 0 {
         remaining -= 1
-        if pid == root { return .attached(String(fields[1])) }
+        if pid == root { return (.attached(String(fields[1])), client) }
         guard let parent = parents[pid] else { break }
         pid = parent
       }
     }
-    return .detached
+    return (.detached, nil)
   }
 
   static func reconnectCommand(startup: String?, session: String?) -> String? {
@@ -100,7 +122,58 @@ enum TmuxAttachment: Equatable {
     let output = String(decoding: out.stdout, as: UTF8.self)
     for (tab, session, root) in snapshots {
       tab.applyTmuxAttachment(parse(output, root: root), session: session, root: root)
+      tab.applyShownAgent(shownAgent(output, root: root), session: session)
     }
+  }
+}
+
+/// The agent in the pane a tab's own tmux client shows, as one probe saw it.
+struct ShownAgent: Equatable, Sendable {
+  var pane: String
+  /// nil when the pane publishes no agent.
+  var state: AgentInfo.State?
+  /// When its current stop began (`stop.at`), which tells one ask from the next.
+  var stop: Double?
+
+  init(pane: String, state: AgentInfo.State?, stop: Double?) {
+    self.pane = pane
+    self.state = state
+    self.stop = stop
+  }
+
+  /// From the pane's `@agent` payload (integrations/omp/term-agent.ts).
+  init(pane: String, payload: Substring) {
+    let p = payload.first == "{" ? (try? JSONSerialization.jsonObject(with: Data(payload.utf8))) as? [String: Any] : nil
+    self.init(pane: pane, state: (p?["state"] as? String).flatMap(AgentInfo.State.init(rawValue:)),
+              stop: (p?["stop"] as? [String: Any])?["at"] as? Double)
+  }
+
+  var waits: Bool { state == .ask || state == .approval }
+}
+
+/// The usage count's `ask_answered`, only as it happens: Return without
+/// modifiers, typed while the tab's pane waits on an ask or approval, arms the
+/// watch; a later probe of that same pane showing that stop over records it.
+/// Seeing, opening or clearing a stop never does.
+struct AnswerWatch: Equatable {
+  private(set) var shown: ShownAgent?
+  private var armed: ShownAgent?
+
+  mutating func submitted() {
+    if let shown, shown.waits { armed = shown }
+  }
+
+  /// The next probe's view of the pane; true when it shows the armed stop answered.
+  mutating func observe(_ next: ShownAgent?) -> Bool {
+    defer { shown = next }
+    guard let armed else { return false }
+    guard let next, next.pane == armed.pane, next.state != nil else {
+      self.armed = nil
+      return false
+    }
+    if next.waits, next.stop == armed.stop { return false }
+    self.armed = nil
+    return true
   }
 }
 

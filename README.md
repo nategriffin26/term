@@ -14,6 +14,7 @@ Term takes [Blink Shell](https://blink.sh) as its model and rebuilds it on [Ghos
 - **SSH** with Ed25519 keys made or imported in the app. Host keys are pinned on first use.
 - **tmux, native.** A tmux tab lists every session on your hosts, one line each: tap one to open it in a window, long-press to see its screen, swipe or select to close them. Plus a scrollable history viewer, a Sessions page that tiles your open windows evenly (drag a border to resize, drag a window onto another's edge to split or onto its middle to swap; three fingers up or a double tap at the right edge of the Duo's inner display (upright) opens it), and a swipe between windows that names where you're going.
 - **Agents that tell you when they stop.** With the omp extension below, the tmux tab shows what each [omp](https://github.com/can1357/oh-my-pi) agent is working on and how far through its todo list it is. A session whose agent finished, failed or asks you something shows the answer or question under its name, and the tab's icon counts them; a long press shows the whole answer with its model, context, cost and branch. Entering the session or clearing it there quiets it on every device.
+- **Private push notifications.** Pair a host in Settings to receive a generic alert when an agent asks, needs approval, finishes or fails. Tapping it resolves an opaque reference over SSH and opens that exact tmux pane. Host names, session names and agent text never go to the relay.
 - **Reconnect in place.** Term remembers tmux sessions entered from a shell as well as those opened from its tmux tab. Mosh reconnects automatically when contact is lost; Reconnect also works on SSH. Both attach to the same session, never recreating a missing session empty.
 - **Links from other apps.** `term://attach?host=<alias>&session=<name>` opens tmux session `name` on the saved host with that alias: the tab already attached to it comes forward, otherwise a new tab attaches (`tmux new -A`).
 - **Files on the host**, over SFTP: git status in the listing, search, upload and download, a code editor with syntax highlighting, and viewers for Markdown, images, PDF and video. Saves check that nobody changed the file on the host first.
@@ -66,6 +67,12 @@ ln -s "$PWD/integrations/omp/term-agent.ts" ~/.omp/agent/extensions/term-agent.t
 New omp sessions load it. Without it, Term still reads omp's terminal title for working, asks you or idle.
 
 Cancelled or unfinished runs report **aborted**, not done. Stops and acknowledgements use fractional Unix seconds (older integer values still work); Term acknowledges the stop it displayed, so a later stop cannot be cleared by a delayed request. Exiting omp drains its pending update before removing `@agent`.
+
+The optional push sender, [`term-notify`](integrations/notify/README.md), watches the same `@agent` and `@seen` options for omp, Claude Code and Codex. Install it on each host and pair that host from the phone. It debounces stops and ignores ones already acknowledged. It does not edit an agent's hook configuration.
+
+Push requires a configured relay and APNs credentials; self-hosting, secrets, revocation and the threat model are in [`relay/README.md`](relay/README.md). No relay is deployed by the source build. The phone retains the host mapping and routing key; the relay receives only an opaque reference and stop kind.
+
+The daily usage counter is off unless you enable Settings › About › Send Daily Usage Count. It sends an independent random install ID, rotated monthly, and three flags: a successful host connection, Screen use and an agent answer. No purchase information is collected. It sends completed-day activity on the next active opportunity, with no backfill; relay reports use the receipt day. Neither the counter nor push stores IP addresses in application storage.
 
 Set omp to repaint only the screen when its terminal changes size: `omp config set tui.resizeScrollback preserve`. With `rebuild`, a resize (the keyboard rising, a rotation) makes omp erase tmux's history and write its whole transcript again, which on a long session takes seconds and scrolls past on the phone. Term keeps tabs that are off screen at the size of the one in front and hands keyboard focus directly between terminals, so switching tabs keeps the keyboard in place and resizes nothing. Opening or closing Sessions also preserves the keyboard and every terminal grid: its thumbnails and zoom scale the existing cells, never resize the remote program.
 
@@ -167,10 +174,14 @@ cd app && xcodebuild test -project Term.xcodeproj -scheme Term \
 python3 formal/mosh-resume.py              # TLA+ models, about 20 s
 python3 formal/mosh-fragment.py fallback   # property tests, about 2 s (25 s on a cold build)
 bun test integrations/omp/term-agent.test.ts # extension lifecycle; needs tmux and python3
+cd relay && npm test                     # Worker runtime, fake APNs, auth, revocation and counter
+python3 -m unittest discover -s integrations/notify/tests -v # host sender, real tmux and local HTTP
 cd mac/ScreenHost && swift test            # host input, framing, clipboard, privacy and adaptive quality checks
 ```
 
 `KeyboardSwipeTests` and `KeyboardHandoffTests` check focus, input, compact-phone rotation and per-frame keyboard geometry. `KeyboardSwipeRemoteTests` also counts tmux resizes during slow, fast and cancelled swipes in both directions, with two and three tabs. It uses the optional private SSH fixture `local/e2e/reconnect.json` (`user` and `port`) and `local/e2e/client_key`, on the isolated `tmux -L termtest` server. The tests drive the controller's gesture states; they require a foreground simulator with the software keyboard visible. Remote counters are positively controlled by hiding and showing the keyboard before each swipe matrix. `-collect-test-diagnostics never` avoids Xcode's post-test simulator diagnostic collection.
+
+`PushProofTests` uses that private SSH fixture plus `host_key.pub`. Create `local/push-proof/enabled`, then run `testWritesPairingOverPinnedSSH` to check the actual pairing upload, permissions and removal. Run `testTappedNotificationOpensTheExactPane`, allow simulator notifications, and wait for `local/push-proof/ready.json`. Send `xcrun simctl push <simulator-udid> local/push-proof/push.apns` and tap its banner; repeat after `ready-existing.json` appears. `passed.json` records the exact active pane and verifies that the second tap reused the tab. The fixture remains for background/cold-launch checks. Create `local/push-proof/clean` and run `testRemoveProofFixture` to remove it, then delete both marker files so ordinary test runs remain noninteractive.
 
 To record diagram scrolling, configure a private SSH fixture in `local/e2e`: `reconnect.json` contains `{"user":"<test account>","port":<test sshd port>}`, and `client_key` authenticates it. The opt-in test creates and removes only its own session on `tmux -L termtest`. It records a cold upward pass, then shows all seven fixture diagrams before exercising slow scrolls, momentum, rapid reversals and history-top/history-bottom jumps. A display-link observer checks known-image coverage and image offsets against the host's complete tmux capture without forcing terminal renders. Build the app and tests with `build-for-testing`, then run:
 
@@ -215,6 +226,8 @@ core/                   Rust workspace
 mac/ScreenHost/         Term Screen Host (macOS): capture, HEVC, input, clipboard; ScreenProtocol.swift shared with the app
 formal/                 TLA+ models and runners, fragment property tests
 integrations/omp/       omp extension that publishes agent state to tmux
+integrations/notify/    private push sender, LaunchAgent and systemd user installation
+relay/                  Cloudflare Worker, APNs delivery and privacy-safe daily counter
 scripts/                ghostty-vt.sh, build-core.sh, install-screen-host.sh
 docs/                   README images
 ```

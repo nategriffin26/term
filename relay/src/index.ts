@@ -38,9 +38,9 @@ function validBody(path: string, method: string, body: Record<string, unknown>):
         typeof body.session_ref === "string" && hexSecret.test(body.session_ref) &&
         ["ask", "approval", "done", "error"].includes(body.kind as string);
     case "POST /ping":
-      return keys === "ask_answered,host_ok,install_id,pro,screen_opened" &&
+      return keys === "ask_answered,host_ok,install_id,screen_opened" &&
         typeof body.install_id === "string" && uuid.test(body.install_id) &&
-        [body.ask_answered, body.host_ok, body.pro, body.screen_opened].every(value => typeof value === "boolean");
+        [body.ask_answered, body.host_ok, body.screen_opened].every(value => typeof value === "boolean");
     default: return false;
   }
 }
@@ -237,12 +237,12 @@ export class CounterLedger extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS pings (
         day TEXT NOT NULL, identity TEXT NOT NULL,
         host_ok INTEGER NOT NULL, screen_opened INTEGER NOT NULL,
-        ask_answered INTEGER NOT NULL, pro INTEGER NOT NULL,
+        ask_answered INTEGER NOT NULL,
         PRIMARY KEY(day, identity)
       );
       CREATE TABLE IF NOT EXISTS rollups (
         day TEXT PRIMARY KEY, installs INTEGER NOT NULL, host_ok INTEGER NOT NULL,
-        screen_opened INTEGER NOT NULL, ask_answered INTEGER NOT NULL, pro INTEGER NOT NULL,
+        screen_opened INTEGER NOT NULL, ask_answered INTEGER NOT NULL,
         active_7d INTEGER NOT NULL
       );
     `);
@@ -253,8 +253,8 @@ export class CounterLedger extends DurableObject<Env> {
     const day = new Date().toISOString().slice(0, 10);
     // Even a client that fails to rotate its UUID has no persistent cross-month storage identity.
     const identity = await digest(`${day.slice(0, 7)}:${body.install_id}`);
-    this.sql.exec("INSERT OR IGNORE INTO pings VALUES (?, ?, ?, ?, ?, ?)", day, identity,
-      Number(body.host_ok), Number(body.screen_opened), Number(body.ask_answered), Number(body.pro));
+    this.sql.exec("INSERT OR IGNORE INTO pings VALUES (?, ?, ?, ?, ?)", day, identity,
+      Number(body.host_ok), Number(body.screen_opened), Number(body.ask_answered));
     return Response.json({ accepted: true });
   }
 
@@ -268,12 +268,12 @@ export class CounterLedger extends DurableObject<Env> {
         const firstDay = new Date(midnight - (offset + 6) * DAY).toISOString().slice(0, 10);
         this.sql.exec(`INSERT INTO rollups
           SELECT ?, COUNT(*), COALESCE(SUM(host_ok),0), COALESCE(SUM(screen_opened),0),
-            COALESCE(SUM(ask_answered),0), COALESCE(SUM(pro),0),
+            COALESCE(SUM(ask_answered),0),
             (SELECT COUNT(DISTINCT identity) FROM pings WHERE day BETWEEN ? AND ? AND (screen_opened = 1 OR ask_answered = 1))
           FROM pings WHERE day = ?
           ON CONFLICT(day) DO UPDATE SET installs=excluded.installs, host_ok=excluded.host_ok,
             screen_opened=excluded.screen_opened, ask_answered=excluded.ask_answered,
-            pro=excluded.pro, active_7d=excluded.active_7d`, day, firstDay, day, day);
+            active_7d=excluded.active_7d`, day, firstDay, day, day);
       }
       this.sql.exec("DELETE FROM pings WHERE day < ?", new Date(midnight - (RAW_COUNTER_DAYS - 1) * DAY).toISOString().slice(0, 10));
       this.sql.exec("DELETE FROM rollups WHERE day < ?", new Date(midnight - ROLLUP_DAYS * DAY).toISOString().slice(0, 10));

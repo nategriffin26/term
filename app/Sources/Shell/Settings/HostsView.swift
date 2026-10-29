@@ -3,6 +3,8 @@ import SwiftUI
 struct HostsView: View {
   private let store = ConfigStore.shared
   @State private var editMode = EditMode.inactive
+  /// Why a host could not be deleted: its pairing is still live at the relay.
+  @State private var deleteError: String?
   @Environment(\.settingsNav) private var nav
 
   var body: some View {
@@ -40,9 +42,13 @@ struct HostsView: View {
               .listRowInsets(EdgeInsets())
             }
             .onDelete { offsets in
-              for host in offsets.map({ store.hosts[$0] }) { store.delete(host) }
+              let hosts = offsets.map { store.hosts[$0] }
+              Task { await delete(hosts) }
             }
-            .onMove { store.moveHosts(from: $0, to: $1) }
+          } footer: {
+            if let deleteError {
+              Text(deleteError).font(Chrome.font(.secondary)).foregroundStyle(Chrome.bad)
+            }
           }
         }
         .chromeList()
@@ -50,6 +56,21 @@ struct HostsView: View {
       }
     }
     .onChange(of: store.hosts.isEmpty) { _, empty in if empty { editMode = .inactive } }
+  }
+
+  /// A paired host is unpaired first; one whose pairing the relay has not
+  /// revoked stays, so its secret is never left live with nothing to revoke it.
+  private func delete(_ hosts: [Host]) async {
+    deleteError = nil
+    for host in hosts {
+      do throws(PushPairings.Failure) {
+        try await PushPairings.shared.unpair(host)
+      } catch {
+        deleteError = "\(host.alias) is still paired. \(error.message)"
+        continue
+      }
+      store.delete(host)
+    }
   }
 
   static func summary(_ host: Host) -> String {

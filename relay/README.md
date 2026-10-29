@@ -1,6 +1,6 @@
 # Term push relay
 
-A Cloudflare Worker sends generic APNs alerts without receiving terminal text, questions, hostnames, session names or pane IDs. The phone resolves the opaque route over its existing pinned SSH connection. The independent, optional counter records four flags once per UTC receipt day.
+A Cloudflare Worker sends generic APNs alerts without receiving terminal text, questions, hostnames, session names or pane IDs. The phone resolves the opaque route over its existing pinned SSH connection. The independent, opt-in counter records three usage flags once per UTC receipt day, never purchase information.
 
 Nothing here has been deployed. Real delivery needs a Cloudflare account, an APNs-enabled App ID and Apple's signing key.
 
@@ -54,7 +54,7 @@ Run `xcodegen generate` in `app/`, then build normally. Debug uses the developme
 
 Install `term-notify` on the host, connect once in Term to verify its SSH host key, then use Settings › Notifications to enable notifications and pair that host. Unpair revokes the relay credential before removing the host file. If a network failure leaves registration uncertain, Term retains its Keychain credential so reopening the app or turning notifications off can recover safely.
 
-Settings › About › Send Daily Usage Count controls the counter, independently of push. This branch has no StoreKit entitlement source, so `pro` is false until the paywall integration supplies verified entitlement state. `ask_answered` requires an unmodified Return in the observed asking pane followed by that pane leaving its stop; merely opening or clearing a session does not count.
+Settings › About › Send Daily Usage Count controls the counter, independently of push. It defaults off. Onboarding can enable it after consent with `UsageCounter.shared.setEnabled(true)`. Purchase status is never collected or transmitted; App Store Connect supplies payer counts. `ask_answered` requires an unmodified Return in the observed asking pane followed by that pane leaving its stop; merely opening or clearing a session does not count.
 
 
 ## Protocol and installation
@@ -68,7 +68,7 @@ Settings › About › Send Daily Usage Count controls the counter, independentl
 | `POST /pairings` | `device_id`, `secret` | Device bearer secret; returns `pairing_id = SHA256(UTF8(secret))`. Repeating it is idempotent and does not reset the rate limit. A secret cannot belong to two devices. Pairings last until revoked or their device is deleted or expires. |
 | `DELETE /pairings` | `device_id`, `secret` | Device bearer secret; 204 even if already absent, provided the device authorization is valid. |
 | `POST /notify` | `secret`, `session_ref`, `kind` | Host pairing secret only. `kind` is `ask`, `approval`, `done` or `error`. 200 means Apple accepted the push, not that the phone displayed it. |
-| `POST /ping` | `install_id`, `host_ok`, `screen_opened`, `ask_answered`, `pro` | No push identity or authorization. All flags are booleans. First record wins; duplicate requests return 200 without changing flags. |
+| `POST /ping` | `install_id`, `host_ok`, `screen_opened`, `ask_answered` | No push identity, purchase status or authorization. All three flags are booleans. First record wins; duplicate requests return 200 without changing flags. A `pro` field is rejected as unknown metadata. |
 
 Management authorization is `Authorization: Bearer <device_secret>`. The host's secret cannot register pairings, update the device or delete it. Invalid metadata returns 400; wrong content type 415; oversized input 413. Notification responses are 401 for an unknown/revoked/expired pairing, 410 when the phone must register its token again, 429 with `Retry-After` for the pairing rate limit, 502 for an APNs/network error, or 503 for missing configuration or relay failure.
 
@@ -96,7 +96,7 @@ An install used on only one day and never reopened sends no completed-day report
 
 The app replaces its random install UUID monthly, independently of push registration. The server stores `SHA256(UTC receipt month + ":" + install_id)`, never the raw UUID. The counter has no device, token, pairing or route column and makes no lookup against the push registry.
 
-The daily cron runs at 00:05 UTC. It writes daily totals for installs and each flag plus `active_7d`: distinct monthly identities with **`screen_opened OR ask_answered`** on that day or the six preceding receipt days. `host_ok` or `pro` alone is not active. A person crossing a month boundary can count twice within that seven-day window, as can a reinstall. This is an active-identity count, not deduplicated people. No attempt is made to join identities across a month. Counter requests are unauthenticated; fabricated UUIDs can inflate counts. These are operational estimates, not fraud-resistant billing evidence.
+The daily cron runs at 00:05 UTC. It writes daily totals for installs and each flag plus `active_7d`: distinct monthly identities with **`screen_opened OR ask_answered`** on that day or the six preceding receipt days. `host_ok` alone is not active. A person crossing a month boundary can count twice within that seven-day window, as can a reinstall. This is an active-identity count, not deduplicated people. No attempt is made to join identities across a month. Counter requests are unauthenticated; fabricated UUIDs can inflate counts. These are operational estimates, not fraud-resistant billing evidence.
 
 Recent rollups are recomputed idempotently and recover up to seven missed daily runs while raw history remains. Longer outages lose the ability to reconstruct older days; missing historical activity must not be treated as measured zero. Aggregates live in the counter object's `rollups` table, not on a public HTTP endpoint.
 
@@ -105,7 +105,7 @@ Recent rollups are recomputed idempotently and recover up to seven missed daily 
 | Random device ID, SHA-256 device-secret verifier, APNs token/environment, registration/expiry times | 90 days after authenticated device registration. Re-registration refreshes the lease; notifications alone do not. Deleting the device removes all of this immediately. |
 | Pairing-secret SHA-256 ID, owning device ID, current rate window/count | Until explicit revoke, device deletion or device lease expiry. Authenticated device renewal keeps idle paired hosts working. |
 | Exact signed APNs provider JWT, issue time and signing-configuration hash | Replaced after 50 minutes on the next send; expired JWTs are removed by daily cleanup. Apple accepts a JWT for at most one hour after issue. The private `.p8` key is never stored here. |
-| Counter receipt day, month-scoped hashed identity, four flags | Current UTC date and preceding 13 dates; cleaned at daily cron. |
+| Counter receipt day, month-scoped hashed identity, three usage flags | Current UTC date and preceding 13 dates; cleaned at daily cron. |
 | Daily aggregate counts, including active identities | 90 completed UTC dates; cleaned at daily cron. No IDs or flags per install remain in these rows. |
 | Session references, stop kinds, raw request bodies, request IPs, HTTP headers, raw bearer/host secrets | Not persisted by the application. Needed request fields exist transiently in memory; generic push fields go to Apple. |
 

@@ -20,7 +20,7 @@ const pairing = { device_id: device.device_id, secret: "c".repeat(64) };
 const notification = { secret: pairing.secret, session_ref: "d".repeat(64), kind: "ask" };
 const ping = {
   install_id: "223e4567-e89b-42d3-a456-426614174000", host_ok: true,
-  screen_opened: false, ask_answered: false, pro: false,
+  screen_opened: false, ask_answered: false,
 };
 const registry = () => env.PUSH_REGISTRY.get(env.PUSH_REGISTRY.idFromName("primary"));
 const counter = () => env.COUNTER_LEDGER.get(env.COUNTER_LEDGER.idFromName("primary"));
@@ -160,7 +160,7 @@ describe("strict privacy boundary", () => {
     for (const body of [null, [], {}, { ...notification, kind: "working" }, { ...notification, session_ref: "host:private-session:%1" }, { ...notification, secret: "short" }]) {
       expect((await request("/notify", body)).status).toBe(400);
     }
-    expect((await request("/ping", { ...ping, pro: 1 })).status).toBe(400);
+    expect((await request("/ping", { ...ping, host_ok: 1 })).status).toBe(400);
     expect((await request("/ping?ip=1.2.3.4", ping)).status).toBe(400);
     expect((await request("/notify", { ...notification, text: "x".repeat(2048) })).status).toBe(413);
     expect((await worker.fetch(new Request("https://relay.test/notify", { method: "POST", body: "{}" }), env)).status).toBe(415);
@@ -319,12 +319,22 @@ describe("APNs and rate boundaries", () => {
 });
 
 describe("anonymous daily counter", () => {
+  it("rejects purchase status instead of accepting or storing it", async () => {
+    for (const pro of [false, true]) {
+      expect((await request("/ping", { ...ping, pro })).status).toBe(400);
+    }
+    await runInDurableObject<CounterLedger, void>(counter(), (_instance, state) => {
+      expect(state.storage.sql.exec("SELECT * FROM pings").toArray()).toEqual([]);
+    });
+    expect((await request("/ping", ping)).status).toBe(200);
+  });
+
   it("makes daily flags immutable under concurrent retries", async () => {
     expect((await request("/ping", ping)).status).toBe(200);
-    await Promise.all(Array.from({ length: 5 }, () => request("/ping", { ...ping, screen_opened: true, pro: true })));
+    await Promise.all(Array.from({ length: 5 }, () => request("/ping", { ...ping, screen_opened: true, ask_answered: true })));
     await runInDurableObject<CounterLedger, void>(counter(), (_instance, state) => {
-      expect(state.storage.sql.exec("SELECT day, host_ok, screen_opened, ask_answered, pro FROM pings").toArray()).toEqual([
-        { day: "2026-10-15", host_ok: 1, screen_opened: 0, ask_answered: 0, pro: 0 },
+      expect(state.storage.sql.exec("SELECT day, host_ok, screen_opened, ask_answered FROM pings").toArray()).toEqual([
+        { day: "2026-10-15", host_ok: 1, screen_opened: 0, ask_answered: 0 },
       ]);
     });
   });
@@ -336,14 +346,14 @@ describe("anonymous daily counter", () => {
     await request("/ping", { ...ping, screen_opened: true });
     vi.setSystemTime(new Date("2026-10-15T23:59:59Z"));
     await request("/ping", { ...ping, ask_answered: true });
-    await request("/ping", { ...ping, install_id: "323e4567-e89b-42d3-a456-426614174000", pro: true });
+    await request("/ping", { ...ping, install_id: "323e4567-e89b-42d3-a456-426614174000" });
     await request("/ping", { ...ping, install_id: "423e4567-e89b-42d3-a456-426614174000", screen_opened: true });
     vi.setSystemTime(new Date("2026-10-16T00:00:00Z"));
-    await request("/ping", { ...ping, pro: true });
+    await request("/ping", ping);
     await worker.scheduled(createScheduledController(), env);
     await worker.scheduled(createScheduledController(), env);
     await runInDurableObject<CounterLedger, void>(counter(), (_instance, state) => {
-      expect(state.storage.sql.exec("SELECT * FROM rollups WHERE day = '2026-10-15'").one()).toEqual({ day: "2026-10-15", installs: 3, host_ok: 3, screen_opened: 1, ask_answered: 1, pro: 1, active_7d: 2 });
+      expect(state.storage.sql.exec("SELECT * FROM rollups WHERE day = '2026-10-15'").one()).toEqual({ day: "2026-10-15", installs: 3, host_ok: 3, screen_opened: 1, ask_answered: 1, active_7d: 2 });
       expect(state.storage.sql.exec("SELECT * FROM rollups WHERE day = '2026-10-16'").toArray()).toEqual([]);
     });
   });
@@ -365,8 +375,8 @@ describe("anonymous daily counter", () => {
 
   it("deletes raw rows after 14 calendar days and aggregate rows after 90 completed days", async () => {
     await runInDurableObject<CounterLedger, void>(counter(), (_instance, state) => {
-      state.storage.sql.exec("INSERT INTO pings VALUES ('2026-10-01', 'expired', 1, 1, 0, 0), ('2026-10-02', 'retained', 1, 1, 0, 0)");
-      state.storage.sql.exec("INSERT INTO rollups VALUES ('2026-07-16',1,1,1,0,0,1), ('2026-07-17',1,1,1,0,0,1)");
+      state.storage.sql.exec("INSERT INTO pings VALUES ('2026-10-01', 'expired', 1, 1, 0), ('2026-10-02', 'retained', 1, 1, 0)");
+      state.storage.sql.exec("INSERT INTO rollups VALUES ('2026-07-16',1,1,1,0,1), ('2026-07-17',1,1,1,0,1)");
     });
     await counter().rollup();
     await runInDurableObject<CounterLedger, void>(counter(), (_instance, state) => {

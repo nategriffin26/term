@@ -149,6 +149,8 @@ final class TerminalView: UIView {
     let doubleTap = DoubleTap()
     /// How the diagnostic log names this terminal (its tab's tmux session).
     var diagnosticName: () -> String = { "terminal" }
+    /// Return without modifiers was typed (Shift-Return and the like add a line instead).
+    var onSubmit: (() -> Void)?
     var pinchBaseSize: CGFloat = 0
     var selectionAnchor: (start: GridPoint, end: GridPoint)?
     let selectionLoupe = SelectionLoupe()

@@ -77,6 +77,8 @@ targets:
           - CFBundleURLName: $(PRODUCT_BUNDLE_IDENTIFIER)
             CFBundleURLSchemes:
               - term
+        # The push relay (Config/Signing.xcconfig, RelayClient.swift); empty when the build sets none.
+        TermRelayURL: $(TERM_RELAY_URL)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(TERM_BUNDLE_ID)
@@ -86,6 +88,14 @@ targets:
         ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES: AppIcon-Porcelain AppIcon-Graphite
         ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         OTHER_LDFLAGS: [-lc++]
+        # Push: always in the simulator; on devices once the App ID has Push (Config/Signing.xcconfig).
+        CODE_SIGN_ENTITLEMENTS: $(TERM_DEVICE_ENTITLEMENTS)
+        "CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]": Config/Term.entitlements
+      configs:
+        Debug:
+          TERM_APS_ENVIRONMENT: development
+        Release:
+          TERM_APS_ENVIRONMENT: production
     # The diagnostic log's launch line names the build: commit (+ -dirty) and time.
     postBuildScripts:
       - name: Record Build Commit

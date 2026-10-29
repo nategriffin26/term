@@ -70,6 +70,7 @@ macOS: `~/Library/Logs/term-notify.log`. Linux: `journalctl --user -u term-notif
 | `no pairings in …` | Pair this host from Term. |
 | `ignoring pairing file …: "relay_url" must be an https URL…` | The file was edited or written by a different Term version; pair again. |
 | `relay answered HTTP 401/403/404 …` | The phone revoked this pairing or it never registered; pair again. |
+| `relay answered HTTP 410 …` | Open Term on the phone to register notifications again; if it continues, unpair and pair this host again. |
 | `relay answered HTTP 400 …` | The relay speaks a newer protocol; update term-notify. |
 | `tmux not found` | Install tmux; the service looks in `/opt/homebrew/bin`, `/usr/local/bin` and `/usr/bin`. For another location, run `term-notify run` under your own supervisor with `TERM_NOTIFY_TMUX=/path/to/tmux`. |
 | `tmux list-panes failed … is tmux 3.0 or newer?` | Upgrade tmux. |

@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// SSH private keys, host passwords, Mac passwords and the OpenRouter key.
+/// SSH private keys, host passwords, Mac passwords, the OpenRouter key and push secrets.
 /// Keys are generic-password items whose account is the key name; the public
 /// line rides along in kSecAttrGeneric so listing keys never reads secret data.
 enum Keychain {
@@ -118,6 +118,41 @@ enum Keychain {
       kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
     ]
     SecItemAdd(attrs as CFDictionary, nil)
+  }
+
+  /// Push notifications' secrets (PushPairings): one JSON item per account
+  /// under `service`, readable after first unlock so a tap can route at once.
+  static func items(service: String) -> [String: Data] {
+    let query: [CFString: Any] = [
+      kSecClass: kSecClassGenericPassword,
+      kSecAttrService: service,
+      kSecReturnAttributes: true,
+      kSecReturnData: true,
+      kSecMatchLimit: kSecMatchLimitAll,
+    ]
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+          let items = result as? [[CFString: Any]] else { return [:] }
+    var found: [String: Data] = [:]
+    for item in items {
+      if let account = item[kSecAttrAccount] as? String, let data = item[kSecValueData] as? Data { found[account] = data }
+    }
+    return found
+  }
+
+  /// nil removes it. False when the Keychain refused to store it.
+  @discardableResult
+  static func setItem(_ data: Data?, service: String, account: String) -> Bool {
+    delete(service: service, account: account)
+    guard let data else { return true }
+    let attrs: [CFString: Any] = [
+      kSecClass: kSecClassGenericPassword,
+      kSecAttrService: service,
+      kSecAttrAccount: account,
+      kSecValueData: data,
+      kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+    ]
+    return SecItemAdd(attrs as CFDictionary, nil) == errSecSuccess
   }
 
   private static func read(service: String, account: String) -> String? {

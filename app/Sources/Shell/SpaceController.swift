@@ -45,6 +45,11 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   private static var liveSpaces: [WeakSpace] = []
   /// Every window's controller, oldest first.
   static var live: [SpaceController] { liveSpaces.compactMap(\.space) }
+  /// The window a notification's tap opens in: one in front, else any.
+  static var frontmost: SpaceController? {
+    let state = { (space: SpaceController) in space.view.window?.windowScene?.activationState }
+    return live.first { state($0) == .foregroundActive } ?? live.first { state($0) == .foregroundInactive } ?? live.first
+  }
   private struct AttachmentTarget: Hashable {
     var server: String
     var session: String
@@ -385,11 +390,12 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
   /// Goes into tmux session `name` on `host`: the tab already attached to it
   /// comes forward (from any window); otherwise a tab attaches to it,
   /// showing `preview` (the session's last captured screen) until it draws.
-  func attach(_ host: Host, session name: String, preview: Data? = nil) async {
-    if let open = Self.live.lazy.flatMap(\.tabs).first(where: {
-      $0.tmuxSession == name && $0.target.map { TmuxStore.shared.sameServer($0, host) } == true
-    }) {
-      zoom(into: open, fromTile: false)
+  /// With `pane` (a push), that pane is checked and selected first, and a new
+  /// tab only attaches to the session, never making one.
+  func attach(_ host: Host, session name: String, preview: Data? = nil, pane: TmuxPane? = nil) async {
+    let isOpen = { (tab: Tab) in tab.tmuxSession == name && tab.target.map { TmuxStore.shared.sameServer($0, host) } == true }
+    if let open = Self.live.lazy.flatMap(\.tabs).first(where: isOpen) {
+      await bringForward(open, host: host, pane: pane)
       return
     }
     let selection = AttachmentTarget(server: host.serverKey, session: name)
@@ -399,8 +405,8 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
       $0.target.map { TmuxStore.shared.sameServer($0, host) } == true
     }
     await TmuxAttachment.refresh(candidates, timeout: .seconds(3))
-    if let open = Self.live.flatMap(\.tabs).first(where: { $0.tmuxSession == name && $0.target.map { TmuxStore.shared.sameServer($0, host) } == true }) {
-      zoom(into: open, fromTile: false)
+    if let open = Self.live.flatMap(\.tabs).first(where: isOpen) {
+      await bringForward(open, host: host, pane: pane)
       return
     }
     let focus = menuRestoresFocus
@@ -409,9 +415,21 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     closeMenu()
     guard let tab else { return }
     var target = host
+    // Reconnects reattach with `attach -t =name` (TmuxAttachment), never `new -A`.
     target.startupCommand = Tmux.attachCommand(name)
     tab.enter("tmux \(host.alias) \(name)")
-    tab.connect(target, tmuxSession: name, preview: preview)
+    tab.connect(target, tmuxSession: name, preview: preview, command: pane.map(PaneRoute.attachCommand))
+  }
+
+  /// The tab already on the session comes forward, after a push's pane is
+  /// selected; a pane no longer the routed one leaves it where it was.
+  private func bringForward(_ tab: Tab, host: Host, pane: TmuxPane?) async {
+    if let pane, let failure = await PushRouter.select(PushRouter.Target(host: host, pane: pane)) {
+      DiagnosticLog.record(.notification, "push-route-failed", "reason=\(failure.kind)")
+      (focusedTab ?? tab).showNotice(failure.message, failed: true, for: 8)
+      return
+    }
+    zoom(into: tab, fromTile: false)
   }
 
   /// Follows a link another app opened Term with.
@@ -424,6 +442,24 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
         return
       }
       await attach(host, session: session)
+    }
+  }
+
+  /// Follows a tapped notification to the exact pane it names, in the tab
+  /// already on its session or a new one; never another pane or session.
+  func open(_ route: PushRoute) async {
+    let tab = focusedTab
+    tab?.showNotice("Opening the agent's pane…")
+    let result = await PushRouter.resolve(route)
+    tab?.showNotice(nil)
+    switch result {
+    case .success(let target):
+      DiagnosticLog.record(.notification, "push-attach", "host=\(DiagnosticLog.name(target.host.alias))"
+        + " tmux=\(DiagnosticLog.name(target.pane.session)) pane=\(target.pane.pane)")
+      await attach(target.host, session: target.pane.session, pane: target.pane)
+    case .failure(let failure):
+      DiagnosticLog.record(.notification, "push-route-failed", "reason=\(failure.kind)")
+      (focusedTab ?? tab)?.showNotice(failure.message, failed: true, for: 8)
     }
   }
 

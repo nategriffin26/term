@@ -60,6 +60,7 @@ EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/home/
 
 HINTS = {
     "unpaired": "relay does not know this pairing (revoked or never registered): pair this host again in Term",
+    "device": "open Term on the phone to register notifications again; if pushes still fail, unpair and pair this host again",
     "format": "relay rejected the request: update term-notify (run install again from the new Term release)",
 }
 
@@ -519,7 +520,7 @@ class Notifier:
             self.sent.setdefault(pairing.id, {})[pane.id] = at
             self.retry.pop(key, None)
             self._save_state()
-            hint = HINTS["unpaired"] if status in (401, 403, 404) else HINTS["format"]
+            hint = HINTS["device"] if status == 410 else HINTS["unpaired"] if status in (401, 403, 404) else HINTS["format"]
             self.report("relay answered HTTP %d for pairing %s: %s" % (status, pairing.short, hint))
             return False
         attempts = self.retry.get(key, (0.0, 0))[1] + 1

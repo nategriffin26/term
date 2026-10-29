@@ -29,9 +29,9 @@ export interface CounterPing {
   host_ok: boolean;
   screen_opened: boolean;
   ask_answered: boolean;
-  pro: boolean;
 }
 // POST /ping: one immutable record per install_id per UTC day; server assigns date.
+// Counter is opt-in; no purchase/Pro information is collected or transmitted.
 // App accumulates flags for a UTC day and sends that completed day on next active opportunity.
 // No dates or other metadata transmitted. Rollups count the server receipt day.
 export interface HostPairing {
