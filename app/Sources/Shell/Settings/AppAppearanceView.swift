@@ -51,6 +51,9 @@ struct AppAppearancePage: View {
       ListSection("Feel") {
         Toggle("Haptics", isOn: $settings.haptics)
       }
+      ListSection("Agents") {
+        Toggle("Message Rail", isOn: $settings.messageRail)
+      }
       if UIApplication.shared.supportsMultipleScenes {
         ListSection("Layout") {
           Toggle("Two Panes", isOn: $settings.splitWhenFlat)

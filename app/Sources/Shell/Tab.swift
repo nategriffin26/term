@@ -120,6 +120,7 @@ final class Tab {
     tmuxSession = saved.tmuxSession
     title = saved.title
     session.diagrams = DiagramSource(host: saved.target, tmuxSession: saved.tmuxSession)
+    session.rail = saved.tmuxSession.map { MessageRail(host: saved.target, tmuxSession: $0) }
     wireRemote(session)
     remote = session
     view.session = session
@@ -155,6 +156,7 @@ final class Tab {
     self.target = target
     self.tmuxSession = tmuxSession ?? Tmux.sessionName(inCommand: target.startupCommand)
     session.diagrams = DiagramSource(host: target, tmuxSession: self.tmuxSession)
+    session.rail = self.tmuxSession.map { MessageRail(host: target, tmuxSession: $0) }
     wireRemote(session)
     connecting = session
     DiagnosticLog.record(.connection, "connect", "host=\(DiagnosticLog.name(target.alias)) transport=\(target.transport)"
@@ -292,6 +294,8 @@ final class Tab {
     tmuxSession = name
     DiagnosticLog.record(.connection, "tmux-attached", "host=\(DiagnosticLog.name(target.alias)) tmux=\(name.map(DiagnosticLog.name) ?? "none")")
     session.diagrams = DiagramSource(host: target, tmuxSession: name)
+    session.rail = name.map { MessageRail(host: target, tmuxSession: $0) }
+    if view.session === session { view.railView.bind(session.rail) }
     autoReconnect.statusChanged(unreachable: unreachable)
     host?.tabDidChange(self)
   }
@@ -461,6 +465,7 @@ final class Tab {
     view.cursorOverride = s.cursorOverride
     view.showsSmartKeysWithHardwareKeyboard = s.smartKeysWithHardwareKeyboard
     view.keyClicksEnabled = s.keyClickSound
+    view.showsMessageRail = s.messageRail
     let theme = s.termTheme
     local.setTheme(theme)
     remote?.setTheme(theme)

@@ -475,6 +475,15 @@ final class SpaceController: UIViewController, UIGestureRecognizerDelegate, TabH
     }
   }
 
+  /// Whether `terminal` is the one the user reads: its window's focused tab,
+  /// in front, with the menu closed (the message rail's read check).
+  static func isFocusedInFront(_ terminal: TerminalView) -> Bool {
+    live.contains { space in
+      space.view.window?.windowScene?.activationState == .foregroundActive
+        && !space.panel.isOpen && space.focusedTab?.view === terminal
+    }
+  }
+
   /// The tmux icons' badge: sessions whose agent stopped for him. UIKit runs
   /// this again whenever the count changes.
   override func updateProperties() {

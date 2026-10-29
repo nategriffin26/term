@@ -90,6 +90,10 @@ final class TerminalView: UIView {
     var isReadOnly = false
     /// The last input here was dictated text, so the next transcript starts with a space.
     var continuesDictation = false
+    /// Marks where each omp message starts at the right edge (Settings › Appearance › App › Message Rail).
+    var showsMessageRail = true {
+        didSet { if showsMessageRail != oldValue { railView.shownChanged() } }
+    }
 
     /// Current grid size in cells.
     var gridSize: (cols: Int, rows: Int) { (session.cols, session.rows) }
@@ -127,6 +131,8 @@ final class TerminalView: UIView {
     let scrollIndicator = UIView()
     /// Real diagrams over omp's ASCII drawings (app/Sources/Diagrams).
     private(set) lazy var diagramOverlay = DiagramOverlay(terminal: self)
+    /// omp's messages at the right edge (MessageRailView).
+    private(set) lazy var railView = MessageRailView(terminal: self)
     lazy var smartKeys = SmartKeysBar(terminal: self)
     weak var keyboardAccessory: TerminalInputAccessory?
     lazy var editMenu = UIEditMenuInteraction(delegate: self)
@@ -204,6 +210,7 @@ final class TerminalView: UIView {
         safeRegion.isUserInteractionEnabled = false
         addSubview(safeRegion)
         addSubview(diagramOverlay)
+        addSubview(railView)
 
         // Selection and its handles in the app's accent; the scroll
         // indicator in the terminal's own text colour (updateScrollIndicator).
@@ -258,6 +265,7 @@ final class TerminalView: UIView {
             sessionSized = false
         }
         selection = nil
+        railView.bind(session.rail)
         updateHandles()
         setNeedsLayout()
         setNeedsRender()
@@ -297,6 +305,7 @@ final class TerminalView: UIView {
         layoutGrid()
         diagramOverlay.frame = bounds
         diagramOverlay.layoutTiles()
+        railView.redraw()
         updateHandles()
         setNeedsRender(build: false)
     }
@@ -357,7 +366,9 @@ final class TerminalView: UIView {
     }
 
     private func size(_ next: GridSize, reason: String) {
+        let resized = gridSize != (next.cols, next.rows)
         apply(next, reason: reason)
+        if resized { railView.gridSized() }
         delegate?.terminalView(self, didSizeGrid: next)
     }
 
@@ -474,6 +485,7 @@ final class TerminalView: UIView {
         }
         guard needsDraw, metalLayer.drawableSize.width > 0, metalLayer.drawableSize.height > 0 else { return }
         diagramOverlay.isHidden = zoom != 1 || isPinching || selection != nil
+        railView.alpha = zoom != 1 || isPinching ? 0 : 1
         let showsDiagrams = !diagramOverlay.isHidden && !diagramOverlay.shown.isEmpty
         // Synchronize the removal frame too, so old source cannot flash after
         // its last tile disappears and before the replacement grid arrives.

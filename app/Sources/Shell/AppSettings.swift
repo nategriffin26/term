@@ -49,6 +49,8 @@ final class AppSettings {
   var keyClickSound: Bool { didSet { store(keyClickSound, "keyClickSound") } }
   /// Inner display of iPhone Duo: two sessions side by side even when flat.
   var splitWhenFlat: Bool { didSet { store(splitWhenFlat, "splitWhenFlat") } }
+  /// omp tmux tabs mark where each agent message starts at their right edge (MessageRailView).
+  var messageRail: Bool { didSet { store(messageRail, "messageRail") } }
   /// Seconds a key is held before it repeats.
   var keyRepeatDelay: Double { didSet { store(keyRepeatDelay, "keyRepeatDelay") } }
   /// Repeats per second once a key repeats.
@@ -86,6 +88,7 @@ final class AppSettings {
     smartKeysWithHardwareKeyboard = (defaults.object(forKey: "smartKeysWithHardwareKeyboard") as? Bool) ?? false
     keyClickSound = (defaults.object(forKey: "keyClickSound") as? Bool) ?? true
     splitWhenFlat = (defaults.object(forKey: "splitWhenFlat") as? Bool) ?? false
+    messageRail = (defaults.object(forKey: "messageRail") as? Bool) ?? true
     keyRepeatDelay = ((defaults.object(forKey: "keyRepeatDelay") as? Double) ?? 0.4)
       .clamped(to: Self.keyRepeatDelayRange)
     keyRepeatRate = ((defaults.object(forKey: "keyRepeatRate") as? Double) ?? 25)

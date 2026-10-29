@@ -42,7 +42,15 @@ extension TerminalView {
         let press = UILongPressGestureRecognizer(target: self, action: #selector(handleLongPress(_:)))
         press.minimumPressDuration = 0.35
         addGestureRecognizer(press)
+
+        // Press and slide along the message rail; quicker than word selection, which it replaces there.
+        let railPress = UILongPressGestureRecognizer(target: self, action: #selector(handleRailPress(_:)))
+        railPress.minimumPressDuration = 0.2
+        railPress.name = Self.railPressName
+        addGestureRecognizer(railPress)
     }
+
+    private static let railPressName = "rail-press"
 
     func installHandleGestures() {
         for handle in [startHandle, endHandle] {
@@ -59,6 +67,10 @@ extension TerminalView {
         for handle in [startHandle, endHandle] where !handle.isHidden && handle.frame.contains(p) {
             return false
         }
+        // The rail's strip: its own press, never word selection.
+        let inRail = railView.owns(p)
+        if g.name == Self.railPressName { return inRail }
+        if inRail, g is UILongPressGestureRecognizer { return false }
         if let pan = g as? UIPanGestureRecognizer {
             let v = pan.velocity(in: self)
             return abs(v.y) >= abs(v.x)
@@ -88,6 +100,13 @@ extension TerminalView {
             clearSelection()
             doubleTap.reset()
             recordTap("cleared-selection", at: p, g)
+            return
+        }
+        if railView.owns(p) {
+            // A tap on the rail comes after the one held in the band; the keyboard stays as it is.
+            doubleTap.release()
+            recordTap("rail", at: p, g)
+            railView.tap(at: p)
             return
         }
         if let diagram = diagramOverlay.diagram(at: p) {
@@ -187,6 +206,16 @@ extension TerminalView {
         guard snapshot.has(TERM_MODE_MOUSE_TRACKING) else { return }
         session.mouse(TERM_MOUSE_PRESS, TERM_MOUSE_LEFT, col: c.col, row: c.row)
         session.mouse(TERM_MOUSE_RELEASE, TERM_MOUSE_LEFT, col: c.col, row: c.row)
+    }
+
+    // ------------------------------------------------------------ rail
+
+    @objc private func handleRailPress(_ g: UILongPressGestureRecognizer) {
+        if g.state == .began {
+            doubleTap.reset()
+            stopCoasting()
+        }
+        railView.press(g)
     }
 
     // ------------------------------------------------------------ scroll
@@ -291,6 +320,8 @@ extension TerminalView {
     private func finishScrollGesture() {
         guard let gesture = scrollGesture else { return }
         scrollGesture = nil
+        // Scrolling tmux moves its copy mode view: the rail's viewport line follows.
+        if gesture.branch == "wheel", railView.isActive { railView.rail?.followViewport() }
         var frame = TermFrame()
         let offset = session.frame(after: .max, into: &frame) ? Int(frame.viewport_offset) : snapshot.viewportOffset
         let moved = gesture.branch == "scrollback" ? offset - gesture.viewportOffset : gesture.lines
