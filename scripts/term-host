@@ -1,0 +1,361 @@
+#!/bin/sh
+# term-host: prepare a Mac or Linux machine for Term (the iPhone terminal), and show Term what its agents are doing.
+#
+#   term-host check                     what is ready and what is missing, with the command that fixes each
+#   term-host install [AGENT...]        agent status hooks for Claude Code, Codex and omp (default: the ones found here)
+#   term-host uninstall                 put every file install touched back exactly as it was
+#
+# AGENT is claude-code, codex or omp. Install never overwrites your existing config: it backs the file up, adds
+# only Term's own entries, and uninstall restores the backup byte for byte. Everything it records is in ~/.term/host.
+# Needs a checkout of the Term repo for now (it copies from integrations/). POSIX sh; jq or python3 is needed only
+# to add hooks to a settings file that already exists.
+
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+SRC=$ROOT/integrations
+STATE=$HOME/.term/host
+MANIFEST=$STATE/manifest
+HOOKS=$HOME/.term/hooks
+TAB=$(printf '\t')
+CLAUDE_SETTINGS=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json
+CODEX_HOOKS=${CODEX_HOME:-$HOME/.codex}/hooks.json
+OMP_EXTENSION=$HOME/.omp/agent/extensions/term-agent.ts
+
+say() { printf '%s\n' "$*"; }
+ok() { printf '  ok       %s\n' "$*"; }
+warn() { printf '  WARN     %s\n' "$*"; }
+missing() { printf '  MISSING  %s\n' "$1"; shift; for l in "$@"; do printf '           %s\n' "$l"; done; }
+die() { printf 'term-host: %s\n' "$*" >&2; exit 1; }
+
+OS=$(uname -s)
+pkg_manager() {
+  if [ "$OS" = Darwin ]; then command -v brew >/dev/null 2>&1 && echo brew || echo none
+  elif command -v apt-get >/dev/null 2>&1; then echo apt
+  elif command -v dnf >/dev/null 2>&1; then echo dnf
+  else echo none; fi
+}
+# install_cmd PACKAGE: the command that installs it on this machine.
+install_cmd() {
+  case $(pkg_manager) in
+  brew) echo "brew install $1" ;;
+  apt) echo "sudo apt install $1" ;;
+  dnf) echo "sudo dnf install $1" ;;
+  *) if [ "$OS" = Darwin ]; then echo "install Homebrew (https://brew.sh), then: brew install $1"; else echo "install $1 with your package manager"; fi ;;
+  esac
+}
+
+# ---------------------------------------------------------------- check
+
+tailscale_bin() {
+  command -v tailscale 2>/dev/null && return
+  [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] && echo /Applications/Tailscale.app/Contents/MacOS/Tailscale
+}
+
+cmd_check() {
+  bad=0
+  say "Term host check ($OS)"
+  say "Connection"
+  if command -v ssh-keyscan >/dev/null 2>&1 && [ -n "$(ssh-keyscan -T 3 -p 22 localhost 2>/dev/null)" ]; then
+    ok "sshd answers on localhost:22"
+  else
+    bad=1
+    if [ "$OS" = Darwin ]; then
+      missing "sshd is not reachable on localhost:22" "turn on System Settings > General > Sharing > Remote Login" "or run: sudo systemsetup -setremotelogin on"
+    else
+      missing "sshd is not reachable on localhost:22" "$(install_cmd openssh-server)" "then: sudo systemctl enable --now ssh   (the unit is sshd on Fedora)"
+    fi
+  fi
+  if command -v mosh-server >/dev/null 2>&1; then
+    ok "mosh-server: $(mosh-server --version 2>&1 | sed -n '1p')"
+  else
+    bad=1
+    missing "mosh-server is not installed (Term uses mosh so connections survive phone sleep)" "$(install_cmd mosh)"
+  fi
+  if command -v tmux >/dev/null 2>&1; then
+    v=$(tmux -V 2>&1)
+    ok "$v"
+    n=$(printf '%s' "$v" | sed -n 's/^tmux \([0-9]*\.[0-9]*\).*/\1/p')
+    case $n in
+    '' | 3.[2-9]* | [4-9].* | 3.[1-9][0-9]*) ;;
+    *) warn "Term expects tmux 3.2 or newer; update with: $(install_cmd tmux)" ;;
+    esac
+  else
+    bad=1
+    missing "tmux is not installed (Term shows your sessions and agents through it)" "$(install_cmd tmux)"
+  fi
+  ts=$(tailscale_bin || true)
+  if [ -z "$ts" ]; then
+    warn "Tailscale is not installed (it lets your phone reach this machine from anywhere)"
+    if [ "$OS" = Darwin ]; then say "           install: brew install --cask tailscale   then sign in"
+    else say "           install: curl -fsSL https://tailscale.com/install.sh | sh   then: sudo tailscale up"; fi
+  elif "$ts" status --json 2>/dev/null | grep -q '"BackendState": *"Running"'; then
+    ok "Tailscale signed in ($("$ts" ip -4 2>/dev/null | sed -n '1p'))"
+  else
+    warn "Tailscale is installed but not signed in: open the Tailscale app, or run: sudo tailscale up"
+  fi
+  say "Agents"
+  for a in claude-code codex omp; do
+    if agent_present "$a"; then ok "$(agent_name "$a") found$(installed_note "$a")"; else say "  --       $(agent_name "$a") not found"; fi
+  done
+  [ -f "$MANIFEST" ] || say "Agent status hooks are not installed. Run: $0 install"
+  [ "$bad" = 0 ] && say "Ready." || { say "Fix the MISSING items above, then run check again."; return 1; }
+}
+
+agent_name() { case $1 in claude-code) echo "Claude Code" ;; codex) echo Codex ;; omp) echo omp ;; esac; }
+agent_present() {
+  case $1 in
+  claude-code) command -v claude >/dev/null 2>&1 || [ -d "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ] ;;
+  codex) command -v codex >/dev/null 2>&1 || [ -d "${CODEX_HOME:-$HOME/.codex}" ] ;;
+  omp) command -v omp >/dev/null 2>&1 || [ -d "$HOME/.omp" ] ;;
+  esac
+}
+agent_file() { case $1 in claude-code) echo "$CLAUDE_SETTINGS" ;; codex) echo "$CODEX_HOOKS" ;; omp) echo "$OMP_EXTENSION" ;; esac; }
+installed_note() {
+  f=$(agent_file "$1")
+  if [ -f "$MANIFEST" ] && grep -q "^F$TAB$f$TAB" "$MANIFEST"; then printf ' (Term status installed)'; fi
+}
+
+# ---------------------------------------------------------------- manifest: what install touched, to undo it exactly
+# F<TAB>path<TAB>existed(0|1)<TAB>kind(hooks|file)<TAB>cksum after    D<TAB>directory install created
+
+backup_of() { echo "$STATE/backup/$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
+sum_of() { cksum <"$1" 2>/dev/null | tr ' ' :; }
+
+# mk_dir DIR: create DIR and its missing parents, remembering which ones are ours.
+mk_dir() {
+  [ -d "$1" ] && return 0
+  mk_dir "$(dirname "$1")" || return 1
+  mkdir "$1" || return 1
+  printf 'D%s%s\n' "$TAB" "$1" >>"$MANIFEST"
+}
+
+# track FILE KIND: before the first change to FILE, keep its original.
+track() {
+  mkdir -p "$STATE/backup" || die "cannot create $STATE"
+  grep -q "^F$TAB$1$TAB" "$MANIFEST" 2>/dev/null && return 0
+  if [ -e "$1" ]; then
+    cp -p "$1" "$(backup_of "$1")" || die "cannot back up $1"
+    printf 'F%s%s%s1%s%s%s\n' "$TAB" "$1" "$TAB" "$TAB" "$2" "$TAB" >>"$MANIFEST"
+  else
+    printf 'F%s%s%s0%s%s%s\n' "$TAB" "$1" "$TAB" "$TAB" "$2" "$TAB" >>"$MANIFEST"
+  fi
+}
+# settle FILE: record what install left, so uninstall can tell whether you changed it since.
+settle() {
+  line=$(grep "^F$TAB$1$TAB" "$MANIFEST") || return 0
+  existed=$(printf '%s' "$line" | cut -f3)
+  kind=$(printf '%s' "$line" | cut -f4)
+  grep -v "^F$TAB$1$TAB" "$MANIFEST" >"$MANIFEST.new"
+  printf 'F%s%s%s%s%s%s%s%s\n' "$TAB" "$1" "$TAB" "$existed" "$TAB" "$kind" "$TAB" "$(sum_of "$1")" >>"$MANIFEST.new"
+  mv "$MANIFEST.new" "$MANIFEST"
+}
+# untrack FILE: drop an entry whose change did not happen.
+untrack() {
+  grep -v "^F$TAB$1$TAB" "$MANIFEST" >"$MANIFEST.new"
+  mv "$MANIFEST.new" "$MANIFEST"
+  rm -f "$(backup_of "$1")"
+}
+
+# place SRC DEST MODE: copy a file of ours into place.
+place() {
+  track "$2" file
+  mk_dir "$(dirname "$2")" || die "cannot create $(dirname "$2")"
+  cp "$1" "$2" && chmod "$3" "$2" || die "cannot write $2"
+  settle "$2"
+}
+
+# ---------------------------------------------------------------- merging Term's hooks into a settings file
+
+json_tool() {
+  case ${TERM_HOST_JSON_TOOL:-auto} in
+  jq) if command -v jq >/dev/null 2>&1; then echo jq; fi ;;
+  python3) if command -v python3 >/dev/null 2>&1; then echo python3; fi ;;
+  none) ;;
+  *) if command -v jq >/dev/null 2>&1; then echo jq; elif command -v python3 >/dev/null 2>&1 && [ "$OS" != Darwin -o -x /Library/Developer/CommandLineTools/usr/bin/python3 -o -d /Applications/Xcode.app ]; then echo python3; fi ;;
+  esac
+}
+
+# hooks_json AGENT: the "hooks" object Term adds.
+hooks_json() {
+  case $1 in
+  claude-code) cmd=$HOOKS/claude-code/term-agent-hook; events="SessionStart UserPromptSubmit PreToolUse PermissionRequest PostToolUse PostToolUseFailure Notification Stop StopFailure SessionEnd" ;;
+  codex) cmd=$HOOKS/codex/term-agent-hook; events="SessionStart UserPromptSubmit PreToolUse PermissionRequest PostToolUse Stop Interrupt SessionEnd" ;;
+  esac
+  esc=$(printf '%s' "\"$cmd\"" | sed 's/\\/\\\\/g;s/"/\\"/g')
+  first=1
+  printf '{'
+  for e in $events; do
+    t=10
+    case $e in SessionEnd | Interrupt) t=3 ;; esac
+    [ $first = 1 ] || printf ','
+    first=0
+    printf '"%s":[{"hooks":[{"type":"command","command":%s,"timeout":%s}]}]' "$e" "\"$esc\"" "$t"
+  done
+  printf '}'
+}
+
+# merge_hooks FILE NEWHOOKS OUT: FILE (may be missing or empty) plus Term's entries, written to OUT.
+# Entries from an earlier install are replaced, never duplicated; everything else in FILE is kept.
+merge_hooks() {
+  file=$1 new=$2 out=$3
+  if [ ! -s "$file" ]; then printf '{"hooks":%s}\n' "$new" >"$out"; return 0; fi
+  case $(json_tool) in
+  jq)
+    jq --argjson new "$new" '
+      .hooks = (.hooks // {})
+      | reduce ($new | keys[]) as $e (.;
+          .hooks[$e] = (((.hooks[$e] // []) | map(select(([.hooks[]?.command // ""] | map(contains("term-agent-hook")) | any) | not))) + $new[$e]))' "$file" >"$out" 2>/dev/null
+    ;;
+  python3)
+    python3 - "$file" "$new" >"$out" <<'PY' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1])); new = json.loads(sys.argv[2])
+h = d.setdefault("hooks", {})
+for e, groups in new.items():
+    keep = [g for g in h.get(e, []) if not any("term-agent-hook" in (x.get("command") or "") for x in g.get("hooks", []))]
+    h[e] = keep + groups
+print(json.dumps(d, indent=2))
+PY
+    ;;
+  *) return 2 ;;
+  esac
+}
+
+# strip_hooks FILE OUT: FILE without Term's entries (used only when you edited the file after install).
+strip_hooks() {
+  case $(json_tool) in
+  jq)
+    jq '.hooks |= (with_entries(.value |= map(select(([.hooks[]?.command // ""] | map(contains("term-agent-hook")) | any) | not))) | with_entries(select(.value | length > 0)))' "$1" >"$2" 2>/dev/null
+    ;;
+  python3)
+    python3 - "$1" >"$2" <<'PY' 2>/dev/null
+import json, sys
+d = json.load(open(sys.argv[1])); h = d.get("hooks", {})
+for e in list(h):
+    h[e] = [g for g in h[e] if not any("term-agent-hook" in (x.get("command") or "") for x in g.get("hooks", []))]
+    if not h[e]: del h[e]
+print(json.dumps(d, indent=2))
+PY
+    ;;
+  *) return 2 ;;
+  esac
+}
+
+install_hooks() { # AGENT
+  f=$(agent_file "$1")
+  new=$(hooks_json "$1")
+  tmp=$(mktemp "${TMPDIR:-/tmp}/term-host.XXXXXX") || die "cannot make a temporary file"
+  merge_hooks "$f" "$new" "$tmp"
+  rc=$?
+  if [ $rc -ne 0 ] || ! [ -s "$tmp" ]; then
+    rm -f "$tmp"
+    if [ $rc -eq 2 ]; then
+      warn "$f already exists and needs jq or python3 to add Term's hooks safely. Nothing was changed. Run: $(install_cmd jq), then: $0 install $1"
+    else
+      warn "$f is not valid JSON, so Term did not touch it. Fix or remove it, then run: $0 install $1"
+    fi
+    return 1
+  fi
+  track "$f" hooks
+  mk_dir "$(dirname "$f")" || die "cannot create $(dirname "$f")"
+  cat "$tmp" >"$f" || die "cannot write $f"
+  rm -f "$tmp"
+  settle "$f"
+}
+
+# ---------------------------------------------------------------- install / uninstall
+
+# The push notifier (integrations/notify/term-notify, built on the push-relay branch) starts and stops here.
+push_notifier() { # install|uninstall
+  n=$SRC/notify/term-notify
+  if [ -x "$n" ]; then
+    "$n" "$1" || warn "term-notify $1 failed; run $n $1 to see why"
+  else
+    say "Push alerts aren't installed (integrations/notify/term-notify not found)."
+  fi
+}
+
+cmd_install() {
+  [ -d "$SRC/claude-code" ] && [ -f "$SRC/term-agent-lib.sh" ] || die "run this from a checkout of the Term repo: $SRC is incomplete"
+  agents=$*
+  if [ -z "$agents" ]; then
+    for a in claude-code codex omp; do agent_present "$a" && agents="$agents $a"; done
+    [ -n "$agents" ] || die "found no Claude Code, Codex or omp here. Install one, or name it: $0 install claude-code"
+  fi
+  for a in $agents; do case $a in claude-code | codex | omp) ;; *) die "unknown agent '$a' (use claude-code, codex or omp)" ;; esac; done
+  mkdir -p "$STATE" || die "cannot create $STATE"
+  failed=0
+  for a in $agents; do
+    case $a in
+    claude-code)
+      place "$SRC/term-agent-lib.sh" "$HOOKS/term-agent-lib.sh" 644
+      place "$SRC/claude-code/term-agent-hook" "$HOOKS/claude-code/term-agent-hook" 755
+      if install_hooks claude-code; then ok "Claude Code: hooks added to $CLAUDE_SETTINGS (applies to new sessions)"; else failed=1; fi
+      ;;
+    codex)
+      place "$SRC/term-agent-lib.sh" "$HOOKS/term-agent-lib.sh" 644
+      place "$SRC/codex/term-agent-hook" "$HOOKS/codex/term-agent-hook" 755
+      if install_hooks codex; then
+        ok "Codex: hooks added to $CODEX_HOOKS"
+        say "           Codex asks you to trust new hooks: start codex, open /hooks, and trust the Term hooks."
+      else failed=1; fi
+      if grep -q '^\[\[\?hooks' "${CODEX_HOME:-$HOME/.codex}/config.toml" 2>/dev/null; then
+        warn "config.toml also defines [hooks]; Codex loads both and warns. Term's hooks are in hooks.json."
+      fi
+      ;;
+    omp)
+      place "$SRC/omp/term-agent.ts" "$OMP_EXTENSION" 644
+      ok "omp: extension copied to $OMP_EXTENSION (applies to new omp sessions)"
+      ;;
+    esac
+  done
+  push_notifier install
+  [ $failed = 0 ] || return 1
+  say "Done. Agents started inside tmux now show up in Term. Undo with: $0 uninstall"
+}
+
+cmd_uninstall() {
+  [ -f "$MANIFEST" ] || { say "Nothing to uninstall: term-host has not installed anything here."; return 0; }
+  push_notifier uninstall
+  rev=$(sed '1!G;h;$!d' "$MANIFEST")
+  printf '%s\n' "$rev" | while IFS="$TAB" read -r kind path existed ftype sum; do
+    case $kind in
+    F)
+      bk=$(backup_of "$path")
+      if [ ! -e "$path" ]; then
+        say "  gone     $path (already removed)"
+      elif [ "$(sum_of "$path")" = "$sum" ]; then
+        if [ "$existed" = 1 ]; then cp -p "$bk" "$path" && ok "restored $path"; else rm -f "$path" && ok "removed $path"; fi
+        rm -f "$bk"
+      elif [ "$ftype" = hooks ]; then
+        tmp=$(mktemp "${TMPDIR:-/tmp}/term-host.XXXXXX")
+        if strip_hooks "$path" "$tmp" && [ -s "$tmp" ]; then
+          cat "$tmp" >"$path" && warn "$path changed since install, so only Term's hook entries were removed (original kept at $bk)"
+        else
+          warn "$path changed since install and could not be edited here. Remove the entries mentioning term-agent-hook yourself (original kept at $bk)"
+        fi
+        rm -f "$tmp"
+        continue
+      else
+        warn "$path changed since install; left alone (original kept at $bk)"
+        continue
+      fi
+      ;;
+    D) rmdir "$path" 2>/dev/null && ok "removed $path" ;;
+    esac
+  done
+  # Backups remain only for files left edited.
+  leftover=$(ls "$STATE/backup" 2>/dev/null | wc -l | tr -d ' ')
+  rm -f "$MANIFEST" "$MANIFEST.new"
+  say "Uninstalled. Existing agent sessions keep the hooks they started with until they restart."
+  if [ "$leftover" = 0 ] || [ -z "$leftover" ]; then rmdir "$STATE/backup" "$STATE" "$HOME/.term" 2>/dev/null; fi
+  return 0
+}
+
+case ${1:-} in
+check) cmd_check ;;
+install) shift; cmd_install "$@" ;;
+uninstall) cmd_uninstall ;;
+-h | --help | help | '') sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+*) die "unknown command '$1'. Use: check, install, uninstall" ;;
+esac
