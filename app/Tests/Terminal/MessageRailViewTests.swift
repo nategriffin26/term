@@ -268,6 +268,19 @@ final class MessageRailViewTests: XCTestCase {
     XCTAssertTrue(view.gestureRecognizerShouldBegin(wordPress))
   }
 
+  // Bug: VoiceOver reached no mark, so its users could neither hear nor open a message.
+  func testEachMarkIsAVoiceOverElementThatOpensItsMessage() async throws {
+    let (view, host) = try await terminal()
+    let elements = try XCTUnwrap(view.railView.accessibilityElements as? [UIAccessibilityElement])
+    XCTAssertEqual(elements.map(\.accessibilityLabel), ["Message, unread, First answer.", "Message, unread, The fix is in."])
+    let newest = try XCTUnwrap(elements.last)
+    XCTAssertEqual(newest.accessibilityFrameInContainerSpace.midY, try y(view, of: "b"), accuracy: 0.5)
+    XCTAssertTrue(newest.accessibilityActivate())
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(host.jumps.count, 1)
+    XCTAssertTrue(host.jumps.first?.contains("l=110") == true, host.jumps.first ?? "")
+  }
+
   // MARK: - Reading
 
   /// The terminal read by the user, its pane's row 9 (history line 110, message b's) showing `text`.

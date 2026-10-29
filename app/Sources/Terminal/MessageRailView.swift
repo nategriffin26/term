@@ -232,6 +232,7 @@ final class MessageRailView: UIView {
       isHidden = true
       layout = nil
       groups = []
+      accessibilityElements = nil
       updateViewedTimer()
       return
     }
@@ -254,7 +255,28 @@ final class MessageRailView: UIView {
     drawBracket(layout, pane: pane)
     CATransaction.commit()
     if let scrubbing { showScrub(on: scrubbing, live: scrubLive) }
+    updateAccessibility(layout, rail: rail)
     updateViewedTimer()
+  }
+
+  /// One VoiceOver element per dot: its state and first line; activating it opens the message.
+  private func updateAccessibility(_ layout: RailLayout, rail: MessageRail) {
+    accessibilityElements = groups.map { group in
+      let element = RailMarkElement(accessibilityContainer: self)
+      let mark = rail.marks.first { $0.message.id == group.target }
+      let state = switch group.kind {
+      case .read: "read"
+      case .unread: "unread"
+      case .needsYou: "needs you"
+      }
+      let what = group.ids.count == 1 ? "Message" : "\(group.ids.count) messages"
+      element.accessibilityLabel = [what, state, mark?.text].compactMap(\.self).joined(separator: ", ")
+      element.accessibilityValue = mark.map { TmuxList.age($0.message.time, now: .now) + " ago" }
+      element.accessibilityTraits = .button
+      element.accessibilityFrameInContainerSpace = CGRect(x: layout.strip.minX, y: group.y - 11, width: layout.strip.width, height: 22)
+      element.open = { [weak self] in self?.jump(to: group.target, source: "voiceover") }
+      return element
+    }
   }
 
   private func drawDots(_ layout: RailLayout) {
@@ -491,5 +513,15 @@ final class MessageRailView: UIView {
     let rows = (first...last).map { terminal.session.text(fromCol: 0, row: base + $0, toCol: right, row: base + $0) }
     let read = rail.saw(rows)
     if !read.isEmpty { DiagnosticLog.record(.rail, "viewed", "count=\(read.count)") }
+  }
+}
+
+/// A rail dot for VoiceOver: activating it opens its message.
+private final class RailMarkElement: UIAccessibilityElement {
+  var open: () -> Void = {}
+
+  override func accessibilityActivate() -> Bool {
+    open()
+    return true
   }
 }
