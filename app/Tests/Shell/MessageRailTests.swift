@@ -231,20 +231,47 @@ final class MessageRailTests: XCTestCase {
 
   // MARK: - Reading
 
+  /// A pane's 56 rows, empty but for `text` on `row`.
+  private func screen(_ text: String, on row: Int) -> [String] {
+    (0..<56).map { $0 == row ? text : "" }
+  }
+
   // Bug: entering the session marked everything read, or a head that flashed past (scrolling) counted as read.
-  func testAHeadOnScreenForASecondIsRead() async throws {
+  func testAHeadOnItsRowForASecondIsRead() async throws {
     let host = FakeHost()
-    host.refreshes = [refreshOutput(messages: twoMessages, read: "a")]
+    // b at line 1210: the screen's row 9 (1200 lines above it).
+    host.refreshes = [refreshOutput(messages: twoMessages, read: "a", lines: ["100:First answer.", "1210:The fix is in."])]
     let rail = rail(host)
     await rail.refreshed()
     let t0 = Date(timeIntervalSince1970: 1_000)
-    XCTAssertEqual(rail.saw("x The fix is in. y", at: t0), [])
-    XCTAssertEqual(rail.saw("nothing", at: t0.addingTimeInterval(0.5)), [], "it left the screen")
-    XCTAssertEqual(rail.saw("The fix is in.", at: t0.addingTimeInterval(1)), [])
-    XCTAssertEqual(rail.saw("The fix is in.", at: t0.addingTimeInterval(1.9)), [])
-    XCTAssertEqual(rail.saw("The fix is in.", at: t0.addingTimeInterval(2)), ["b"])
+    XCTAssertEqual(rail.saw(screen("x The fix is in. y", on: 9), at: t0), [])
+    XCTAssertEqual(rail.saw(screen("nothing", on: 9), at: t0.addingTimeInterval(0.5)), [], "it left the screen")
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(1)), [])
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(1.9)), [])
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(2)), ["b"])
     XCTAssertTrue(rail.isRead("b"))
-    XCTAssertEqual(rail.saw("The fix is in. First answer.", at: t0.addingTimeInterval(5)), [], "read ones are not counted again")
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 9), at: t0.addingTimeInterval(5)), [], "read ones are not counted again")
+  }
+
+  // Bug: once output moved the pane after it was read, a message on screen was never on the row its line
+  // mapped to, so it was never read.
+  func testAHeadOnARowNoLineMapsToReadsThePaneAgain() async throws {
+    let host = FakeHost()
+    let lines = ["100:First answer.", "1210:The fix is in."]
+    host.refreshes = Array(repeating: refreshOutput(messages: twoMessages, read: "a", lines: lines), count: 2)
+    // Four lines of output since: b's line is now on row 5.
+    host.fallbackRefresh = refreshOutput(pane: "%5\t1204\t56\t0\ton\t0\t", messages: twoMessages, read: "a", lines: lines)
+    let rail = rail(host)
+    await rail.refreshed()
+    let reads = { host.commands.count { $0.contains("show-options -pqv") } }
+    let before = reads()
+    let t0 = Date(timeIntervalSince1970: 1_000)
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 5), at: t0), [])
+    // At most one read of the pane per 3 s.
+    try await Task.sleep(for: .seconds(3.3))
+    XCTAssertEqual(reads(), before + 1)
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 5), at: t0.addingTimeInterval(4)), [])
+    XCTAssertEqual(rail.saw(screen("The fix is in.", on: 5), at: t0.addingTimeInterval(5)), ["b"])
   }
 
   // Bug: a read set by the Mac (a prompt answers the newest message) was ignored by the phone.

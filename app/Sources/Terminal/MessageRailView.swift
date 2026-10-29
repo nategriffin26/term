@@ -461,15 +461,19 @@ final class MessageRailView: UIView {
     }
   }
 
-  private func lookAtScreen() {
-    guard let rail, let pane = rail.pane, SpaceController.isFocusedInFront(terminal) else { return }
+  /// Whether the user reads `terminal` now: its window's focused tab, in front (tests replace it).
+  var isReading: (TerminalView) -> Bool = { SpaceController.isFocusedInFront($0) }
+
+  /// One look at the pane's rows (the timer's tick).
+  func lookAtScreen() {
+    guard let rail, let pane = rail.pane, isReading(terminal) else { return }
     let snapshot = terminal.snapshot
     let base = snapshot.historyRows - snapshot.viewportOffset
-    let rows = terminal.session.rows
-    let first = min(pane.top, rows - 1), last = min(pane.top + pane.height, rows) - 1
+    let first = min(pane.top, terminal.session.rows - 1), last = min(pane.top + pane.height, terminal.session.rows) - 1
     guard last >= first else { return }
-    let screen = terminal.session.text(fromCol: 0, row: base + first, toCol: max(terminal.session.cols - 1, 0), row: base + last)
-    let read = rail.saw(screen)
+    let right = max(terminal.session.cols - 1, 0)
+    let rows = (first...last).map { terminal.session.text(fromCol: 0, row: base + $0, toCol: right, row: base + $0) }
+    let read = rail.saw(rows)
     if !read.isEmpty { DiagnosticLog.record(.rail, "viewed", "count=\(read.count)") }
   }
 }

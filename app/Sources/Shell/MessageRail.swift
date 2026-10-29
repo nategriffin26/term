@@ -73,8 +73,10 @@ final class MessageRail {
   private var lastRefresh: Date?
   private var pending: Task<Void, Never>?
   private var waiters: [CheckedContinuation<Void, Never>] = []
-  /// When each unread message's head was first seen on screen in the current run of sightings.
+  /// When each unread message's first line was first seen on its row in the current unbroken run of looks.
   private var sightings: [String: Date] = [:]
+  /// The screen last found showing a head where no message's line is: read the pane again once per such screen.
+  private var movedScreen: [String]?
   /// The device log line last written, so an unchanged refresh writes none.
   private var logged = ""
 
@@ -203,19 +205,39 @@ final class MessageRail {
 
   // MARK: - Reading
 
-  /// The pane rows the terminal shows now, as text: a head seen there for a
-  /// second makes its message read. Returns the ids read by this sighting.
+  /// One look at the screen: `rows` are the pane's rows as the terminal
+  /// shows them, top first. An unread message is being read while its own
+  /// first line is on the row its line maps to (another message starting
+  /// with the same words elsewhere never counts); read so for a second,
+  /// unbroken, it is read. A head on a row no message's line maps to means
+  /// the pane moved since it was read: it is read again, once per such
+  /// screen. Returns the ids read by this look.
   @discardableResult
-  func saw(_ screen: String, at now: Date = .now) -> [String] {
+  func saw(_ rows: [String], at now: Date = .now) -> [String] {
+    guard let pane else {
+      sightings = [:]
+      return []
+    }
+    // Lines above the screen.
+    let above = pane.historySize - (pane.inCopyMode ? pane.scrollPosition : 0)
     var done: [String] = []
     var seen: Set<String> = []
-    for message in unread where screen.contains(message.head) {
-      seen.insert(message.id)
-      let first = sightings[message.id] ?? now
-      sightings[message.id] = first
-      if now.timeIntervalSince(first) >= Self.viewedAfter { done.append(message.id) }
+    for mark in marks where !isRead(mark.message.id) {
+      let row = mark.line - 1 - above
+      guard rows.indices.contains(row), rows[row].contains(mark.message.head) else { continue }
+      seen.insert(mark.message.id)
+      let first = sightings[mark.message.id] ?? now
+      sightings[mark.message.id] = first
+      if now.timeIntervalSince(first) >= Self.viewedAfter { done.append(mark.message.id) }
     }
     sightings = sightings.filter { seen.contains($0.key) }
+    let mapped = Set(marks.map { $0.line - 1 - above })
+    let heads = unread.map(\.head)
+    let moved = rows.indices.contains { row in !mapped.contains(row) && heads.contains { rows[row].contains($0) } }
+    if moved, rows != movedScreen {
+      movedScreen = rows
+      refresh()
+    }
     markRead(done)
     return done
   }

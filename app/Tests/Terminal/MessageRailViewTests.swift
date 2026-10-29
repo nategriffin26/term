@@ -102,26 +102,39 @@ final class MessageRailViewTests: XCTestCase {
   /// two messages at lines 30 and 110; it records every command.
   private final class Host {
     var commands: [String] = []
+    var heads = ("First answer.", "The fix is in.")
     func exec(_ command: String) -> Data? {
       commands.append(command)
       if command.contains("show-options -pqv") {
-        let list = #"{"v":1,"m":[{"i":"a","t":1792987200,"h":"First answer."},{"i":"b","t":1792987260,"h":"The fix is in."}]}"#
-        return Data(["%1\t100\t19\t0\ton\t0\t", list, "", "30:First answer.\n110:The fix is in."].joined(separator: "\n\u{1E}\n").utf8)
+        let list = #"{"v":1,"m":[{"i":"a","t":1792987200,"h":"\#(heads.0)"},{"i":"b","t":1792987260,"h":"\#(heads.1)"}]}"#
+        return Data(["%1\t100\t19\t0\ton\t0\t", list, "", "30:\(heads.0)\n110:\(heads.1)"].joined(separator: "\n\u{1E}\n").utf8)
       }
       if command.contains("goto-line") { return Data("jumped 100 72\n".utf8) }
       return Data()
     }
     var jumps: [String] { commands.filter { $0.contains("goto-line") } }
     var lives: [String] { commands.filter { $0.contains("cancel") && !$0.contains("goto-line") } }
+    /// Ids appended to `@read`, in order.
+    var reads: [String] {
+      commands.flatMap { command in
+        command.components(separatedBy: "'#{@read} ").dropFirst().compactMap { $0.split(separator: "'").first.map(String.init) }
+      }
+    }
+  }
+
+  /// Whether the user reads the terminal, for `MessageRailView.isReading`.
+  private final class Reading {
+    var now = true
   }
 
   /// A 320 pt terminal (its band: the right 57.6 pt) on a 30 × 20 grid showing that pane, its rail drawn.
-  private func terminal() async throws -> (TerminalView, Host) {
+  private func terminal(heads: (String, String) = ("First answer.", "The fix is in.")) async throws -> (TerminalView, Host) {
     let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
     let window = UIWindow(windowScene: scene)
     window.frame = CGRect(x: 0, y: 0, width: 320, height: 480)
     let session = try XCTUnwrap(Session(localCols: 30, rows: 20))
     let host = Host()
+    host.heads = heads
     session.rail = MessageRail(tmuxSession: "rail") { host.exec($0) }
     let view = TerminalView(session: session)
     let stub = Stub()
@@ -253,5 +266,26 @@ final class MessageRailViewTests: XCTestCase {
     wordPress.point = railPress.point
     XCTAssertFalse(view.gestureRecognizerShouldBegin(railPress))
     XCTAssertTrue(view.gestureRecognizerShouldBegin(wordPress))
+  }
+
+  // MARK: - Reading
+
+  /// The terminal read by the user, its pane's row 9 (history line 110, message b's) showing `text`.
+  private func reading(_ view: TerminalView, text: String) -> Reading {
+    let reading = Reading()
+    view.railView.isReading = { _ in reading.now }
+    view.session.feed(String(repeating: "\r\n", count: 10) + text)
+    return reading
+  }
+
+  // Bug: two messages starting with the same words ("Done.") both turned read when only one was on screen.
+  func testOnlyTheMessageWhoseOwnLineIsOnScreenIsRead() async throws {
+    let (view, host) = try await terminal(heads: ("Done.", "Done."))
+    _ = reading(view, text: "Done.")
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .seconds(1.2))
+    view.railView.lookAtScreen()
+    try await Task.sleep(for: .milliseconds(100))
+    XCTAssertEqual(host.reads, ["b"])
   }
 }
