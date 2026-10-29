@@ -27,12 +27,9 @@
   <h1>FAQ</h1>
 
   <h2 id="data">Does my terminal leave my machine?</h2>
-  <p>No. Your sessions, keys and files travel only between your iPhone and your own computers, over SSH and mosh. The developer runs no server that sees them. Two exceptions, both described in the <a href="privacy.html">privacy policy</a>:</p>
-  <ul>
-    <li>If you turn on dictation with your own OpenRouter API key, the audio and the last lines visible in that terminal go to OpenRouter as context for the transcription.</li>
-    <li>If you allow notifications, the name of the session that needs you passes through the developer's relay on its way to Apple's push service.</li>
-  </ul>
-  <!-- CONFIRM: the push relay is planned, not built. Keep the notifications line only if it ships. -->
+  <p>No. Your sessions, keys and files travel only between your iPhone and your own computers, over SSH and mosh. The developer runs no server that sees them. The one exception is dictation: if you turn it on with your own OpenRouter API key, your recording, the last lines visible in that terminal and the text you last dictated go to OpenRouter to help the transcription.</p>
+  <p>Notifications, if you turn them on, pass through the developer's relay as a fixed alert ("An agent needs you") with a coded reference only your iPhone can read, never a session name or terminal text. The <a href="privacy.html">privacy policy</a> has the details.</p>
+  <!-- CONFIRM: the push relay is on the push-relay branch, not shipped. Keep the notifications paragraph only if it ships as described. -->
 
   <h2 id="pro">What does Pro add?</h2>
   <!-- CONFIRM: the Free/Pro split is not decided. Candidate: Pro = unlimited hosts and Screen, one host free. Alternative: mosh resume is Pro too. Replace PRO_FEATURES and the prices once the paywall is built. -->

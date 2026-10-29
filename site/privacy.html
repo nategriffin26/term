@@ -35,7 +35,7 @@
     <li>There are no ads, no tracking, and no third-party analytics or crash-reporting code in the app.</li>
     <li>Your hosts, keys, passwords, terminal content and files stay on your iPhone and go only to the computers you connect to.</li>
     <li>If you turn on dictation with your own OpenRouter API key, your recordings and some terminal text go to OpenRouter under your account.</li>
-    <li>The developer runs one small service, used for push notifications and a daily usage count. Neither carries terminal content, and the count can be turned off.</li>
+    <li>The developer runs one small service, used for push notifications and an optional daily usage count. Neither carries session names or terminal content, and the count is off until you agree to it.</li>
   </ul>
   <p>Term is open source. You can check all of this in the code at <a href="REPO_URL">REPO_URL</a>.</p>
 
@@ -64,30 +64,36 @@
   <p>This means some terminal text leaves your iPhone when you dictate. OpenRouter's handling of it is covered by <a href="https://openrouter.ai/privacy">OpenRouter's privacy policy</a>. The developer never receives any of it. Without a key, nothing goes to OpenRouter. Remove the key in Settings › Voice to stop.</p>
 
   <h2>Push notifications</h2>
-  <!-- CONFIRM: push relay is planned, not built. The worker that builds it must confirm every sentence in this section against the shipped Worker and host kit: what the host kit sends, what the Worker stores, and for how long. -->
-  <p>If you allow notifications, the host kit on your computer can tell you when a session needs you. It sends a relay service, run by the developer on Cloudflare Workers, two things: your iPhone's push token (an address Apple issues so notifications reach this app on this iPhone) and a notice that names the session. The relay forwards them to Apple's push notification service, which delivers the notification.</p>
-  <p>The notice carries the tmux session's name, so name sessions with that in mind. It carries no terminal content.</p>
+  <!-- CONFIRM: matches the push-relay branch (relay/src/contract.ts, relay/src/index.ts, integrations/notify) as of 36b4f48; nothing has shipped. Recheck against the shipped Worker, term-notify and app: fields, alert texts, 90-day expiry. -->
+  <p>Notifications are optional. If you turn them on, Term registers your iPhone with a relay service the developer runs on Cloudflare Workers. The relay stores:</p>
+  <ul>
+    <li>your iPhone's push token (an address Apple issues so notifications reach this app on this iPhone);</li>
+    <li>a random device id made by the app, unrelated to the daily count's id;</li>
+    <li>for each computer you pair, a coded pairing id that links it to your device id.</li>
+  </ul>
+  <p>When an agent stops, the notifier on your computer sends the relay a pairing secret, a coded session reference and the kind of stop (asks, needs approval, done, or error). The session reference is a keyed hash that only your iPhone can match to a tmux session; the relay never receives session names, pane names, questions, answers, file paths, host names or terminal content.</p>
+  <p>The relay passes Apple's push notification service a fixed alert, "An agent needs you" or "An agent finished", with the pairing id, the coded reference and the kind of stop, so that tapping it opens the right session.</p>
 
   <h2>Daily count</h2>
-  <!-- CONFIRM: the counter is planned, not built. The worker that builds it must confirm the request's fields, the monthly id rotation, that no IP address is stored (including Cloudflare logs and analytics settings), and the switch's exact place in Settings (COUNTER_SWITCH). -->
-  <p>Once a day, Term sends the same service one request so the developer can count how many people use the app and which parts. It contains:</p>
+  <!-- CONFIRM: the Worker side matches the push-relay branch as of 36b4f48. The app side (asking before the first ping, the switch's place in Settings, monthly id rotation) is not built; confirm against the shipped app and set COUNTER_SWITCH. Also confirm Cloudflare logs and analytics keep no IP addresses. -->
+  <p>Term asks before it sends any usage count. If you agree, it sends the same service one request a day so the developer can count how many people use the app and which parts. The request contains:</p>
   <ul>
     <li>a random install id, made on your iPhone and replaced every month;</li>
     <li>four yes-or-no flags: whether a host connected, whether Screen was opened, whether you answered an agent's question, and whether you have Pro.</li>
   </ul>
-  <p>It contains no hostnames, no terminal content and nothing that names you. The service does not store IP addresses.</p>
-  <p>To turn it off, use the switch in Settings › COUNTER_SWITCH. Nothing is sent while it is off.</p>
+  <p>It contains no hostnames, no terminal content and nothing that names you. The service stores one record per install per day, filed under a hash of the month and the install id rather than the id itself. It does not store IP addresses.</p>
+  <p>To stop it later, turn off the switch in Settings › COUNTER_SWITCH. Nothing is sent while it is off.</p>
 
   <h2>Purchases</h2>
   <p>Purchases and subscriptions go through Apple. The developer sees only Apple's aggregate sales and subscription reports, never your name, Apple Account or payment details.</p>
 
   <h2>How long data is kept</h2>
   <p>Data on your iPhone stays until you delete it. Remove hosts and keys in Settings › Hosts and Settings › Keys, or delete the app.</p>
-  <!-- CONFIRM: set RETENTION_DAYS to the Worker's real retention for push tokens, notices and daily counts; split the sentence if they differ. -->
-  <p>The relay service keeps push tokens, notices and daily counts for RETENTION_DAYS days, then deletes them.</p>
+  <!-- CONFIRM: values from relay/src/index.ts on the push-relay branch (REGISTRATION_TTL 90 days, RAW_COUNTER_DAYS 14, ROLLUP_DAYS 90). Recheck against the shipped Worker. -->
+  <p>The relay deletes a device registration 90 days after the app last renewed it, and a pairing 90 days after it was last used or when its device registration goes. Daily count records are deleted after 14 days; the daily totals made from them (counts only) are kept for 90 days.</p>
 
   <h2>Your questions and requests</h2>
-  <p>Nothing the service stores identifies you: the install id is random and changes every month, and there is no account. So the developer cannot look up or hand over data about a particular person. To stop the daily count, turn it off in Settings. To stop notifications, turn them off for Term in the iPhone's Settings. For any question, write to <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a>.</p>
+  <p>Nothing the service stores identifies you: the ids are random, the daily count is filed under a hash that changes every month, and there is no account. So the developer cannot look up or hand over data about a particular person. To stop the daily count, turn it off in Settings. To stop notifications, turn them off for Term in the iPhone's Settings; a registration the app stops renewing is deleted after 90 days. For any question, write to <a href="mailto:SUPPORT_EMAIL">SUPPORT_EMAIL</a>.</p>
 
   <h2>Children</h2>
   <p>Term is not directed at children under 13, and the developer does not knowingly collect data from them.</p>

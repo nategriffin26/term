@@ -10,7 +10,6 @@ Before publishing, replace every placeholder below and resolve every `<!-- CONFI
 | `REPO_URL` | all pages | GitHub repository URL (also builds `/issues` and `/blob/main/LICENSE`) |
 | `SUPPORT_EMAIL` | privacy, support | support address (also in `mailto:` links) |
 | `EFFECTIVE_DATE` | privacy | policy's effective date |
-| `RETENTION_DAYS` | privacy | how long the Worker keeps push tokens, notices and daily counts |
 | `COUNTER_SWITCH` | privacy | where the daily count's off switch sits in Settings |
 | `PRO_FEATURES` | faq | what Pro adds; the paywall is not decided |
 | `PRICE_MONTHLY`, `PRICE_YEARLY`, `PRICE_LIFETIME` | faq | prices |
@@ -18,4 +17,4 @@ Before publishing, replace every placeholder below and resolve every `<!-- CONFI
 | `HOST_KIT_INSTALL_COMMAND` | setup | the `term-host` install one-liner |
 | `SCREEN_HOST_DOWNLOAD_URL` | setup | the notarized Term Screen Host download |
 
-The privacy policy describes the push relay and the daily count, which are not built yet; its `CONFIRM` comments name what the Worker's builder must check.
+The privacy policy's push and daily-count sections follow the push-relay branch (`relay/src/contract.ts`, `relay/src/index.ts`, `integrations/notify`) as of commit 36b4f48. Nothing there has shipped, and the app side of both (asking before the first count, the off switch) is not built; the `CONFIRM` comments name what to recheck.
