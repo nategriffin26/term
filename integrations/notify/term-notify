@@ -1,0 +1,866 @@
+#!/usr/bin/env python3
+"""term-notify: pushes "an agent needs you" to your phone when an agent in tmux stops for you.
+
+It watches the tmux pane option `@agent` (written by the omp extension and the Claude Code and Codex hooks) and
+posts {secret, session_ref, kind} to the relay named in each pairing file. Nothing else leaves the machine.
+
+    term-notify install [--no-start]   copy to ~/.local/share/term/notify, start at login (LaunchAgent / systemd --user)
+    term-notify uninstall [--purge]    stop and remove; --purge also deletes the pairing files
+    term-notify run                    the watcher itself (what the service runs)
+    term-notify once                   one pass: send what is due now, then exit
+    term-notify status                 service, tmux and pairings; exit 1 when something needs fixing
+
+Python 3.8+, standard library only. See README.md next to this file.
+"""
+from __future__ import annotations
+
+import argparse
+import fcntl
+import hashlib
+import hmac
+import http.client
+import json
+import math
+import os
+import plistlib
+import re
+import shutil
+import signal
+import socket
+import ssl
+import stat
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple
+
+STOP_STATES = ("ask", "approval", "done", "error")
+# A stop is pushed once it is this old and still unseen: answering within it keeps the phone quiet.
+DEBOUNCE_SECONDS = 6.0
+POLL_SECONDS = 2.0
+# A stop older than this is never pushed (a restart, a long relay outage, a fresh install with old stops).
+MAX_AGE_SECONDS = 300.0
+POST_TIMEOUT_SECONDS = 10.0
+LABEL = "dev.nategriffin.term.notify"
+UNIT = "term-notify.service"
+HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
+PANE_ID = re.compile(r"\A%[0-9]+\Z")
+DIGITS = re.compile(r"\A[0-9]+\Z")
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+FORMAT = "#{pane_id}\t#{session_name}\t#{start_time}\t#{pid}\t#{@seen}\t#{@agent}"
+EXTRA_PATH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/home/linuxbrew/.linuxbrew/bin")
+
+HINTS = {
+    "unpaired": "relay does not know this pairing (revoked or never registered): pair this host again in Term",
+    "format": "relay rejected the request: update term-notify (run install again from the new Term release)",
+}
+
+
+def log(message: str) -> None:
+    sys.stderr.write(time.strftime("%Y-%m-%dT%H:%M:%S ") + message + "\n")
+    sys.stderr.flush()
+
+
+class Failure(Exception):
+    """An error whose message tells the user what to do; printed without a traceback."""
+
+
+# ---------------------------------------------------------------------------------------------- paths
+
+
+class Paths:
+    def __init__(self, home: Optional[Path] = None) -> None:
+        self.home = Path(home) if home else Path.home()
+        self.pairings = self.home / ".config/term/notify"
+        self.data = self.home / ".local/share/term/notify"
+        self.program = self.data / "term-notify"
+        self.state = self.data / "state.json"
+        self.lock = self.data / "lock"
+        self.log = self.home / "Library/Logs/term-notify.log"
+        self.plist = self.home / "Library/LaunchAgents" / (LABEL + ".plist")
+        xdg = os.environ.get("XDG_CONFIG_HOME", "")
+        config = Path(xdg) if xdg and os.path.isabs(xdg) else self.home / ".config"
+        self.unit = config / "systemd/user" / UNIT
+
+
+def private_directory(path: Path) -> None:
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        path.chmod(0o700)
+
+
+def write_private(path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Atomic replace; the file is never visible with a wider mode."""
+    descriptor, temporary = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".")
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+# ------------------------------------------------------------------------------------------- pairings
+
+
+@dataclass(frozen=True)
+class Pairing:
+    id: str
+    relay_url: str
+    secret: str = field(repr=False)
+    routing_key: bytes = field(repr=False)
+
+    @property
+    def short(self) -> str:
+        return self.id[:8]
+
+    def route(self, pane: "Pane") -> str:
+        """HMAC-SHA256(routing_key, UTF8(session NUL pane NUL server start NUL server pid)), lowercase hex.
+
+        The server's start time and pid make a route die with its tmux server, so a reused pane id never matches an
+        old push. The key never leaves the host.
+        """
+        fields = (pane.session, pane.id, pane.server_start, pane.server_pid)
+        message = "\0".join(fields).encode("utf-8", "surrogateescape")
+        return hmac.new(self.routing_key, message, hashlib.sha256).hexdigest()
+
+
+def relay_url(value: object) -> Optional[str]:
+    """https only (plain http just for a relay on this machine); no credentials, query or fragment."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(value)
+        host = parts.hostname
+        parts.port
+    except ValueError:
+        return None
+    if not host or parts.username is not None or parts.password is not None or parts.query or parts.fragment:
+        return None
+    if parts.scheme == "https" or (parts.scheme == "http" and host in LOCAL_HOSTS):
+        return value.rstrip("/")
+    return None
+
+
+def parse_pairing(identifier: str, data: object) -> Pairing:
+    """Raises Failure naming the field at fault (never its value)."""
+    if not isinstance(data, dict):
+        raise Failure("not a JSON object")
+    if data.get("version") != 1 or isinstance(data.get("version"), bool):
+        raise Failure('"version" must be 1: update term-notify, or pair again with this Term version')
+    url = relay_url(data.get("relay_url"))
+    if url is None:
+        raise Failure('"relay_url" must be an https URL without credentials, query or fragment')
+    for key in ("secret", "routing_key"):
+        value = data.get(key)
+        if not isinstance(value, str) or not HEX64.match(value):
+            raise Failure('"%s" must be 64 lowercase hex characters' % key)
+    return Pairing(identifier, url, data["secret"], bytes.fromhex(data["routing_key"]))
+
+
+class PairingStore:
+    """Every *.json in the pairing directory, re-read when a file changes. A bad file is reported once and skipped."""
+
+    def __init__(self, directory: Path, report: Callable[[str], None] = log) -> None:
+        self.directory = directory
+        self.report = report
+        self._cache: Dict[str, Tuple[Tuple[int, int], Optional[Pairing]]] = {}
+        self.problems: Dict[str, str] = {}
+        self.present: set = set()  # ids of every pairing file in the directory, valid or not
+        self.readable = True
+
+    def load(self) -> List[Pairing]:
+        found: List[Pairing] = []
+        seen_names = set()
+        try:
+            info = os.lstat(self.directory)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+                raise OSError
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                os.chmod(self.directory, 0o700)
+                self.report("tightened permissions of the pairing directory to 0700")
+            names = sorted(name for name in os.listdir(self.directory) if name.endswith(".json") and not name.startswith("."))
+        except OSError:
+            self.readable = False
+            self._cache.clear()
+            return []
+        self.readable = True
+        self.present = {name[:-5] for name in names}
+        for name in names:
+            seen_names.add(name)
+            pairing = self._read(name)
+            if pairing is not None:
+                found.append(pairing)
+        for name in set(self._cache) - seen_names:
+            del self._cache[name]
+            self.problems.pop(name, None)
+        return found
+
+    def _read(self, name: str) -> Optional[Pairing]:
+        path = self.directory / name
+        try:
+            info = os.lstat(path)
+            key = (info.st_mtime_ns, info.st_size)
+            cached = self._cache.get(name)
+            if cached and cached[0] == key:
+                return cached[1]
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid():
+                raise Failure("must be a regular file owned by you")
+            if info.st_size > 65536:
+                raise Failure("too large for a pairing file")
+            if stat.S_IMODE(info.st_mode) & 0o077:
+                os.chmod(path, 0o600)
+                self.report("tightened permissions of pairing file %s to 0600" % name[:-5][:8])
+            pairing = parse_pairing(name[:-5], json.loads(path.read_bytes()))
+            self.problems.pop(name, None)
+        except (OSError, ValueError, Failure) as error:
+            reason = str(error) if isinstance(error, Failure) else "unreadable or not valid JSON"
+            if self.problems.get(name) != reason:
+                self.report("ignoring pairing file %s: %s" % (name[:8], reason))
+            self.problems[name] = reason
+            pairing = None
+            key = None
+            try:
+                info = os.lstat(path)
+                key = (info.st_mtime_ns, info.st_size)
+            except OSError:
+                pass
+        if key is not None:
+            self._cache[name] = (key, pairing)
+        return pairing
+
+
+# ------------------------------------------------------------------------------------------- tmux
+
+
+@dataclass(frozen=True)
+class Pane:
+    id: str
+    session: str
+    server_start: str
+    server_pid: str
+    seen: float
+    kind: Optional[str]  # a StopKind when the agent is stopped for the user
+    stop_at: Optional[float]
+
+
+def _number(value: object) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
+def split_line(line: str) -> Optional[List[str]]:
+    fields = line.split("\t", 5)
+    ok = len(fields) == 6 and PANE_ID.match(fields[0]) and DIGITS.match(fields[2]) and DIGITS.match(fields[3])
+    return fields if ok else None
+
+
+def parse_panes(output: str) -> List[Pane]:
+    """One pane per line of `list-panes -F FORMAT`; JSON has no raw tab, so the payload is everything after the fifth."""
+    panes = []
+    for line in output.split("\n"):
+        fields = split_line(line)
+        if fields is None:
+            continue
+        try:
+            seen = float(fields[4]) if fields[4] else 0.0
+        except ValueError:
+            seen = 0.0
+        if not math.isfinite(seen):
+            seen = 0.0
+        try:
+            payload = json.loads(fields[5])
+        except ValueError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        state = payload.get("state")
+        kind = state if state in STOP_STATES else None
+        stop = payload.get("stop")
+        at = _number(stop.get("at")) if isinstance(stop, dict) else None
+        if at is None:
+            at = _number(payload.get("since"))
+        panes.append(Pane(fields[0], fields[1], fields[2], fields[3], seen, kind, at if kind else None))
+    return panes
+
+
+def find_tmux() -> Optional[str]:
+    override = os.environ.get("TERM_NOTIFY_TMUX")
+    if override:
+        return override if os.access(override, os.X_OK) else None
+    path = os.pathsep.join([p for p in os.environ.get("PATH", "").split(os.pathsep) if p] + list(EXTRA_PATH))
+    return shutil.which("tmux", path=path)
+
+
+class TmuxLister:
+    """`tmux list-panes -a` on the default server (or `-L socket`). None means "could not look"; [] means no agents."""
+
+    def __init__(self, socket_name: Optional[str] = None, report: Callable[[str], None] = log) -> None:
+        self.socket_name = socket_name
+        self.report = report
+        self._failing = False
+
+    def __call__(self) -> Optional[List[Pane]]:
+        tmux = find_tmux()
+        if tmux is None:
+            self._fail("tmux not found: install it (brew install tmux / apt install tmux) or set TERM_NOTIFY_TMUX")
+            return None
+        # -u: without a UTF-8 locale (a LaunchAgent has none) tmux prints non-ASCII names as "_", which would change the route.
+        command = [tmux, "-u"] + (["-L", self.socket_name] if self.socket_name else [])
+        command += ["list-panes", "-a", "-f", "#{@agent}", "-F", FORMAT]
+        environment = {k: v for k, v in os.environ.items() if k != "TMUX"}
+        try:
+            result = subprocess.run(command, capture_output=True, timeout=5, env=environment)
+        except (OSError, subprocess.TimeoutExpired):
+            self._fail("could not run tmux")
+            return None
+        if result.returncode == 0:
+            output = result.stdout.decode("utf-8", "surrogateescape")
+            panes = parse_panes(output)
+            if output.strip() and not any(split_line(line) for line in output.split("\n")):
+                self._fail("tmux list-panes output not understood; is tmux 3.0 or newer?")
+                return None
+            self._ok()
+            return panes
+        error = result.stderr.decode("utf-8", "replace")
+        if "no server running" in error or "error connecting to" in error:
+            self._ok()
+            return []
+        self._fail("tmux list-panes failed (exit %d); is tmux 3.0 or newer?" % result.returncode)
+        return None
+
+    def _fail(self, message: str) -> None:
+        if not self._failing:
+            self.report(message)
+        self._failing = True
+
+    def _ok(self) -> None:
+        if self._failing:
+            self.report("tmux is readable again")
+        self._failing = False
+
+
+# ------------------------------------------------------------------------------------------- relay
+
+
+@dataclass(frozen=True)
+class Result:
+    status: Optional[int] = None  # HTTP status; None when the request never completed
+    retry_after: Optional[float] = None
+    error: Optional[str] = None  # class of failure only, never a message that could carry data
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):  # the secret must go only where relay_url says
+        return None
+
+
+def http_post(pairing: Pairing, body: Dict[str, str], timeout: float = POST_TIMEOUT_SECONDS) -> Result:
+    request = urllib.request.Request(
+        pairing.relay_url + "/notify",
+        data=json.dumps(body, separators=(",", ":")).encode("ascii"),
+        method="POST",
+        headers={"Content-Type": "application/json", "User-Agent": "term-notify/1"},
+    )
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return Result(status=response.status)
+    except urllib.error.HTTPError as error:
+        try:
+            wait = float(error.headers.get("Retry-After", ""))
+        except (TypeError, ValueError):
+            wait = None
+        error.close()
+        return Result(status=error.code, retry_after=wait if wait is not None and math.isfinite(wait) else None)
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as error:
+        reason = error.reason if isinstance(error, urllib.error.URLError) else error
+        if isinstance(reason, ssl.SSLError):
+            return Result(error="TLS check of the relay failed (is the system clock right? is a proxy rewriting TLS?)")
+        if isinstance(reason, socket.gaierror):
+            return Result(error="could not resolve the relay's name (no network?)")
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return Result(error="the relay did not answer in time")
+        return Result(error="could not reach the relay (%s)" % type(reason).__name__)
+
+
+# ----------------------------------------------------------------------------------------- notifier
+
+
+class Notifier:
+    def __init__(
+        self,
+        paths: Paths,
+        list_panes: Callable[[], Optional[List[Pane]]],
+        post: Callable[[Pairing, Dict[str, str]], Result] = http_post,
+        clock: Callable[[], float] = time.time,
+        report: Callable[[str], None] = log,
+        debounce: float = DEBOUNCE_SECONDS,
+        max_age: float = MAX_AGE_SECONDS,
+    ) -> None:
+        self.paths = paths
+        self.list_panes = list_panes
+        self.post = post
+        self.clock = clock
+        self.report = report
+        self.debounce = debounce
+        self.max_age = max_age
+        self.pairings = PairingStore(paths.pairings, report)
+        # pairing id -> pane id -> the newest stop.at delivered (or refused for good) for that pane
+        self.sent: Dict[str, Dict[str, float]] = self._load_state()
+        # (pairing id, pane id, stop.at) -> (next attempt, attempts)
+        self.retry: Dict[Tuple[str, str, float], Tuple[float, int]] = {}
+        self._failing = set()
+        self._active: Optional[frozenset] = None
+
+    def _load_state(self) -> Dict[str, Dict[str, float]]:
+        try:
+            raw = json.loads(self.paths.state.read_bytes())
+            sent = raw["sent"]
+            return {
+                str(pairing): {str(pane): float(at) for pane, at in panes.items() if _number(at) is not None}
+                for pairing, panes in sent.items()
+            }
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            self.report("state file unreadable; starting fresh (stops older than %d s are never pushed)" % self.max_age)
+            return {}
+
+    def _save_state(self) -> None:
+        data = json.dumps({"version": 1, "sent": self.sent}, sort_keys=True).encode("ascii")
+        try:
+            private_directory(self.paths.data)
+            write_private(self.paths.state, data)
+        except OSError:
+            self.report("could not write %s; a restart may repeat a push" % self.paths.state)
+
+    def _due(self, panes: List[Pane], pairings: List[Pairing], now: float) -> List[Tuple[Pairing, Pane]]:
+        due = []
+        for pane in panes:
+            at = pane.stop_at
+            # Unread exactly as the app reads it: a stop newer than the session's @seen watermark.
+            if pane.kind is None or at is None or at <= pane.seen:
+                continue
+            age = now - at
+            if age < self.debounce or age > self.max_age:
+                continue
+            for pairing in pairings:
+                if self.sent.get(pairing.id, {}).get(pane.id, 0.0) >= at:
+                    continue
+                if self.retry.get((pairing.id, pane.id, at), (0.0, 0))[0] > now:
+                    continue
+                due.append((pairing, pane))
+        return due
+
+    def tick(self) -> Tuple[int, int]:
+        """One look at tmux and every delivery that is due. Returns (pushed, failed)."""
+        panes = self.list_panes()
+        if panes is None:
+            return (0, 0)
+        pairings = self.pairings.load()
+        self._note_pairings(pairings)
+        now = self.clock()
+        pushed = failed = 0
+        if self._due(panes, pairings, now):
+            # Look once more right before sending: an answer given a moment ago must win.
+            panes = self.list_panes()
+            if panes is None:
+                return (0, 0)
+            for pairing, pane in self._due(panes, pairings, self.clock()):
+                if self._deliver(pairing, pane):
+                    pushed += 1
+                else:
+                    failed += 1
+        self._housekeeping(panes)
+        return (pushed, failed)
+
+    def _note_pairings(self, pairings: List[Pairing]) -> None:
+        active = frozenset(p.id for p in pairings)
+        if active != self._active:
+            if active:
+                self.report("%d pairing(s) active" % len(active))
+            else:
+                self.report("no pairings in %s: pair this host from Term" % self.paths.pairings)
+            self._active = active
+
+    def _deliver(self, pairing: Pairing, pane: Pane) -> bool:
+        at = pane.stop_at
+        assert at is not None and pane.kind is not None
+        body = {"secret": pairing.secret, "session_ref": pairing.route(pane), "kind": pane.kind}
+        result = self.post(pairing, body)
+        key = (pairing.id, pane.id, at)
+        status = result.status
+        if status is not None and 200 <= status < 300:
+            self.sent.setdefault(pairing.id, {})[pane.id] = at
+            self.retry.pop(key, None)
+            self._save_state()
+            if pairing.id in self._failing:
+                self._failing.discard(pairing.id)
+                self.report("relay reachable again for pairing %s" % pairing.short)
+            self.report("pushed %s to pairing %s" % (pane.kind, pairing.short))
+            return True
+        if status is not None and status != 429 and status < 500:
+            # The relay refused this request for good: retrying cannot change the answer.
+            self.sent.setdefault(pairing.id, {})[pane.id] = at
+            self.retry.pop(key, None)
+            self._save_state()
+            hint = HINTS["unpaired"] if status in (401, 403, 404) else HINTS["format"]
+            self.report("relay answered HTTP %d for pairing %s: %s" % (status, pairing.short, hint))
+            return False
+        attempts = self.retry.get(key, (0.0, 0))[1] + 1
+        if status == 429:
+            wait = min(max(result.retry_after if result.retry_after is not None else 30.0, 1.0), 300.0)
+            problem = "relay is rate limiting (HTTP 429)"
+        else:
+            wait = min(5.0 * 2 ** (attempts - 1), 60.0)
+            problem = "relay answered HTTP %d" % status if status else (result.error or "could not reach the relay")
+        self.retry[key] = (self.clock() + wait, attempts)
+        if pairing.id not in self._failing:
+            self._failing.add(pairing.id)
+            self.report("%s for pairing %s; retrying" % (problem, pairing.short))
+        return False
+
+    def _housekeeping(self, panes: List[Pane]) -> None:
+        live = {(p.id, p.stop_at) for p in panes if p.kind}
+        self.retry = {k: v for k, v in self.retry.items() if (k[1], k[2]) in live}
+        pane_ids = {p.id for p in panes}
+        pruned: Dict[str, Dict[str, float]] = {}
+        # A pairing file with a typo is still a pairing: its records stay until the file is gone.
+        known = self.pairings.present
+        for pairing_id, entries in self.sent.items():
+            if self.pairings.readable and pairing_id not in known:
+                continue
+            kept = {pane: at for pane, at in entries.items() if pane in pane_ids}
+            if kept:
+                pruned[pairing_id] = kept
+        # Stops only move forward, so a pane's old record can go once its agent is gone.
+        if pruned != self.sent:
+            self.sent = pruned
+            self._save_state()
+
+
+# -------------------------------------------------------------------------------------------- run
+
+
+def acquire_lock(paths: Paths) -> Optional[int]:
+    private_directory(paths.data)
+    descriptor = os.open(str(paths.lock), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
+def make_notifier(args: argparse.Namespace, paths: Paths) -> Notifier:
+    return Notifier(paths, TmuxLister(args.tmux_socket), debounce=args.debounce)
+
+
+def cmd_run(args: argparse.Namespace, paths: Paths) -> int:
+    lock = acquire_lock(paths)
+    if lock is None:
+        raise Failure("term-notify is already running (stop the service first: term-notify uninstall, or launchctl/systemctl)")
+    notifier = make_notifier(args, paths)
+    stop = threading.Event()
+    for name in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(name, lambda *_: stop.set())
+    log("watching tmux; a stop is pushed after %g s unless you have answered it" % args.debounce)
+    while not stop.is_set():
+        try:
+            notifier.tick()
+        except Exception as error:  # keep watching; log where, never what
+            frame = traceback.extract_tb(error.__traceback__)[-1]
+            log("internal error %s at %s:%d" % (type(error).__name__, os.path.basename(frame.filename), frame.lineno))
+        stop.wait(args.interval)
+    return 0
+
+
+def cmd_once(args: argparse.Namespace, paths: Paths) -> int:
+    lock = acquire_lock(paths)
+    if lock is None:
+        print("term-notify is already running; it handles stops by itself.")
+        return 1
+    pushed, failed = make_notifier(args, paths).tick()
+    print("pushed %d, failed %d" % (pushed, failed))
+    return 1 if failed else 0
+
+
+# --------------------------------------------------------------------------------------- service
+
+
+def detect_system() -> str:
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    raise Failure("term-notify supports macOS and Linux only")
+
+
+def systemd_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
+
+
+def service_path_variable() -> str:
+    return os.pathsep.join(dict.fromkeys(list(EXTRA_PATH)))
+
+
+def render_plist(paths: Paths, interpreter: str) -> bytes:
+    return plistlib.dumps(
+        {
+            "Label": LABEL,
+            "ProgramArguments": [interpreter, str(paths.program), "run"],
+            "RunAtLoad": True,
+            "KeepAlive": {"SuccessfulExit": False},
+            "ThrottleInterval": 10,
+            "ProcessType": "Background",
+            "StandardOutPath": str(paths.log),
+            "StandardErrorPath": str(paths.log),
+            "EnvironmentVariables": {"PATH": service_path_variable()},
+        }
+    )
+
+
+def render_unit(paths: Paths, interpreter: str) -> bytes:
+    return (
+        "[Unit]\nDescription=Term push notifier (agent stops to your phone)\n\n"
+        "[Service]\nExecStart=%s %s run\nRestart=on-failure\nRestartSec=10\nEnvironment=%s\n\n"
+        "[Install]\nWantedBy=default.target\n"
+        % (systemd_quote(interpreter), systemd_quote(str(paths.program)), systemd_quote("PATH=" + service_path_variable()))
+    ).encode("utf-8")
+
+
+Runner = Callable[..., "subprocess.CompletedProcess"]
+
+
+def run_quiet(command: List[str]) -> "subprocess.CompletedProcess":
+    try:
+        return subprocess.run(command, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return subprocess.CompletedProcess(command, 127, "", type(error).__name__)
+
+
+def macos_domains() -> List[str]:
+    return ["gui/%d" % os.getuid(), "user/%d" % os.getuid()]
+
+
+def start_macos(paths: Paths, runner: Runner, sleep: Callable[[float], None]) -> Optional[str]:
+    """None when running; otherwise why it is not (the files are in place and it starts at next login)."""
+    for domain in macos_domains():
+        runner(["launchctl", "bootout", "%s/%s" % (domain, LABEL)])
+        for attempt in range(3):
+            result = runner(["launchctl", "bootstrap", domain, str(paths.plist)])
+            if result.returncode == 0:
+                return None
+            sleep(0.5)  # bootout finishes asynchronously
+    return "launchctl could not load it now (no login session? run this from Terminal on the Mac, or log in once); it starts at next login"
+
+
+def start_linux(paths: Paths, runner: Runner) -> Optional[str]:
+    steps = (["daemon-reload"], ["enable", UNIT], ["restart", UNIT])
+    for step in steps:
+        result = runner(["systemctl", "--user"] + step)
+        if result.returncode != 0:
+            return (
+                "systemd --user is not reachable (over ssh, set XDG_RUNTIME_DIR=/run/user/$(id -u), or log in normally); "
+                "then run: systemctl --user enable --now " + UNIT
+            )
+    return None
+
+
+def linger_enabled(runner: Runner) -> Optional[bool]:
+    result = runner(["loginctl", "show-user", str(os.getuid()), "-p", "Linger"])
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() == "Linger=yes"
+
+
+def cmd_install(args: argparse.Namespace, paths: Paths, system: str, runner: Runner = run_quiet, interpreter: Optional[str] = None,
+                sleep: Callable[[float], None] = time.sleep) -> int:
+    interpreter = interpreter or sys.executable
+    if not interpreter or not os.access(interpreter, os.X_OK):
+        raise Failure("cannot find the python3 running this script; run it as: python3 term-notify install")
+    private_directory(paths.data)
+    private_directory(paths.pairings)
+    source = Path(os.path.abspath(__file__))
+    if not (paths.program.exists() and os.path.samefile(source, paths.program)):
+        write_private(paths.program, source.read_bytes(), 0o700)
+    print("installed %s" % paths.program)
+    if system == "macos":
+        paths.plist.parent.mkdir(parents=True, exist_ok=True)
+        paths.log.parent.mkdir(parents=True, exist_ok=True)
+        write_private(paths.plist, render_plist(paths, interpreter))
+        service_file = paths.plist
+    else:
+        paths.unit.parent.mkdir(parents=True, exist_ok=True)
+        write_private(paths.unit, render_unit(paths, interpreter))
+        service_file = paths.unit
+    print("wrote %s" % service_file)
+    problem = None
+    if args.no_start:
+        print("not started (--no-start)")
+    else:
+        problem = start_macos(paths, runner, sleep) if system == "macos" else start_linux(paths, runner)
+        print("started" if problem is None else "warning: " + problem)
+    if find_tmux() is None:
+        print("warning: tmux not found; install it (brew install tmux / apt install tmux)")
+    if not PairingStore(paths.pairings, lambda _: None).load():
+        print("no pairings yet: pair this host from Term; no restart needed")
+    if system == "linux" and linger_enabled(runner) is False:
+        print("warning: the service stops when you log out; keep it running with: sudo loginctl enable-linger $USER")
+    return 0
+
+
+def remove_file(path: Path, report: List[str]) -> None:
+    try:
+        path.unlink()
+        report.append("removed %s" % path)
+    except FileNotFoundError:
+        pass
+
+
+def remove_empty(path: Path) -> None:
+    try:
+        path.rmdir()
+    except OSError:
+        pass
+
+
+def cmd_uninstall(args: argparse.Namespace, paths: Paths, system: str, runner: Runner = run_quiet) -> int:
+    report: List[str] = []
+    if system == "macos":
+        for domain in macos_domains():
+            runner(["launchctl", "bootout", "%s/%s" % (domain, LABEL)])
+        remove_file(paths.plist, report)
+        remove_file(paths.log, report)
+    else:
+        runner(["systemctl", "--user", "disable", "--now", UNIT])
+        existed = paths.unit.exists()
+        remove_file(paths.unit, report)
+        if existed:
+            runner(["systemctl", "--user", "daemon-reload"])
+    for path in (paths.program, paths.state, paths.lock):
+        remove_file(path, report)
+    for stray in list(paths.data.glob(".*")) if paths.data.is_dir() else []:
+        if re.match(r"\A\.(term-notify|state\.json|lock)\.", stray.name):
+            remove_file(stray, report)
+    remove_empty(paths.data)
+    remove_empty(paths.data.parent)
+    if args.purge:
+        if paths.pairings.is_dir():
+            for pairing in paths.pairings.glob("*.json"):
+                if pairing.is_file() and not pairing.is_symlink():
+                    remove_file(pairing, report)
+        remove_empty(paths.pairings)
+        remove_empty(paths.pairings.parent)
+    elif any(paths.pairings.glob("*.json")) if paths.pairings.is_dir() else False:
+        report.append("kept the pairing files in %s (term-notify uninstall --purge removes them)" % paths.pairings)
+    print("\n".join(report) if report else "nothing to remove")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace, paths: Paths, system: str, runner: Runner = run_quiet) -> int:
+    healthy = True
+    if system == "macos":
+        result = runner(["launchctl", "print", "%s/%s" % (macos_domains()[0], LABEL)])
+        if result.returncode != 0:
+            service = "not installed or not loaded (term-notify install)"
+        elif re.search(r"state = running", result.stdout):
+            service = "running"
+        else:
+            service = "loaded, not running (see %s)" % paths.log
+    else:
+        result = runner(["systemctl", "--user", "is-active", UNIT])
+        service = "running" if result.stdout.strip() == "active" else "not running (term-notify install; logs: journalctl --user -u %s)" % UNIT
+    healthy &= service == "running"
+    print("service: " + service)
+    tmux = find_tmux()
+    print("tmux: " + (tmux or "not found (install tmux)"))
+    healthy &= tmux is not None
+    store = PairingStore(paths.pairings, lambda _: None)
+    pairings = store.load()
+    for pairing in pairings:
+        print("pairing %s -> %s" % (pairing.short, urllib.parse.urlsplit(pairing.relay_url).netloc))
+    for name, reason in store.problems.items():
+        print("pairing file %s ignored: %s" % (name[:8], reason))
+    if not pairings:
+        print("pairings: none (pair this host from Term)")
+    healthy &= bool(pairings) and not store.problems
+    if system == "linux" and linger_enabled(runner) is False:
+        print("linger: off, the service stops at logout (sudo loginctl enable-linger $USER)")
+        healthy = False
+    return 0 if healthy else 1
+
+
+# ----------------------------------------------------------------------------------------- command line
+
+
+def positive(name: str, minimum: float) -> Callable[[str], float]:
+    def parse(text: str) -> float:
+        try:
+            value = float(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError("%s must be a number" % name)
+        if not math.isfinite(value) or value < minimum:
+            raise argparse.ArgumentTypeError("%s must be at least %g" % (name, minimum))
+        return value
+
+    return parse
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="term-notify", description="Push agent stops from tmux to your phone through the Term relay.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name, help_text in (("run", "watch tmux and push (what the service runs)"), ("once", "one pass, then exit")):
+        sub = commands.add_parser(name, help=help_text)
+        sub.add_argument("--debounce", type=positive("--debounce", 0), default=DEBOUNCE_SECONDS, metavar="SECONDS")
+        sub.add_argument("--tmux-socket", metavar="NAME", help="watch `tmux -L NAME` instead of the default server")
+        if name == "run":
+            sub.add_argument("--interval", type=positive("--interval", 0.05), default=POLL_SECONDS, metavar="SECONDS")
+    install = commands.add_parser("install", help="install and start the service")
+    install.add_argument("--no-start", action="store_true", help="write the files only")
+    uninstall = commands.add_parser("uninstall", help="stop and remove the service")
+    uninstall.add_argument("--purge", action="store_true", help="also delete the pairing files")
+    commands.add_parser("status", help="show service, tmux and pairings")
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+    paths = Paths()
+    try:
+        if args.command == "run":
+            return cmd_run(args, paths)
+        if args.command == "once":
+            return cmd_once(args, paths)
+        system = detect_system()
+        if args.command == "install":
+            return cmd_install(args, paths, system)
+        if args.command == "uninstall":
+            return cmd_uninstall(args, paths, system)
+        return cmd_status(args, paths, system)
+    except Failure as error:
+        sys.stderr.write("term-notify: %s\n" % error)
+        return 1
+    except OSError as error:
+        sys.stderr.write("term-notify: %s (%s)\n" % (error.strerror or type(error).__name__, error.filename or "?"))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
